@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Nomi",
+  "version": "0.1.0",
+  "identifier": "com.nomi.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Nomi",
+        "width": 1100,
+        "height": 760,
+        "minWidth": 760,
+        "minHeight": 560,
+        "center": true,
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay",
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 22
+        },
+        "backgroundColor": "#ECEFF3"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMwN0MyRjk2Q0Q1RjkyNzYKUldSMmtsL05saTk4d0VxQjJDWjlVbGQ2azVZZFBiak9MTzlKSmJJZGxQY2V6ekpYQVJFblQzNDIK",
+      "endpoints": ["https://github.com/chenwen245299/Nomi/releases/latest/download/latest.json"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": ["lib/*"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

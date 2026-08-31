@@ -1,0 +1,81 @@
+[package]
+name = "nomi"
+version = "0.1.0"
+description = "Nomi cross-platform desktop application"
+authors = ["Nomi contributors"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "nomi_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+# API keys are encrypted at rest (AES-256-GCM) into the data folder rather than
+# the OS keychain — the keychain re-prompts on every unsigned/dev rebuild. The
+# random master key lives beside the ciphertext in the data folder.
+aes-gcm = "0.10"
+rand = "0.8"
+# Backend-side HTTP so provider API keys never reach the webview/frontend.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tokio = { version = "1", features = ["full"] }
+# MCP server exposed to external agents (Claude Code / Claude Desktop / Codex).
+# Runs as a stdio subprocess the client launches — `nomi --mcp-stdio` — and reads
+# the chat data folder directly, so it works whether or not the app is open. See
+# src/mcp/. `schemars` and the transports are not in rmcp's default feature set.
+rmcp = { version = "3", features = ["server", "macros", "schemars", "transport-io", "transport-async-rw"] }
+schemars = "1"
+# Encodes image / audio attachments as base64 when returning them to the agent.
+base64 = "0.22"
+# Streaming helpers for consuming the provider's SSE response body.
+futures = "0.3"
+# Async methods on the per-provider `ProviderSpec` trait (see src/providers/): they
+# are dispatched through `&'static dyn ProviderSpec`, which native async-fn-in-trait
+# does not make object-safe, so we lean on async-trait's boxed futures.
+async-trait = "0.1"
+# Stable ids for chat messages / tool calls / stream requests.
+uuid = { version = "1", features = ["v4"] }
+# Embedded PDF handling for the chat's local PDF tools (no user install needed):
+# lopdf + pdf-extract are pure-Rust text extraction; pdfium-render rasterises
+# pages to PNG, bound at runtime to a bundled library (see scripts/fetch-pdfium.mjs).
+lopdf = "0.34"
+pdf-extract = "0.7"
+pdfium-render = { version = "0.8", features = ["image"] }
+# JPEG joins PNG so phone photos of receipts decode too (screenshots are PNG).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# Receipt OCR for when the chosen model has no vision. Both desktop targets ship
+# a text recogniser inside the OS, so the fallback works the moment the app is
+# installed — nothing to `brew install`, no model files to download at runtime.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-vision = { version = "0.3", features = [
+  "VNRequest",
+  "VNRequestHandler",
+  "VNRecognizeTextRequest",
+  "VNObservation",
+] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+  "Media_Ocr",
+  "Graphics_Imaging",
+  "Storage_Streams",
+  "Globalization",
+  "Foundation_Collections",
+] }

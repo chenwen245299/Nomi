@@ -1,0 +1,6 @@
+dist
+node_modules
+src-tauri/gen
+src-tauri/target
+pnpm-lock.yaml
+public/vditor

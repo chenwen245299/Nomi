@@ -1,0 +1,167 @@
+name: Release App
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（不含 v 前缀，如 1.2.0）"
+        required: true
+        type: string
+
+jobs:
+  create-release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create-release.outputs.result }}
+      release_body: ${{ steps.tag-message.outputs.message }}
+      tag_name: ${{ steps.tag-name.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag name
+        id: tag-name
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get tag message
+        id: tag-message
+        shell: bash
+        run: |
+          TAG_NAME=${{ steps.tag-name.outputs.tag }}
+          MESSAGE=$(git tag -l --format='%(contents)' "$TAG_NAME")
+          if [ -z "$MESSAGE" ]; then
+            MESSAGE="See commit history for changes."
+          fi
+          {
+            echo "message<<EOF"
+            echo "$MESSAGE"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create release
+        id: create-release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_BODY: ${{ steps.tag-message.outputs.message }}
+          TAG_NAME: ${{ steps.tag-name.outputs.tag }}
+        with:
+          script: |
+            const tagName = process.env.TAG_NAME;
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tagName,
+              name: tagName,
+              body: process.env.RELEASE_BODY,
+              draft: true,
+              prerelease: false,
+              target_commitish: context.sha,
+            })
+            return data.id
+
+  build-tauri:
+    needs: create-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    env:
+      # Harden cargo's crates.io downloads against flaky CI networks. The
+      # "Recv failure: Connection was reset" / "curl [56]" errors on the
+      # Windows runner come from HTTP/2 multiplexing dropping mid-download;
+      # forcing HTTP/1 plus generous retries makes the fetch resilient.
+      CARGO_NET_RETRY: "10"
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_HTTP_CHECK_REVOKE: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm and Node.js
+        uses: pnpm/setup@v2
+        with:
+          version: 11.19.0
+          runtime: node@24.19.0
+          cache: true
+          install: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # Keep the cache even when a later build step fails, so a transient
+          # network error doesn't force a full re-download on the next run.
+          cache-on-failure: true
+
+      - name: Sync version
+        shell: bash
+        run: |
+          TAG=${{ needs.create-release.outputs.tag_name }}
+          VERSION=${TAG#v}
+          tmp=$(mktemp)
+          jq --arg v "$VERSION" '.version = $v | .bundle.createUpdaterArtifacts = true' src-tauri/tauri.conf.json > "$tmp" && mv "$tmp" src-tauri/tauri.conf.json
+
+      - name: Install Linux dependencies
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Ensure icon.ico exists (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "src-tauri/icons/icon.ico")) {
+            Write-Host "icon.ico missing, generating from icon.png..."
+            magick "src-tauri/icons/icon.png" -define icon:auto-resize="256,128,64,48,32,16" "src-tauri/icons/icon.ico"
+          } else {
+            Write-Host "icon.ico OK"
+          }
+
+      - name: Install frontend dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          releaseBody: ${{ needs.create-release.outputs.release_body }}
+
+  publish-release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    needs: [create-release, build-tauri]
+    steps:
+      - name: publish release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: ${{ needs.create-release.outputs.release_id }},
+              draft: false,
+            })

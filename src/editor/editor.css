@@ -1,0 +1,276 @@
+/* Nomi theming for the reusable vditor Markdown editor.
+   Loaded once by src/editor/MarkdownEditor.tsx (alongside vditor/dist/index.css).
+   The host passes its section accent as an RGB triplet via --nomi-editor-accent. */
+
+.nomi-editor {
+  --nomi-editor-accent: 47, 123, 230;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Fill mode: the editor stretches to (and scrolls within) its flex parent. */
+.nomi-editor--fill {
+  flex: 1;
+  min-height: 0;
+}
+.nomi-editor--fill .vditor {
+  flex: 1;
+  min-height: 0;
+}
+
+.nomi-editor .vditor {
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  border-radius: 0;
+  overflow: hidden;
+  font-family: inherit;
+  background: transparent;
+  box-shadow: none;
+
+  --border-color: rgba(60, 70, 85, 0.1);
+  --second-color: rgba(118, 130, 148, 0.14);
+  --panel-background-color: #ffffff;
+  --panel-shadow: 0 2px 8px rgba(20, 28, 40, 0.1), 0 12px 30px rgba(20, 28, 40, 0.12);
+  --toolbar-background-color: transparent;
+  --toolbar-icon-color: #6b7686;
+  --toolbar-icon-hover-color: rgb(var(--nomi-editor-accent));
+  --toolbar-height: 40px;
+  --textarea-background-color: #ffffff;
+  --textarea-text-color: #1b2430;
+  --heading-border-color: rgba(60, 70, 85, 0.12);
+  --blockquote-color: #5c6673;
+  --ir-heading-color: rgb(var(--nomi-editor-accent));
+  --ir-title-color: #98a0ac;
+  --ir-link-color: rgb(var(--nomi-editor-accent));
+  --resize-background-color: rgba(60, 70, 85, 0.1);
+  --resize-icon-color: #98a0ac;
+  --resize-hover-background-color: rgb(var(--nomi-editor-accent));
+  --resize-hover-icon-color: #ffffff;
+  --count-background-color: rgba(247, 249, 252, 0.92);
+}
+
+/* ── Modern toolbar ─────────────────────────────────────────────────────────
+   Notes portals Vditor's native commands into one overflow button. */
+.nomi-note-toolbar-host {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  min-width: 0;
+  width: 32px;
+}
+
+.nomi-editor .vditor-toolbar,
+.nomi-note-toolbar-host .vditor-toolbar {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0;
+  min-height: 34px;
+  padding: 3px;
+  overflow: visible;
+  background: rgba(118, 130, 148, 0.07);
+  border: 1px solid rgba(60, 70, 85, 0.08);
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+/* Each button becomes an even, rounded hit-target with a soft hover pill. */
+.nomi-editor .vditor-toolbar__item,
+.nomi-note-toolbar-host .vditor-toolbar__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  min-width: 27px;
+  padding: 0 3px;
+  margin: 0;
+  border-radius: 7px;
+  color: #667180;
+  transition:
+    background-color 130ms ease,
+    color 130ms ease,
+    transform 90ms ease;
+}
+.nomi-editor .vditor-toolbar__item:hover,
+.nomi-note-toolbar-host .vditor-toolbar__item:hover {
+  background: rgba(var(--nomi-editor-accent), 0.11);
+  color: rgb(var(--nomi-editor-accent));
+}
+.nomi-editor .vditor-toolbar__item:active,
+.nomi-note-toolbar-host .vditor-toolbar__item:active {
+  transform: scale(0.92);
+}
+.nomi-editor .vditor-toolbar__item--current,
+.nomi-note-toolbar-host .vditor-toolbar__item--current {
+  background: rgba(var(--nomi-editor-accent), 0.14);
+  color: rgb(var(--nomi-editor-accent));
+}
+.nomi-editor .vditor-toolbar__item svg,
+.nomi-note-toolbar-host .vditor-toolbar__item svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+/* The inner tooltip wrapper shouldn't add its own padding/size. */
+.nomi-editor .vditor-toolbar__item > .vditor-tooltipped,
+.nomi-note-toolbar-host .vditor-toolbar__item > .vditor-tooltipped {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  height: auto;
+  padding: 0;
+  color: inherit;
+}
+
+/* Slimmer, softer group dividers. */
+.nomi-editor .vditor-toolbar__divider,
+.nomi-note-toolbar-host .vditor-toolbar__divider {
+  height: 14px;
+  width: 1px;
+  margin: 0 3px;
+  padding: 0;
+  background: rgba(60, 70, 85, 0.1);
+  border: none;
+}
+
+/* The note header itself stays visually quiet: only the three-dot command
+   button remains visible; hidden view controls are still available to the
+   React mode switcher through Vditor's own event handlers. */
+.nomi-note-toolbar-host .vditor-toolbar {
+  min-height: 32px;
+  /* Vditor writes a responsive inline padding-left after measuring its original
+     toolbar. The toolbar is portaled into this compact host, so keep it flush. */
+  padding: 0 !important;
+  width: 32px;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.nomi-note-toolbar-host .vditor-toolbar > .vditor-toolbar__item {
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+}
+.nomi-note-toolbar-host .vditor-toolbar > .vditor-toolbar__item > .vditor-tooltipped {
+  width: 32px;
+  height: 32px;
+}
+.nomi-note-toolbar-host .vditor-toolbar > .vditor-toolbar__item:has(> [data-type="edit-mode"]),
+.nomi-note-toolbar-host .vditor-toolbar > .vditor-toolbar__item:has(> [data-type="both"]),
+.nomi-note-toolbar-host .vditor-toolbar > .vditor-toolbar__item:has(> [data-type="preview"]) {
+  display: none !important;
+}
+
+/* Overflow menu: a native-feeling command list, not a second horizontal toolbar. */
+.nomi-note-toolbar-host .vditor-toolbar > .vditor-toolbar__item > .vditor-hint {
+  left: auto !important;
+  right: 0;
+  top: 36px !important;
+  min-width: 206px;
+  max-height: min(520px, calc(100vh - 104px));
+  overscroll-behavior: contain;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid rgba(60, 70, 85, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow:
+    0 16px 38px rgba(20, 28, 40, 0.16),
+    0 3px 10px rgba(20, 28, 40, 0.08);
+}
+.nomi-note-toolbar-host .vditor-tooltipped::before,
+.nomi-note-toolbar-host .vditor-tooltipped::after {
+  display: none !important;
+}
+.nomi-note-toolbar-host .vditor-hint .vditor-hint {
+  right: 100% !important;
+  left: auto !important;
+}
+.nomi-note-toolbar-host .vditor-hint > div {
+  border-radius: 7px;
+}
+.nomi-note-toolbar-host .vditor-hint > div:hover {
+  background: rgba(var(--nomi-editor-accent), 0.1);
+}
+.nomi-note-toolbar-host .vditor-hint button {
+  color: #4f5b69;
+  min-height: 31px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  font: 500 12.5px/1.2 inherit;
+}
+.nomi-note-toolbar-host .vditor-hint [data-type="upload"] {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 31px;
+  padding: 6px 9px;
+  overflow: hidden;
+  color: #4f5b69;
+  border-radius: 7px;
+  cursor: pointer;
+  font: 500 12.5px/1.2 inherit;
+}
+.nomi-note-toolbar-host .vditor-hint [data-type="upload"] input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  opacity: 0.001;
+}
+.nomi-note-toolbar-host .nomi-note-upload-label {
+  white-space: nowrap;
+}
+
+/* ── Content ──────────────────────────────────────────────────────────────── */
+.nomi-editor .vditor-reset,
+.nomi-editor .vditor-sv,
+.nomi-editor .vditor-ir,
+.nomi-editor .vditor-wysiwyg {
+  font-family: inherit;
+  color: #1b2430;
+}
+.nomi-editor .vditor-reset {
+  font-size: 15px;
+  line-height: 1.8;
+  width: 100%;
+  max-width: none;
+  min-height: 100%;
+  margin: 0;
+  /* Vditor also writes horizontal padding inline while laying out the editor;
+     keep note content on the same 24px alignment line as the title header. */
+  padding: 42px 24px 120px !important;
+}
+.nomi-editor .vditor-content,
+.nomi-editor .vditor-wysiwyg,
+.nomi-editor .vditor-ir,
+.nomi-editor .vditor-sv {
+  background: transparent;
+}
+.nomi-editor .vditor-reset a {
+  color: rgb(var(--nomi-editor-accent));
+}
+.nomi-editor .vditor-reset ::selection {
+  background: rgba(var(--nomi-editor-accent), 0.18);
+}
+
+/* Read-only Markdown render (MarkdownPreview + shared preview surfaces). */
+.nomi-md-preview {
+  min-width: 0;
+}
+.nomi-md-preview.vditor-reset {
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.75;
+  color: #1b2430;
+}
+.nomi-md-preview.vditor-reset a {
+  color: rgb(var(--nomi-editor-accent, 47, 123, 230));
+}

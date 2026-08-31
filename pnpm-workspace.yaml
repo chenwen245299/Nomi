@@ -1,0 +1,8 @@
+engineStrict: true
+savePrefix: "^"
+
+allowBuilds:
+  # core-js's postinstall only prints a funding banner; skip it (no functional
+  # effect). It arrived transitively with jspdf (Markdown → PDF export).
+  core-js: false
+  esbuild: true
