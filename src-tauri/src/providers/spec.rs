@@ -26,7 +26,7 @@ use base64::Engine;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
-use super::{deepseek, generic, mimo, openrouter, qwen};
+use super::{FetchedProviderModel, deepseek, generic, mimo, openrouter, qwen};
 use crate::providers::ChatTarget;
 
 // ── Balance DTO (the shape the webview renders) ──────────────────────────────
@@ -77,6 +77,18 @@ pub struct CurrencyBalance {
 /// overrides only the seams where it actually differs.
 #[async_trait]
 pub(crate) trait ProviderSpec: Send + Sync {
+    /// The model-catalogue endpoint. Providers may add query parameters needed
+    /// to return non-text models instead of the OpenAI-compatible default view.
+    fn models_url(&self, base_url: &str) -> String {
+        format!("{}/models", base_url.trim().trim_end_matches('/'))
+    }
+
+    /// Fill catalogue metadata that the provider does not return over `/models`.
+    /// The generic path keeps the parsed response unchanged.
+    fn enrich_fetched_model(&self, model: FetchedProviderModel) -> FetchedProviderModel {
+        model
+    }
+
     /// The chat completions endpoint. Default: `{base}/chat/completions`.
     fn chat_url(&self, base_url: &str) -> String {
         default_chat_url(base_url)

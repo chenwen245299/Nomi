@@ -69,6 +69,8 @@ const EMPTY_SLICE: ConversationSlice = {
 const slices = new Map<string, ConversationSlice>();
 const listeners = new Set<() => void>();
 export interface ConversationActivityEvent {
+  /** Conversation store: "" = main chat; a tab id = that tab's AI sidebar. */
+  scope: string;
   assistantId: string;
   chatId: string;
   /** Present for an optimistic newly-sent message; omitted when disk should be reloaded. */
@@ -76,10 +78,11 @@ export interface ConversationActivityEvent {
 }
 const conversationActivityListeners = new Set<(event: ConversationActivityEvent) => void>();
 
-function key(assistantId: string, chatId: string): string {
-  // `/` can't appear in either id (folder names sanitise it out), so it's an
-  // unambiguous separator — unlike a space, which a display-derived id can hold.
-  return `${assistantId}/${chatId}`;
+function key(scope: string, assistantId: string, chatId: string): string {
+  // `/` can't appear in any of the three (scope is "" or a fixed tab id; folder
+  // names sanitise `/` out), so this is an unambiguous composite key. The scope
+  // prefix keeps each tab's AI sidebar slices separate from the main chat's.
+  return `${scope}/${assistantId}/${chatId}`;
 }
 
 function emit() {
@@ -108,8 +111,8 @@ function emitConversationActivity(event: ConversationActivityEvent) {
 }
 
 /** Stable snapshot for `useSyncExternalStore` — same ref until the slice changes. */
-export function getSlice(assistantId: string, chatId: string): ConversationSlice {
-  return slices.get(key(assistantId, chatId)) ?? EMPTY_SLICE;
+export function getSlice(scope: string, assistantId: string, chatId: string): ConversationSlice {
+  return slices.get(key(scope, assistantId, chatId)) ?? EMPTY_SLICE;
 }
 
 function update(k: string, fn: (slice: ConversationSlice) => ConversationSlice) {
@@ -249,11 +252,15 @@ function newRequestId(): string {
  * for that conversation is in flight — the live slice already holds the
  * optimistic user message plus the streaming draft, and must not be clobbered.
  */
-export async function ensureLoaded(assistantId: string, chatId: string): Promise<void> {
-  const k = key(assistantId, chatId);
+export async function ensureLoaded(
+  scope: string,
+  assistantId: string,
+  chatId: string,
+): Promise<void> {
+  const k = key(scope, assistantId, chatId);
   if (slices.get(k)?.sending) return;
   try {
-    const messages = await listMessages(assistantId, chatId);
+    const messages = await listMessages(assistantId, chatId, scope);
     update(k, (s) => ({ ...s, messages, streaming: null, loaded: true }));
   } catch (err) {
     update(k, (s) => ({ ...s, loaded: true, error: String(err) }));
@@ -265,13 +272,14 @@ export async function ensureLoaded(assistantId: string, chatId: string): Promise
  * once the backend turn finishes; callers usually fire-and-forget.
  */
 export async function send(
+  scope: string,
   assistantId: string,
   chatId: string,
   text: string,
   attachments: Attachment[],
   reasoningEffort?: string | null,
 ): Promise<void> {
-  const k = key(assistantId, chatId);
+  const k = key(scope, assistantId, chatId);
   if (slices.get(k)?.sending) return;
   if (!text.trim() && attachments.length === 0) return;
 
@@ -300,11 +308,11 @@ export async function send(
     loaded: true,
     requestId,
   }));
-  emitConversationActivity({ assistantId, chatId, lastMessageAt: userMsg.createdAt });
+  emitConversationActivity({ scope, assistantId, chatId, lastMessageAt: userMsg.createdAt });
 
   try {
     await sendMessage(
-      { assistantId, chatId, requestId, text, attachments, reasoningEffort },
+      { scope, assistantId, chatId, requestId, text, attachments, reasoningEffort },
       (event) => handleStreamEvent(k, event),
     );
   } catch (err) {
@@ -314,7 +322,7 @@ export async function send(
     // drop the streaming draft — for whichever view is (or later becomes) mounted.
     let reloaded: ChatMessage[] | null = null;
     try {
-      reloaded = await listMessages(assistantId, chatId);
+      reloaded = await listMessages(assistantId, chatId, scope);
     } catch {
       reloaded = null;
     }
@@ -325,57 +333,73 @@ export async function send(
       sending: false,
       requestId: null,
     }));
-    emitConversationActivity({ assistantId, chatId });
+    emitConversationActivity({ scope, assistantId, chatId });
   }
 }
 
-export async function clearContext(assistantId: string, chatId: string): Promise<void> {
-  const messages = await addContextMarker(assistantId, chatId);
-  update(key(assistantId, chatId), (slice) => ({ ...slice, messages }));
+export async function clearContext(
+  scope: string,
+  assistantId: string,
+  chatId: string,
+): Promise<void> {
+  const messages = await addContextMarker(assistantId, chatId, scope);
+  update(key(scope, assistantId, chatId), (slice) => ({ ...slice, messages }));
 }
 
 export async function edit(
+  scope: string,
   assistantId: string,
   chatId: string,
   messageId: string,
   content: string,
 ): Promise<void> {
-  const messages = await editChatMessage(assistantId, chatId, messageId, content);
-  update(key(assistantId, chatId), (slice) => ({ ...slice, messages }));
+  const messages = await editChatMessage(assistantId, chatId, messageId, content, scope);
+  update(key(scope, assistantId, chatId), (slice) => ({ ...slice, messages }));
 }
 
 export async function feedback(
+  scope: string,
   assistantId: string,
   chatId: string,
   messageId: string,
   value: "good" | "bad" | null,
 ): Promise<void> {
-  const messages = await setChatMessageFeedback(assistantId, chatId, messageId, value);
-  update(key(assistantId, chatId), (slice) => ({ ...slice, messages }));
+  const messages = await setChatMessageFeedback(assistantId, chatId, messageId, value, scope);
+  update(key(scope, assistantId, chatId), (slice) => ({ ...slice, messages }));
 }
 
 export async function selectResponse(
+  scope: string,
   assistantId: string,
   chatId: string,
   groupId: string,
   messageId: string,
   layout: "tabs" | "split",
 ): Promise<void> {
-  const messages = await setResponseGroupState(assistantId, chatId, groupId, messageId, layout);
-  update(key(assistantId, chatId), (slice) => ({ ...slice, messages }));
+  const messages = await setResponseGroupState(
+    assistantId,
+    chatId,
+    groupId,
+    messageId,
+    layout,
+    scope,
+  );
+  update(key(scope, assistantId, chatId), (slice) => ({ ...slice, messages }));
 }
 
 export async function remove(
+  scope: string,
   assistantId: string,
   chatId: string,
   messageId: string,
 ): Promise<void> {
-  const messages = await deleteChatMessage(assistantId, chatId, messageId);
-  update(key(assistantId, chatId), (slice) => ({ ...slice, messages }));
-  emitConversationActivity({ assistantId, chatId });
+  const messages = await deleteChatMessage(assistantId, chatId, messageId, scope);
+  update(key(scope, assistantId, chatId), (slice) => ({ ...slice, messages }));
+  emitConversationActivity({ scope, assistantId, chatId });
 }
 
 export async function generateVariant(
+  scope: string,
   assistantId: string,
   chatId: string,
   sourceMessageId: string,
@@ -385,7 +409,7 @@ export async function generateVariant(
   replace: boolean,
   reasoningEffort?: string | null,
 ): Promise<void> {
-  const k = key(assistantId, chatId);
+  const k = key(scope, assistantId, chatId);
   if (slices.get(k)?.sending) return;
   const requestId = newRequestId();
   update(k, (slice) => ({
@@ -406,6 +430,7 @@ export async function generateVariant(
   try {
     await generateMessageVariant(
       {
+        scope,
         assistantId,
         chatId,
         requestId,
@@ -422,7 +447,7 @@ export async function generateVariant(
   } finally {
     let messages: ChatMessage[] | null = null;
     try {
-      messages = await listMessages(assistantId, chatId);
+      messages = await listMessages(assistantId, chatId, scope);
     } catch {
       messages = null;
     }
@@ -433,19 +458,19 @@ export async function generateVariant(
       sending: false,
       requestId: null,
     }));
-    emitConversationActivity({ assistantId, chatId });
+    emitConversationActivity({ scope, assistantId, chatId });
   }
 }
 
 /** Ask the backend to stop a conversation's in-flight generation. */
-export function stop(assistantId: string, chatId: string): void {
-  const slice = slices.get(key(assistantId, chatId));
+export function stop(scope: string, assistantId: string, chatId: string): void {
+  const slice = slices.get(key(scope, assistantId, chatId));
   if (slice?.requestId) {
     void stopMessage(slice.requestId);
   }
 }
 
 /** Whether a conversation currently has a generation in flight. */
-export function isSending(assistantId: string, chatId: string): boolean {
-  return slices.get(key(assistantId, chatId))?.sending ?? false;
+export function isSending(scope: string, assistantId: string, chatId: string): boolean {
+  return slices.get(key(scope, assistantId, chatId))?.sending ?? false;
 }

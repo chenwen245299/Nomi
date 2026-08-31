@@ -84,7 +84,12 @@ export interface ChatData {
 
 const DEFAULT_ASSISTANT_LABEL = "默认助手";
 const isTauriRuntime = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-type ConversationTitleUpdated = { assistantId: string; chatId: string; title: string };
+type ConversationTitleUpdated = {
+  scope: string;
+  assistantId: string;
+  chatId: string;
+  title: string;
+};
 const conversationActivityAt = (conversation: ConversationSummary) =>
   conversation.lastMessageAt ?? conversation.createdAt;
 const sortByLastMessage = (conversations: ConversationSummary[]) =>
@@ -139,7 +144,9 @@ export function useChat(active: boolean): ChatData {
 
   useEffect(
     () =>
-      subscribeConversationActivity(({ assistantId, chatId, lastMessageAt }) => {
+      subscribeConversationActivity(({ scope, assistantId, chatId, lastMessageAt }) => {
+        // The main-chat collection ignores AI-sidebar activity (its own scope).
+        if (scope !== "") return;
         if (lastMessageAt != null) {
           setConversations((current) =>
             sortByLastMessage(
@@ -164,6 +171,8 @@ export function useChat(active: boolean): ChatData {
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
     void listen<ConversationTitleUpdated>("conversation-title-updated", ({ payload }) => {
+      // The main-chat collection only reflects main-chat titles (scope "").
+      if (payload.scope) return;
       setConversations((current) =>
         current.map((conversation) =>
           conversation.assistantId === payload.assistantId && conversation.id === payload.chatId

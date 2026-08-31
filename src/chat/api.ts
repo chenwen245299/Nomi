@@ -316,9 +316,12 @@ export async function deleteAssistant(id: string): Promise<void> {
   delete preview.conversations[id];
 }
 
-export async function listConversations(assistantId: string): Promise<Conversation[]> {
+export async function listConversations(
+  assistantId: string,
+  scope?: string,
+): Promise<Conversation[]> {
   if (isTauri()) {
-    return invoke<Conversation[]>("list_conversations", { assistantId });
+    return invoke<Conversation[]>("list_conversations", { scope, assistantId });
   }
   return [...(preview.conversations[assistantId] ?? [])].sort(
     (a, b) => conversationActivityAt(b) - conversationActivityAt(a),
@@ -344,21 +347,25 @@ export async function listAllConversations(): Promise<ConversationSummary[]> {
 }
 
 /** Create a conversation under the implicit default assistant (empty prompt). */
-export async function createDefaultConversation(title: string): Promise<ConversationSummary> {
+export async function createDefaultConversation(
+  title: string,
+  scope?: string,
+): Promise<ConversationSummary> {
   if (isTauri()) {
-    return invoke<ConversationSummary>("create_default_conversation", { title });
+    return invoke<ConversationSummary>("create_default_conversation", { scope, title });
   }
   ensurePreviewDefaultAssistant();
-  const conversation = await createConversation(DEFAULT_ASSISTANT_ID, title);
+  const conversation = await createConversation(DEFAULT_ASSISTANT_ID, title, scope);
   return { ...conversation, assistantId: DEFAULT_ASSISTANT_ID, assistantName: "默认助手" };
 }
 
 export async function createConversation(
   assistantId: string,
   title: string,
+  scope?: string,
 ): Promise<Conversation> {
   if (isTauri()) {
-    return invoke<Conversation>("create_conversation", { assistantId, title });
+    return invoke<Conversation>("create_conversation", { scope, assistantId, title });
   }
   const ts = nowSec();
   const inheritedModel = await previewInheritedModel(assistantId);
@@ -481,9 +488,10 @@ export async function renameConversation(
   assistantId: string,
   id: string,
   title: string,
+  scope?: string,
 ): Promise<Conversation> {
   if (isTauri()) {
-    return invoke<Conversation>("rename_conversation", { assistantId, id, title });
+    return invoke<Conversation>("rename_conversation", { scope, assistantId, id, title });
   }
   const conversation = (preview.conversations[assistantId] ?? []).find((item) => item.id === id);
   if (!conversation) {
@@ -494,9 +502,13 @@ export async function renameConversation(
   return { ...conversation };
 }
 
-export async function deleteConversation(assistantId: string, id: string): Promise<void> {
+export async function deleteConversation(
+  assistantId: string,
+  id: string,
+  scope?: string,
+): Promise<void> {
   if (isTauri()) {
-    await invoke("delete_conversation", { assistantId, id });
+    await invoke("delete_conversation", { scope, assistantId, id });
     return;
   }
   preview.conversations[assistantId] = (preview.conversations[assistantId] ?? []).filter(
@@ -505,9 +517,13 @@ export async function deleteConversation(assistantId: string, id: string): Promi
   delete preview.messages[previewChatKey(assistantId, id)];
 }
 
-export async function revealConversation(assistantId: string, id: string): Promise<void> {
+export async function revealConversation(
+  assistantId: string,
+  id: string,
+  scope?: string,
+): Promise<void> {
   if (isTauri()) {
-    await invoke("reveal_conversation", { assistantId, id });
+    await invoke("reveal_conversation", { scope, assistantId, id });
   }
 }
 
@@ -516,9 +532,16 @@ export async function setConversationModel(
   id: string,
   providerId: string | null,
   modelId: string | null,
+  scope?: string,
 ): Promise<Conversation> {
   if (isTauri()) {
-    return invoke<Conversation>("set_conversation_model", { assistantId, id, providerId, modelId });
+    return invoke<Conversation>("set_conversation_model", {
+      scope,
+      assistantId,
+      id,
+      providerId,
+      modelId,
+    });
   }
   const conversation = (preview.conversations[assistantId] ?? []).find((item) => item.id === id);
   if (!conversation) {
@@ -531,9 +554,13 @@ export async function setConversationModel(
 
 // ── Messages / attachments / streaming ──────────────────────────────────────
 
-export async function listMessages(assistantId: string, id: string): Promise<ChatMessage[]> {
+export async function listMessages(
+  assistantId: string,
+  id: string,
+  scope?: string,
+): Promise<ChatMessage[]> {
   if (isTauri()) {
-    return invoke<ChatMessage[]>("list_messages", { assistantId, id });
+    return invoke<ChatMessage[]>("list_messages", { scope, assistantId, id });
   }
   return [...(preview.messages[previewChatKey(assistantId, id)] ?? [])];
 }
@@ -541,9 +568,10 @@ export async function listMessages(assistantId: string, id: string): Promise<Cha
 export async function addContextMarker(
   assistantId: string,
   chatId: string,
+  scope?: string,
 ): Promise<ChatMessage[]> {
   if (isTauri()) {
-    return invoke<ChatMessage[]>("add_context_marker", { assistantId, chatId });
+    return invoke<ChatMessage[]>("add_context_marker", { scope, assistantId, chatId });
   }
   const key = previewChatKey(assistantId, chatId);
   const messages = preview.messages[key] ?? [];
@@ -573,9 +601,11 @@ export async function editChatMessage(
   chatId: string,
   messageId: string,
   content: string,
+  scope?: string,
 ): Promise<ChatMessage[]> {
   if (isTauri()) {
     return invoke<ChatMessage[]>("edit_chat_message", {
+      scope,
       assistantId,
       chatId,
       messageId,
@@ -593,9 +623,11 @@ export async function setChatMessageFeedback(
   chatId: string,
   messageId: string,
   feedback: "good" | "bad" | null,
+  scope?: string,
 ): Promise<ChatMessage[]> {
   if (isTauri()) {
     return invoke<ChatMessage[]>("set_chat_message_feedback", {
+      scope,
       assistantId,
       chatId,
       messageId,
@@ -614,9 +646,11 @@ export async function setResponseGroupState(
   groupId: string,
   selectedMessageId: string,
   layout: "tabs" | "split",
+  scope?: string,
 ): Promise<ChatMessage[]> {
   if (isTauri()) {
     return invoke<ChatMessage[]>("set_response_group_state", {
+      scope,
       assistantId,
       chatId,
       groupId,
@@ -640,9 +674,10 @@ export async function deleteChatMessage(
   assistantId: string,
   chatId: string,
   messageId: string,
+  scope?: string,
 ): Promise<ChatMessage[]> {
   if (isTauri()) {
-    return invoke<ChatMessage[]>("delete_chat_message", { assistantId, chatId, messageId });
+    return invoke<ChatMessage[]>("delete_chat_message", { scope, assistantId, chatId, messageId });
   }
   const key = previewChatKey(assistantId, chatId);
   const messages = preview.messages[key] ?? [];
@@ -665,9 +700,16 @@ export async function saveChatAttachment(
   chatId: string,
   sourcePath: string,
   name?: string,
+  scope?: string,
 ): Promise<Attachment> {
   if (isTauri()) {
-    return invoke<Attachment>("save_chat_attachment", { assistantId, chatId, sourcePath, name });
+    return invoke<Attachment>("save_chat_attachment", {
+      scope,
+      assistantId,
+      chatId,
+      sourcePath,
+      name,
+    });
   }
   throw new Error("预览模式不支持上传附件。");
 }
@@ -679,9 +721,11 @@ export async function saveChatAttachmentData(
   dataBase64: string,
   name: string,
   mimeType: string,
+  scope?: string,
 ): Promise<Attachment> {
   if (isTauri()) {
     return invoke<Attachment>("save_chat_attachment_data", {
+      scope,
       assistantId,
       chatId,
       dataBase64,
@@ -711,9 +755,11 @@ export async function loadChatAttachmentPreview(
   assistantId: string,
   chatId: string,
   attachment: Attachment,
+  scope?: string,
 ): Promise<AttachmentPreviewSource> {
   if (isTauri()) {
     const payload = await invoke<ArrayBuffer | number[]>("read_chat_attachment_data", {
+      scope,
       assistantId,
       chatId,
       relativePath: attachment.path,
@@ -737,9 +783,11 @@ export async function loadPdfThumbnail(
   assistantId: string,
   chatId: string,
   attachment: Attachment,
+  scope?: string,
 ): Promise<AttachmentPreviewSource> {
   if (!isTauri()) throw new Error("预览不可用。");
   const payload = await invoke<ArrayBuffer | number[]>("read_pdf_thumbnail", {
+    scope,
     assistantId,
     chatId,
     relativePath: attachment.path,
@@ -776,6 +824,7 @@ export async function downloadAttachment(
   assistantId: string,
   chatId: string,
   attachment: Attachment,
+  scope?: string,
 ): Promise<boolean> {
   if (!isTauri()) {
     // Browser-preview fallback: open the data URL in a new tab if we have one.
@@ -790,6 +839,7 @@ export async function downloadAttachment(
   });
   if (!destPath) return false;
   await invoke("write_attachment_to", {
+    scope,
     assistantId,
     chatId,
     relativePath: attachment.path,
@@ -799,6 +849,8 @@ export async function downloadAttachment(
 }
 
 export interface SendMessageParams {
+  /** Conversation store: undefined = main chat; a tab id = that tab's AI sidebar. */
+  scope?: string;
   assistantId: string;
   chatId: string;
   requestId: string;
@@ -895,6 +947,8 @@ export async function sendMessage(
 }
 
 export interface GenerateMessageVariantParams {
+  /** Conversation store: undefined = main chat; a tab id = that tab's AI sidebar. */
+  scope?: string;
   assistantId: string;
   chatId: string;
   requestId: string;

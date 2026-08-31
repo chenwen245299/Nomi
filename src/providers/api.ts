@@ -1,13 +1,22 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export interface PricingTimeRange {
+  /** Whole hours in China Standard Time. End may be 24; ranges may cross midnight. */
+  startHour: number;
+  endHour: number;
+}
+
 export interface ProviderModel {
   id: string;
   name: string;
   capabilities: string[]; // "audio" | "video" | "image" | "tool" | "reasoning"
-  category: string; // "text" | "vision" | "embedding" | "audio"
+  category: string; // "text" | "vision" | "audio" | "video" | "embedding"
   size: string;
   starred: boolean;
   contextLength?: number | null;
+  /** Provider-reported modalities, when its model catalogue publishes them. */
+  inputModalities?: string[];
+  outputModalities?: string[];
   /** Prices are user-maintained CNY amounts per one million tokens. */
   inputPrice?: number | null;
   outputPrice?: number | null;
@@ -17,12 +26,52 @@ export interface ProviderModel {
   peakInputPrice?: number | null;
   peakOutputPrice?: number | null;
   peakCacheHitInputPrice?: number | null;
-  /** Whole hours in China Standard Time; ranges may cross midnight. */
+  /** Whole-hour windows in China Standard Time; ranges may cross midnight. */
+  peakTimeRanges?: PricingTimeRange[];
+  /** Legacy single-window fields, retained so older saved providers still load. */
   peakStartHour?: number | null;
   peakEndHour?: number | null;
 }
 
+/** One model returned by a provider catalogue before the user adds it. */
+export interface FetchedProviderModel {
+  id: string;
+  name: string;
+  capabilities: string[];
+  category: string;
+  contextLength?: number | null;
+  inputModalities: string[];
+  outputModalities: string[];
+}
+
 export type PricingPeriod = "peak" | "offPeak";
+
+function isValidPricingTimeRange(range: PricingTimeRange): boolean {
+  return (
+    Number.isInteger(range.startHour) &&
+    range.startHour >= 0 &&
+    range.startHour <= 23 &&
+    Number.isInteger(range.endHour) &&
+    range.endHour >= 0 &&
+    range.endHour <= 24 &&
+    range.startHour !== range.endHour
+  );
+}
+
+/** Return valid configured windows, falling back to the legacy single window. */
+export function pricingTimeRanges(model: ProviderModel | null | undefined): PricingTimeRange[] {
+  const ranges = (model?.peakTimeRanges ?? []).filter(isValidPricingTimeRange);
+  if (ranges.length > 0) return ranges;
+  if (model?.peakStartHour == null || model.peakEndHour == null) return [];
+  const legacy = { startHour: model.peakStartHour, endHour: model.peakEndHour };
+  return isValidPricingTimeRange(legacy) ? [legacy] : [];
+}
+
+function hourIsInRange(hour: number, range: PricingTimeRange): boolean {
+  return range.startHour < range.endHour
+    ? hour >= range.startHour && hour < range.endHour
+    : hour >= range.startHour || hour < range.endHour;
+}
 
 /** Resolve the configured time-of-use period in China Standard Time. */
 export function currentPricingPeriod(
@@ -30,16 +79,15 @@ export function currentPricingPeriod(
   now = new Date(),
 ): PricingPeriod | null {
   if (!model?.peakPricingEnabled) return null;
-  const start = model.peakStartHour;
-  const end = model.peakEndHour;
-  if (start == null || end == null || start === end) return null;
+  const ranges = pricingTimeRanges(model);
+  if (ranges.length === 0) return null;
   const formatted = new Intl.DateTimeFormat("en-US", {
     hour: "2-digit",
     hourCycle: "h23",
     timeZone: "Asia/Shanghai",
   }).format(now);
   const hour = Number.parseInt(formatted, 10);
-  const peak = start < end ? hour >= start && hour < end : hour >= start || hour < end;
+  const peak = ranges.some((range) => hourIsInRange(hour, range));
   return peak ? "peak" : "offPeak";
 }
 
@@ -95,8 +143,9 @@ export const CAPABILITIES: { value: string; label: string }[] = [
 export const MODEL_CATEGORIES: { value: string; label: string }[] = [
   { value: "text", label: "文本" },
   { value: "vision", label: "视觉" },
-  { value: "embedding", label: "嵌入" },
   { value: "audio", label: "音频" },
+  { value: "video", label: "视频" },
+  { value: "embedding", label: "嵌入" },
 ];
 
 export function kindLabel(kind: string): string {
@@ -112,10 +161,12 @@ export function normalizeCategory(value: string | undefined | null): string {
   return value && MODEL_CATEGORIES.some((item) => item.value === value) ? value : "text";
 }
 
-/** Whether a model can drive a conversation (text or vision, not embedding/audio). */
+/** Whether a model can drive a conversation (text-producing text/vision models). */
 export function isChatModel(model: ProviderModel): boolean {
   const category = normalizeCategory(model.category);
-  return category === "text" || category === "vision";
+  const outputs = model.outputModalities ?? [];
+  const producesText = outputs.length === 0 || outputs.includes("text");
+  return producesText && (category === "text" || category === "vision");
 }
 
 /**
@@ -126,6 +177,7 @@ export function isChatModel(model: ProviderModel): boolean {
 export function supportsVision(model: ProviderModel): boolean {
   return (
     normalizeCategory(model.category) === "vision" ||
+    (model.inputModalities ?? []).some((modality) => ["image", "video"].includes(modality)) ||
     model.capabilities.some((capability) => capability === "image" || capability === "vision")
   );
 }
@@ -134,6 +186,7 @@ export function supportsVision(model: ProviderModel): boolean {
 export function inferModelCategory(id: string): string {
   const s = id.toLowerCase();
   if (/embed|bge|gte|e5|rerank/.test(s)) return "embedding";
+  if (/video|sora|veo|kling|cogvideo|hunyuanvideo|wan2(?:\.|-)/.test(s)) return "video";
   if (/whisper|tts|audio|voice|speech|transcrib|realtime|sensevoice|cosyvoice|sovits/.test(s)) {
     return "audio";
   }
@@ -214,6 +267,11 @@ export interface ProviderPreset {
   models: ProviderModel[];
 }
 
+export const DEEPSEEK_PEAK_TIME_RANGES: PricingTimeRange[] = [
+  { startHour: 9, endHour: 12 },
+  { startHour: 14, endHour: 18 },
+];
+
 // Model parameter sizes come straight from the vendor (no name-parsing): flash is
 // 284B, pro is 1.6T. The vision model is flash-based (also 284B).
 export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
@@ -232,6 +290,7 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
         outputPrice: 2,
         cacheHitInputPrice: 0.02,
         peakPricingEnabled: false,
+        peakTimeRanges: DEEPSEEK_PEAK_TIME_RANGES,
       },
       {
         id: "deepseek-v4-pro",
@@ -245,6 +304,7 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
         outputPrice: 6,
         cacheHitInputPrice: 0.025,
         peakPricingEnabled: false,
+        peakTimeRanges: DEEPSEEK_PEAK_TIME_RANGES,
       },
       {
         id: "deepseek-v4-flash-vision-exp",
@@ -418,11 +478,18 @@ export async function testProvider(id: string): Promise<string> {
   return "预览模式：未连接真实后端";
 }
 
-export async function fetchProviderModels(id: string): Promise<string[]> {
+export async function fetchProviderModels(id: string): Promise<FetchedProviderModel[]> {
   if (isTauri()) {
-    return invoke<string[]>("fetch_provider_models", { id });
+    return invoke<FetchedProviderModel[]>("fetch_provider_models", { id });
   }
-  return ["gpt-4o", "gpt-4o-mini"];
+  return ["gpt-4o", "gpt-4o-mini"].map((modelId) => ({
+    id: modelId,
+    name: modelId,
+    capabilities: inferModelCapabilities(modelId),
+    category: inferModelCategory(modelId),
+    inputModalities: ["text"],
+    outputModalities: ["text"],
+  }));
 }
 
 export async function providerBalance(id: string): Promise<ProviderBalance> {

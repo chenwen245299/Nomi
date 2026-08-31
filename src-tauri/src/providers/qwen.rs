@@ -47,8 +47,7 @@ mod tests {
             peak_input_price: None,
             peak_output_price: None,
             peak_cache_hit_input_price: None,
-            peak_start_hour: None,
-            peak_end_hour: None,
+            peak_time_ranges: Vec::new(),
         }
     }
 

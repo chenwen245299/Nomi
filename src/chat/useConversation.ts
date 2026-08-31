@@ -33,42 +33,48 @@ export interface ConversationController {
  * lives in the store, so a reply keeps streaming even after this component (and
  * the whole chat tab) unmounts — remounting simply re-attaches to the same slice.
  */
-export function useConversation(assistantId: string, chatId: string): ConversationController {
+export function useConversation(
+  assistantId: string,
+  chatId: string,
+  /** "" = main chat; a tab id routes to that tab's AI sidebar store. */
+  scope = "",
+): ConversationController {
   const slice = useSyncExternalStore(runtime.subscribe, () =>
-    runtime.getSlice(assistantId, chatId),
+    runtime.getSlice(scope, assistantId, chatId),
   );
 
   // Load the persisted transcript on mount (no-op while a generation is live).
   useEffect(() => {
-    void runtime.ensureLoaded(assistantId, chatId);
-  }, [assistantId, chatId]);
+    void runtime.ensureLoaded(scope, assistantId, chatId);
+  }, [scope, assistantId, chatId]);
 
   const send = useCallback(
     (text: string, attachments: Attachment[], reasoningEffort?: string | null) =>
-      runtime.send(assistantId, chatId, text, attachments, reasoningEffort),
-    [assistantId, chatId],
+      runtime.send(scope, assistantId, chatId, text, attachments, reasoningEffort),
+    [scope, assistantId, chatId],
   );
   const clearContext = useCallback(
-    () => runtime.clearContext(assistantId, chatId),
-    [assistantId, chatId],
+    () => runtime.clearContext(scope, assistantId, chatId),
+    [scope, assistantId, chatId],
   );
   const edit = useCallback(
-    (messageId: string, content: string) => runtime.edit(assistantId, chatId, messageId, content),
-    [assistantId, chatId],
+    (messageId: string, content: string) =>
+      runtime.edit(scope, assistantId, chatId, messageId, content),
+    [scope, assistantId, chatId],
   );
   const feedback = useCallback(
     (messageId: string, value: "good" | "bad" | null) =>
-      runtime.feedback(assistantId, chatId, messageId, value),
-    [assistantId, chatId],
+      runtime.feedback(scope, assistantId, chatId, messageId, value),
+    [scope, assistantId, chatId],
   );
   const selectResponse = useCallback(
     (groupId: string, messageId: string, layout: "tabs" | "split") =>
-      runtime.selectResponse(assistantId, chatId, groupId, messageId, layout),
-    [assistantId, chatId],
+      runtime.selectResponse(scope, assistantId, chatId, groupId, messageId, layout),
+    [scope, assistantId, chatId],
   );
   const remove = useCallback(
-    (messageId: string) => runtime.remove(assistantId, chatId, messageId),
-    [assistantId, chatId],
+    (messageId: string) => runtime.remove(scope, assistantId, chatId, messageId),
+    [scope, assistantId, chatId],
   );
   const generateVariant = useCallback(
     (
@@ -80,6 +86,7 @@ export function useConversation(assistantId: string, chatId: string): Conversati
       reasoningEffort?: string | null,
     ) =>
       runtime.generateVariant(
+        scope,
         assistantId,
         chatId,
         sourceMessageId,
@@ -89,9 +96,12 @@ export function useConversation(assistantId: string, chatId: string): Conversati
         replace,
         reasoningEffort,
       ),
-    [assistantId, chatId],
+    [scope, assistantId, chatId],
   );
-  const stop = useCallback(() => runtime.stop(assistantId, chatId), [assistantId, chatId]);
+  const stop = useCallback(
+    () => runtime.stop(scope, assistantId, chatId),
+    [scope, assistantId, chatId],
+  );
 
   return {
     messages: slice.messages,
@@ -111,6 +121,8 @@ export function useConversation(assistantId: string, chatId: string): Conversati
 }
 
 /** Subscribe to just whether a conversation is generating (for list indicators). */
-export function useConversationSending(assistantId: string, chatId: string): boolean {
-  return useSyncExternalStore(runtime.subscribe, () => runtime.isSending(assistantId, chatId));
+export function useConversationSending(assistantId: string, chatId: string, scope = ""): boolean {
+  return useSyncExternalStore(runtime.subscribe, () =>
+    runtime.isSending(scope, assistantId, chatId),
+  );
 }

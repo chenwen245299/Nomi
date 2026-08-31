@@ -32,6 +32,7 @@ import {
 } from "../theme";
 import {
   CAPABILITIES,
+  DEEPSEEK_PEAK_TIME_RANGES,
   MODEL_CATEGORIES,
   PROVIDER_KINDS,
   PROVIDER_PRESETS,
@@ -42,9 +43,12 @@ import {
   isChatModel,
   kindLabel,
   normalizeCategory,
+  pricingTimeRanges,
+  type FetchedProviderModel,
   type Provider,
   type ProviderBalance,
   type ProviderModel,
+  type PricingTimeRange,
 } from "./api";
 import { BrandIcon } from "./BrandIcon";
 import { modelIconUrl, providerIconUrl } from "./icons";
@@ -100,12 +104,12 @@ function peakPriceSummary(model: ProviderModel): string | null {
   const input = formatPrice(model.peakInputPrice ?? model.inputPrice);
   const output = formatPrice(model.peakOutputPrice ?? model.outputPrice);
   const cache = formatPrice(model.peakCacheHitInputPrice ?? model.cacheHitInputPrice);
-  const start = model.peakStartHour;
-  const end = model.peakEndHour;
-  const window =
-    start != null && end != null
-      ? `${String(start).padStart(2, "0")}:00–${String(end).padStart(2, "0")}:00`
-      : "";
+  const window = pricingTimeRanges(model)
+    .map(
+      ({ startHour, endHour }) =>
+        `${String(startHour).padStart(2, "0")}:00–${String(endHour).padStart(2, "0")}:00`,
+    )
+    .join("、");
   return [
     "波峰",
     window,
@@ -481,9 +485,40 @@ function makeStyles(theme: Theme, accent: Accent) {
     },
     pickerRowText: {
       color: t.textPrimary,
-      flex: 1,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       fontSize: 12.5,
+    },
+    pickerRowBody: {
+      flex: 1,
+      minWidth: 0,
+    },
+    pickerRowName: {
+      color: t.textPrimary,
+      fontSize: 12.5,
+      fontWeight: "600",
+    },
+    pickerRowMeta: {
+      color: t.textTertiary,
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+      fontSize: 10.5,
+      marginTop: 2,
+    },
+    pickerRowCapabilities: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 3,
+      justifyContent: "flex-end",
+      maxWidth: 160,
+    },
+    pickerCapability: {
+      backgroundColor: accent.iconBadge,
+      borderRadius: 999,
+      color: accent.accentText,
+      fontSize: 9.5,
+      fontWeight: "600",
+      overflow: "hidden",
+      paddingHorizontal: 5,
+      paddingVertical: 2,
     },
     pickerRowTextMuted: {
       color: t.textTertiary,
@@ -684,6 +719,39 @@ function makeStyles(theme: Theme, accent: Accent) {
       borderWidth: 1,
       gap: 8,
       padding: 8,
+    },
+    peakRangeRow: {
+      alignItems: "flex-end",
+      flexDirection: "row",
+      gap: 8,
+    },
+    peakRangeNumber: {
+      color: t.textSecondary,
+      fontSize: 11,
+      fontWeight: "600",
+      lineHeight: 32,
+      width: 42,
+    },
+    peakRangeDelete: {
+      alignItems: "center",
+      borderRadius: 8,
+      height: 32,
+      justifyContent: "center",
+      width: 32,
+    },
+    peakRangeAdd: {
+      alignItems: "center",
+      alignSelf: "flex-start",
+      borderRadius: 8,
+      flexDirection: "row",
+      gap: 4,
+      height: 28,
+      paddingHorizontal: 8,
+    },
+    peakRangeAddText: {
+      color: accent.accentText,
+      fontSize: 11,
+      fontWeight: "600",
     },
     chip: {
       alignItems: "center",
@@ -1180,28 +1248,66 @@ function ProviderDetail({
     setTesting(false);
   }
 
-  // Add only the ids the user picked in the modal (dedup against existing).
-  // Category is inferred from the id so the new rows land in the right group.
-  function addModels(ids: string[]) {
+  // Add only the models the user picked (dedup against existing), preserving
+  // provider-reported modalities/capabilities instead of guessing from the id.
+  function addModels(fetched: FetchedProviderModel[]) {
     const existing = new Set(provider.models.map((m) => m.id));
-    const added = ids
-      .filter((id) => !existing.has(id))
-      .map<ProviderModel>((id) => {
-        const capabilities = inferModelCapabilities(id);
+    const added = fetched
+      .filter((model) => !existing.has(model.id))
+      .map<ProviderModel>((model) => {
+        const capabilities = [
+          ...new Set([...model.capabilities, ...inferModelCapabilities(model.id)]),
+        ];
         return {
-          id,
-          name: id,
+          id: model.id,
+          name: model.name || model.id,
           capabilities,
-          category:
-            capabilities.includes("image") || capabilities.includes("video")
-              ? "vision"
-              : inferModelCategory(id),
+          category: model.category
+            ? normalizeCategory(model.category)
+            : inferModelCategory(model.id),
           size: "",
           starred: false,
+          contextLength: model.contextLength,
+          inputModalities: model.inputModalities,
+          outputModalities: model.outputModalities,
         };
       });
     if (added.length) {
       saveModels([...provider.models, ...added]);
+    }
+  }
+
+  async function refreshFetchedMetadata(fetched: FetchedProviderModel[]) {
+    const catalogue = new Map(fetched.map((model) => [model.id, model]));
+    let changed = false;
+    const models = provider.models.map((model) => {
+      const fresh = catalogue.get(model.id);
+      if (!fresh) return model;
+      const capabilities = [
+        ...new Set([
+          ...model.capabilities,
+          ...fresh.capabilities,
+          ...inferModelCapabilities(model.id),
+        ]),
+      ];
+      const next: ProviderModel = {
+        ...model,
+        name: !model.name.trim() || model.name === model.id ? fresh.name || model.id : model.name,
+        capabilities,
+        category: fresh.category ? normalizeCategory(fresh.category) : model.category,
+        contextLength: fresh.contextLength ?? model.contextLength,
+        inputModalities:
+          fresh.inputModalities.length > 0 ? fresh.inputModalities : (model.inputModalities ?? []),
+        outputModalities:
+          fresh.outputModalities.length > 0
+            ? fresh.outputModalities
+            : (model.outputModalities ?? []),
+      };
+      if (JSON.stringify(next) !== JSON.stringify(model)) changed = true;
+      return next;
+    });
+    if (changed) {
+      await controller.save({ ...provider, name, baseUrl, models });
     }
   }
 
@@ -1432,6 +1538,7 @@ function ProviderDetail({
             initial={null}
             onCancel={() => setEditingModel(null)}
             onSave={upsertModel}
+            providerKind={provider.kind}
           />
         )}
 
@@ -1439,11 +1546,12 @@ function ProviderDetail({
           <ModelPickerModal
             existingIds={provider.models.map((m) => m.id)}
             fetchModels={() => controller.fetchModels(provider.id)}
-            onAdd={(ids) => {
-              addModels(ids);
+            onAdd={(models) => {
+              addModels(models);
               setPicking(false);
             }}
             onClose={() => setPicking(false)}
+            onFetched={refreshFetchedMetadata}
           />
         )}
 
@@ -1552,6 +1660,7 @@ function ProviderDetail({
                         initial={model}
                         onCancel={() => setEditingModel(null)}
                         onSave={upsertModel}
+                        providerKind={provider.kind}
                       />
                     ) : null}
                   </View>
@@ -1674,17 +1783,19 @@ function ModelPickerModal({
   fetchModels,
   onAdd,
   onClose,
+  onFetched,
 }: {
   existingIds: string[];
-  fetchModels: () => Promise<string[]>;
-  onAdd: (ids: string[]) => void;
+  fetchModels: () => Promise<FetchedProviderModel[]>;
+  onAdd: (models: FetchedProviderModel[]) => void;
   onClose: () => void;
+  onFetched: (models: FetchedProviderModel[]) => Promise<void>;
 }) {
   const { styles, theme, accent } = useProviderStyles();
   useCloseOnEscape(onClose);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState("");
-  const [ids, setIds] = useState<string[]>([]);
+  const [models, setModels] = useState<FetchedProviderModel[]>([]);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [nonce, setNonce] = useState(0);
@@ -1697,7 +1808,10 @@ function ModelPickerModal({
       try {
         const list = await fetchModels();
         if (!cancelled) {
-          setIds(list);
+          await onFetched(list);
+        }
+        if (!cancelled) {
+          setModels(list);
           setState("ready");
         }
       } catch (err) {
@@ -1726,31 +1840,34 @@ function ModelPickerModal({
   // (possibly ~300-item) list; combined with the memoized PickerRow below only
   // the rows that actually change re-render.
   const filtered = useMemo(
-    () => (q ? ids.filter((id) => id.toLowerCase().includes(q)) : ids),
-    [ids, q],
+    () =>
+      q
+        ? models.filter(
+            (model) => model.id.toLowerCase().includes(q) || model.name.toLowerCase().includes(q),
+          )
+        : models,
+    [models, q],
   );
   const selectable = useMemo(
-    () => filtered.filter((id) => !existing.has(id)),
+    () => filtered.filter((model) => !existing.has(model.id)),
     [filtered, existing],
   );
-  const allSelected = selectable.length > 0 && selectable.every((id) => selected.has(id));
+  const allSelected = selectable.length > 0 && selectable.every((model) => selected.has(model.id));
 
-  // Infer each id's category once, then bucket the filtered ids into groups so
-  // the picker is organised by 文本 / 视觉 / 嵌入 / 音频 like the saved list.
-  const categoryOf = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const id of ids) {
-      map.set(id, inferModelCategory(id));
-    }
-    return map;
-  }, [ids]);
+  // Prefer the provider catalogue's category. Plain OpenAI-compatible APIs
+  // that expose only ids still use the existing name-based fallback.
   const grouped = useMemo(
     () =>
       MODEL_CATEGORIES.map((cat) => ({
         cat,
-        items: filtered.filter((id) => (categoryOf.get(id) ?? "text") === cat.value),
+        items: filtered.filter((model) => {
+          const category = model.category
+            ? normalizeCategory(model.category)
+            : inferModelCategory(model.id);
+          return category === cat.value;
+        }),
       })).filter((group) => group.items.length > 0),
-    [filtered, categoryOf],
+    [filtered],
   );
 
   // Stable identity so React.memo on PickerRow holds across re-renders.
@@ -1770,9 +1887,9 @@ function ModelPickerModal({
     setSelected((prev) => {
       const next = new Set(prev);
       if (allSelected) {
-        selectable.forEach((id) => next.delete(id));
+        selectable.forEach((model) => next.delete(model.id));
       } else {
-        selectable.forEach((id) => next.add(id));
+        selectable.forEach((model) => next.add(model.id));
       }
       return next;
     });
@@ -1796,7 +1913,7 @@ function ModelPickerModal({
           <View style={styles.pickerHeader}>
             <Text style={styles.modalTitle}>选择模型</Text>
             <Text style={styles.modalDetected}>
-              {state === "ready" ? `共 ${ids.length} 个可用` : ""}
+              {state === "ready" ? `共 ${models.length} 个可用` : ""}
             </Text>
           </View>
 
@@ -1860,12 +1977,12 @@ function ModelPickerModal({
                       <Text style={styles.pickerGroupHeader}>
                         {cat.label} ({items.length})
                       </Text>
-                      {items.map((id) => (
+                      {items.map((model) => (
                         <PickerRow
-                          added={existing.has(id)}
-                          checked={existing.has(id) || selected.has(id)}
-                          id={id}
-                          key={id}
+                          added={existing.has(model.id)}
+                          checked={existing.has(model.id) || selected.has(model.id)}
+                          key={model.id}
+                          model={model}
                           onToggle={toggle}
                         />
                       ))}
@@ -1892,7 +2009,7 @@ function ModelPickerModal({
             <Pressable
               accessibilityRole="button"
               disabled={selected.size === 0}
-              onPress={() => onAdd([...selected])}
+              onPress={() => onAdd(models.filter((model) => selected.has(model.id)))}
               style={({ hovered, pressed }: PressState) => [
                 styles.primaryButton,
                 motion,
@@ -1947,21 +2064,23 @@ function Checkbox({
 const PickerRow = memo(function PickerRow({
   added,
   checked,
-  id,
+  model,
   onToggle,
 }: {
   added: boolean;
   checked: boolean;
-  id: string;
+  model: FetchedProviderModel;
   onToggle: (id: string) => void;
 }) {
   const { styles, theme, accent } = useProviderStyles();
+  const displayName = model.name.trim() || model.id;
+  const showsSeparateId = displayName.toLowerCase() !== model.id.toLowerCase();
   return (
     <Pressable
       accessibilityRole="checkbox"
       accessibilityState={{ checked, disabled: added }}
       disabled={added}
-      onPress={() => onToggle(id)}
+      onPress={() => onToggle(model.id)}
       style={({ hovered }: PressState) => [
         styles.pickerRow,
         motion,
@@ -1969,9 +2088,34 @@ const PickerRow = memo(function PickerRow({
       ]}
     >
       <Checkbox accent={accent} checked={checked} muted={added} theme={theme} />
-      <Text numberOfLines={1} style={[styles.pickerRowText, added && styles.pickerRowTextMuted]}>
-        {id}
-      </Text>
+      <View style={styles.pickerRowBody}>
+        <Text
+          numberOfLines={1}
+          style={[
+            showsSeparateId ? styles.pickerRowName : styles.pickerRowText,
+            added && styles.pickerRowTextMuted,
+          ]}
+        >
+          {displayName}
+        </Text>
+        {showsSeparateId ? (
+          <Text
+            numberOfLines={1}
+            style={[styles.pickerRowMeta, added && styles.pickerRowTextMuted]}
+          >
+            {model.id}
+          </Text>
+        ) : null}
+      </View>
+      {model.capabilities.length > 0 ? (
+        <View style={styles.pickerRowCapabilities}>
+          {model.capabilities.map((capability) => (
+            <Text key={capability} style={styles.pickerCapability}>
+              {capabilityLabel(capability)}
+            </Text>
+          ))}
+        </View>
+      ) : null}
       {added ? <Text style={styles.pickerAdded}>已添加</Text> : null}
     </Pressable>
   );
@@ -1996,13 +2140,15 @@ function ModelEditor({
   initial,
   onCancel,
   onSave,
+  providerKind,
 }: {
   existingIds: string[];
   initial: ProviderModel | null;
   onCancel: () => void;
   onSave: (model: ProviderModel) => void;
+  providerKind: string;
 }) {
-  const { styles, theme } = useProviderStyles();
+  const { styles, theme, accent } = useProviderStyles();
   const [id, setId] = useState(initial?.id ?? "");
   const [name, setName] = useState(initial?.name ?? "");
   const [size, setSize] = useState(initial?.size ?? "");
@@ -2030,12 +2176,18 @@ function ModelEditor({
   const [peakCacheHitInputPrice, setPeakCacheHitInputPrice] = useState(
     initial?.peakCacheHitInputPrice == null ? "" : String(initial.peakCacheHitInputPrice),
   );
-  const [peakStartHour, setPeakStartHour] = useState(initial?.peakStartHour ?? 8);
-  const [peakEndHour, setPeakEndHour] = useState(initial?.peakEndHour ?? 24);
+  const [peakTimeRanges, setPeakTimeRanges] = useState<PricingTimeRange[]>(() => {
+    const configured = pricingTimeRanges(initial);
+    const defaults =
+      providerKind === "deepseek" ? DEEPSEEK_PEAK_TIME_RANGES : [{ startHour: 8, endHour: 24 }];
+    return (configured.length > 0 ? configured : defaults).map((range) => ({ ...range }));
+  });
   const [caps, setCaps] = useState<string[]>(initial ? modelCapabilities(initial) : []);
   const isEdit = initial != null;
   const idTaken = !isEdit && existingIds.includes(id.trim());
-  const canSave = id.trim().length > 0 && !idTaken;
+  const peakTimeRangesValid =
+    !peakPricingEnabled || peakTimeRanges.every((range) => range.startHour !== range.endHour);
+  const canSave = id.trim().length > 0 && !idTaken && peakTimeRangesValid;
   const editorSelectStyle: CSSProperties = {
     appearance: "auto",
     backgroundColor: theme.t.cardSurfaceAlt,
@@ -2052,6 +2204,14 @@ function ModelEditor({
 
   function toggleCap(value: string) {
     setCaps((prev) => (prev.includes(value) ? prev.filter((c) => c !== value) : [...prev, value]));
+  }
+
+  function updatePeakTimeRange(index: number, field: keyof PricingTimeRange, value: number) {
+    setPeakTimeRanges((current) =>
+      current.map((range, rangeIndex) =>
+        rangeIndex === index ? { ...range, [field]: value } : range,
+      ),
+    );
   }
 
   return (
@@ -2151,36 +2311,86 @@ function ModelEditor({
 
         {peakPricingEnabled ? (
           <View style={styles.peakPanel}>
-            <View style={styles.editorRow}>
-              <View style={styles.editorField}>
-                <Text style={styles.editorFieldLabel}>波峰开始（北京时间）</Text>
-                <select
-                  onChange={(event) => setPeakStartHour(Number(event.target.value))}
-                  style={editorSelectStyle}
-                  value={peakStartHour}
-                >
-                  {HOUR_OPTIONS.slice(0, 24).map((hour) => (
-                    <option key={hour} value={hour}>
-                      {String(hour).padStart(2, "0")}:00
-                    </option>
-                  ))}
-                </select>
-              </View>
-              <View style={styles.editorField}>
-                <Text style={styles.editorFieldLabel}>波峰结束（北京时间）</Text>
-                <select
-                  onChange={(event) => setPeakEndHour(Number(event.target.value))}
-                  style={editorSelectStyle}
-                  value={peakEndHour}
-                >
-                  {HOUR_OPTIONS.map((hour) => (
-                    <option key={hour} value={hour}>
-                      {String(hour).padStart(2, "0")}:00
-                    </option>
-                  ))}
-                </select>
-              </View>
+            <View style={styles.editorPricingHeader}>
+              <Text style={styles.editorPricingTitle}>波峰时段（北京时间）</Text>
+              <Text style={styles.editorPricingHint}>可添加多个时段；结束时间不包含在内</Text>
             </View>
+            {peakTimeRanges.map((range, index) => (
+              <View key={index} style={styles.peakRangeRow}>
+                <Text style={styles.peakRangeNumber}>时段 {index + 1}</Text>
+                <View style={styles.editorField}>
+                  <Text style={styles.editorFieldLabel}>开始</Text>
+                  <select
+                    aria-label={`波峰时段 ${index + 1} 开始`}
+                    onChange={(event) =>
+                      updatePeakTimeRange(index, "startHour", Number(event.target.value))
+                    }
+                    style={editorSelectStyle}
+                    value={range.startHour}
+                  >
+                    {HOUR_OPTIONS.slice(0, 24).map((hour) => (
+                      <option key={hour} value={hour}>
+                        {String(hour).padStart(2, "0")}:00
+                      </option>
+                    ))}
+                  </select>
+                </View>
+                <View style={styles.editorField}>
+                  <Text style={styles.editorFieldLabel}>结束</Text>
+                  <select
+                    aria-label={`波峰时段 ${index + 1} 结束`}
+                    onChange={(event) =>
+                      updatePeakTimeRange(index, "endHour", Number(event.target.value))
+                    }
+                    style={editorSelectStyle}
+                    value={range.endHour}
+                  >
+                    {HOUR_OPTIONS.map((hour) => (
+                      <option key={hour} value={hour}>
+                        {String(hour).padStart(2, "0")}:00
+                      </option>
+                    ))}
+                  </select>
+                </View>
+                <Pressable
+                  accessibilityLabel={`删除波峰时段 ${index + 1}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: peakTimeRanges.length === 1 }}
+                  disabled={peakTimeRanges.length === 1}
+                  onPress={() =>
+                    setPeakTimeRanges((current) =>
+                      current.filter((_, rangeIndex) => rangeIndex !== index),
+                    )
+                  }
+                  style={({ hovered, pressed }: PressState) => [
+                    styles.peakRangeDelete,
+                    motion,
+                    (hovered || pressed) && peakTimeRanges.length > 1 && styles.iconButtonHover,
+                    peakTimeRanges.length === 1 && ({ opacity: 0.35 } as ViewStyle),
+                  ]}
+                >
+                  <RiDeleteBinLine color={theme.t.textTertiary} size={14} />
+                </Pressable>
+              </View>
+            ))}
+            <Pressable
+              accessibilityLabel="添加波峰时段"
+              accessibilityRole="button"
+              onPress={() =>
+                setPeakTimeRanges((current) => [...current, { startHour: 8, endHour: 24 }])
+              }
+              style={({ hovered, pressed }: PressState) => [
+                styles.peakRangeAdd,
+                motion,
+                (hovered || pressed) && styles.iconButtonHover,
+              ]}
+            >
+              <RiAddLine color={accent.accentText} size={13} />
+              <Text style={styles.peakRangeAddText}>添加时段</Text>
+            </Pressable>
+            {!peakTimeRangesValid ? (
+              <Text style={styles.testResultErr}>波峰时段的开始和结束时间不能相同。</Text>
+            ) : null}
             <View style={styles.editorRow}>
               <View style={styles.editorField}>
                 <Text style={styles.editorFieldLabel}>波峰输入价格</Text>
@@ -2248,14 +2458,14 @@ function ModelEditor({
               onPress={() => {
                 const previousCategory = normalizeCategory(initial?.category);
                 const inferredCategory = inferModelCategory(id);
-                const category =
-                  caps.includes("image") || caps.includes("video")
-                    ? "vision"
-                    : previousCategory === "embedding" || previousCategory === "audio"
-                      ? previousCategory
-                      : inferredCategory === "embedding" || inferredCategory === "audio"
-                        ? inferredCategory
-                        : "text";
+                const specialCategories = new Set(["embedding", "audio", "video"]);
+                const category = specialCategories.has(previousCategory)
+                  ? previousCategory
+                  : specialCategories.has(inferredCategory)
+                    ? inferredCategory
+                    : caps.includes("image") || caps.includes("video")
+                      ? "vision"
+                      : "text";
                 onSave({
                   id: id.trim(),
                   name: name.trim(),
@@ -2264,6 +2474,8 @@ function ModelEditor({
                   size: size.trim(),
                   starred: initial?.starred ?? false,
                   contextLength: optionalNonNegativeInteger(contextLength),
+                  inputModalities: initial?.inputModalities ?? [],
+                  outputModalities: initial?.outputModalities ?? [],
                   inputPrice: optionalNonNegative(inputPrice),
                   outputPrice: optionalNonNegative(outputPrice),
                   cacheHitInputPrice: optionalNonNegative(cacheHitInputPrice),
@@ -2271,8 +2483,7 @@ function ModelEditor({
                   peakInputPrice: optionalNonNegative(peakInputPrice),
                   peakOutputPrice: optionalNonNegative(peakOutputPrice),
                   peakCacheHitInputPrice: optionalNonNegative(peakCacheHitInputPrice),
-                  peakStartHour,
-                  peakEndHour,
+                  peakTimeRanges,
                 });
               }}
               style={({ hovered, pressed }: PressState) => [

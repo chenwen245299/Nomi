@@ -23,6 +23,15 @@ pub(crate) struct OpenRouter;
 
 #[async_trait]
 impl ProviderSpec for OpenRouter {
+    fn models_url(&self, base_url: &str) -> String {
+        // OpenRouter otherwise defaults to text-output models, hiding image,
+        // audio, video and embedding catalogues from the picker.
+        format!(
+            "{}/models?output_modalities=all",
+            base_url.trim().trim_end_matches('/')
+        )
+    }
+
     fn decorate_body(&self, body: &mut Value, _target: &ChatTarget) {
         // Ask OpenRouter to account for and report the actual credits (USD) spent
         // on this request in the final usage chunk. `crate::llm` reads it back as
@@ -111,4 +120,17 @@ struct Key {
     limit_remaining: Option<f64>,
     #[serde(default)]
     usage: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_catalogue_requests_every_output_modality() {
+        assert_eq!(
+            OpenRouter.models_url("https://openrouter.ai/api/v1/"),
+            "https://openrouter.ai/api/v1/models?output_modalities=all"
+        );
+    }
 }

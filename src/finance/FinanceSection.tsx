@@ -20,6 +20,7 @@ import {
   RiBarChart2Line,
   RiCheckDoubleLine,
   RiCloseLine,
+  RiEraserLine,
   RiErrorWarningLine,
   RiExternalLinkLine,
   RiEyeLine,
@@ -946,18 +947,20 @@ export function FinanceMainColumn({
               <RiRefreshLine color={theme.t.textTertiary} size={16} />
             </Pressable>
           ) : finance.messages.length > 0 ? (
-            <Pressable
-              accessibilityLabel="清空对话"
-              accessibilityRole="button"
-              onPress={() => void clearChat()}
-              style={({ hovered }: PressState) => [
-                styles.iconButton,
-                motion,
-                hovered && styles.iconButtonHover,
-              ]}
-            >
-              <RiRefreshLine color={theme.t.textTertiary} size={16} />
-            </Pressable>
+            <div title="清空对话">
+              <Pressable
+                accessibilityLabel="清空对话"
+                accessibilityRole="button"
+                onPress={() => void clearChat()}
+                style={({ hovered }: PressState) => [
+                  styles.iconButton,
+                  motion,
+                  hovered && styles.iconButtonHover,
+                ]}
+              >
+                <RiEraserLine color={theme.t.textTertiary} size={16} />
+              </Pressable>
+            </div>
           ) : null}
           {view === "capture" ? (
             <ConversationModelPicker

@@ -37,7 +37,7 @@ import { providerIconUrl } from "../providers/icons";
 import { useConversationSending } from "./useConversation";
 import type { ChatData } from "./useChat";
 import { DEFAULT_ASSISTANT_ID, type Assistant, type ConversationSummary } from "./api";
-import { ASSISTANT_EMOJIS, assistantEmoji, randomAssistantEmoji } from "./emoji";
+import { ASSISTANT_EMOJIS, assistantEmoji, badgeForEmoji, randomAssistantEmoji } from "./emoji";
 
 type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
 
@@ -53,21 +53,6 @@ async function confirmConversationDelete(title: string): Promise<boolean> {
     // Fall through to the browser dialog in local preview mode.
   }
   return typeof window !== "undefined" ? window.confirm(message) : true;
-}
-
-const ASSISTANT_BADGES = [
-  { background: "rgba(91,143,249,0.15)", dot: "#5B8FF9", text: "#356DC5" },
-  { background: "rgba(240,163,58,0.16)", dot: "#F0A33A", text: "#A86618" },
-  { background: "rgba(85,190,120,0.15)", dot: "#55BE78", text: "#338650" },
-  { background: "rgba(240,93,158,0.14)", dot: "#F05D9E", text: "#B33E73" },
-  { background: "rgba(144,103,232,0.14)", dot: "#9067E8", text: "#6845B8" },
-  { background: "rgba(55,174,177,0.15)", dot: "#37AEB1", text: "#277E81" },
-] as const;
-
-function assistantBadgeFor(id: string) {
-  let hash = 0;
-  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return ASSISTANT_BADGES[hash % ASSISTANT_BADGES.length];
 }
 
 function formatConversationActivity(seconds: number, now = new Date()): string {
@@ -713,6 +698,15 @@ export function ChatCollection({
       )
     : all;
 
+  // Resolve each assistant's displayed emoji so the badge tint can pair with it.
+  const emojiByAssistant = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const assistant of chat.assistants) {
+      map.set(assistant.id, assistantEmoji(assistant.emoji, assistant.id));
+    }
+    return map;
+  }, [chat.assistants]);
+
   useEffect(() => {
     if (!menu) return;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -750,6 +744,7 @@ export function ChatCollection({
               conversation.id === conversationId
             }
             conversation={conversation}
+            emoji={emojiByAssistant.get(conversation.assistantId)}
             key={`${conversation.assistantId}/${conversation.id}`}
             onContextMenu={(x, y) => {
               setMenu({ conversation, x, y });
@@ -855,6 +850,7 @@ function ConversationRow({
   accent,
   active,
   conversation,
+  emoji,
   onContextMenu,
   onPress,
   showAssistant,
@@ -862,13 +858,14 @@ function ConversationRow({
   accent: Accent;
   active: boolean;
   conversation: ConversationSummary;
+  emoji?: string;
   onContextMenu: (x: number, y: number) => void;
   onPress: () => void;
   showAssistant: boolean;
 }) {
   const { styles } = useChatStyles(accent);
   const generating = useConversationSending(conversation.assistantId, conversation.id);
-  const assistantBadge = assistantBadgeFor(conversation.assistantId);
+  const assistantBadge = badgeForEmoji(emoji, conversation.assistantId);
   const activityTime = conversation.lastMessageAt ?? conversation.createdAt;
   const activityLabel = formatConversationActivity(activityTime);
   return (

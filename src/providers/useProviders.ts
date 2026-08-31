@@ -10,6 +10,7 @@ import {
   setProviderKey,
   testProvider,
   updateProvider,
+  type FetchedProviderModel,
   type Provider,
   type ProviderBalance,
   type ProviderModel,
@@ -36,7 +37,7 @@ export interface ProvidersController {
   remove: (id: string) => Promise<void>;
   saveKey: (id: string, key: string) => Promise<void>;
   test: (id: string) => Promise<{ ok: boolean; message: string }>;
-  fetchModels: (id: string) => Promise<string[]>;
+  fetchModels: (id: string) => Promise<FetchedProviderModel[]>;
   balance: (id: string) => Promise<ProviderBalance>;
   setDefaultModel: (providerId: string, modelId: string) => Promise<void>;
 }

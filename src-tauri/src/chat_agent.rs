@@ -53,18 +53,15 @@ fn pricing_period_at(target: &providers::ChatTarget, unix_seconds: u64) -> Optio
     if !target.peak_pricing_enabled {
         return None;
     }
-    let start = target.peak_start_hour?;
-    let end = target.peak_end_hour?;
-    if start > 23 || end > 24 || start == end {
+    if target.peak_time_ranges.is_empty() {
         return None;
     }
     // DeepSeek's time-of-use windows are expressed in Beijing time (UTC+8).
     let hour = ((unix_seconds / 3_600 + 8) % 24) as u8;
-    let peak = if start < end {
-        hour >= start && hour < end
-    } else {
-        hour >= start || hour < end
-    };
+    let peak = target
+        .peak_time_ranges
+        .iter()
+        .any(|range| range.contains_hour(hour) == Some(true));
     Some(if peak { "peak" } else { "offPeak" })
 }
 
@@ -239,12 +236,13 @@ fn kind_from_mime(mime: &str) -> String {
 #[tauri::command]
 pub async fn save_chat_attachment(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
     source_path: String,
     name: Option<String>,
 ) -> Result<Attachment, String> {
-    let conv_dir = chat::conversation_dir(&app, &assistant_id, &chat_id)?;
+    let conv_dir = chat::conversation_dir(&app, scope.as_deref(), &assistant_id, &chat_id)?;
     let assets = chat::assets_dir(&conv_dir)?;
     let display = name.unwrap_or_else(|| {
         Path::new(&source_path)
@@ -294,6 +292,7 @@ pub async fn save_chat_attachment(
 #[tauri::command]
 pub async fn save_chat_attachment_data(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
     data_base64: String,
@@ -327,7 +326,7 @@ pub async fn save_chat_attachment_data(
         });
     }
 
-    let conv_dir = chat::conversation_dir(&app, &assistant_id, &chat_id)?;
+    let conv_dir = chat::conversation_dir(&app, scope.as_deref(), &assistant_id, &chat_id)?;
     let assets = chat::assets_dir(&conv_dir)?;
     tokio::task::spawn_blocking(move || {
         let fallback_ext = match resolved_mime.as_str() {
@@ -404,11 +403,12 @@ fn resolve_chat_attachment_path(conv_dir: &Path, relative_path: &str) -> Result<
 #[tauri::command]
 pub fn read_chat_attachment_data(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
     relative_path: String,
 ) -> Result<Response, String> {
-    let conv_dir = chat::conversation_dir(&app, &assistant_id, &chat_id)?;
+    let conv_dir = chat::conversation_dir(&app, scope.as_deref(), &assistant_id, &chat_id)?;
     let path = resolve_chat_attachment_path(&conv_dir, &relative_path)?;
     let bytes = std::fs::read(path).map_err(|error| format!("读取附件失败：{error}"))?;
     Ok(Response::new(bytes))
@@ -420,11 +420,12 @@ pub fn read_chat_attachment_data(
 #[tauri::command]
 pub async fn read_pdf_thumbnail(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
     relative_path: String,
 ) -> Result<Response, String> {
-    let conv_dir = chat::conversation_dir(&app, &assistant_id, &chat_id)?;
+    let conv_dir = chat::conversation_dir(&app, scope.as_deref(), &assistant_id, &chat_id)?;
     let path = resolve_chat_attachment_path(&conv_dir, &relative_path)?;
     let bytes = tokio::task::spawn_blocking(move || render_pdf_thumbnail_png(&path))
         .await
@@ -482,12 +483,13 @@ pub fn submit_render_result(
 #[tauri::command]
 pub fn write_attachment_to(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
     relative_path: String,
     dest_path: String,
 ) -> Result<(), String> {
-    let conv_dir = chat::conversation_dir(&app, &assistant_id, &chat_id)?;
+    let conv_dir = chat::conversation_dir(&app, scope.as_deref(), &assistant_id, &chat_id)?;
     let source = resolve_chat_attachment_path(&conv_dir, &relative_path)?;
     std::fs::copy(&source, &dest_path).map_err(|error| format!("导出文件失败：{error}"))?;
     Ok(())
@@ -503,6 +505,9 @@ fn sidecar_path(pdf_path: &Path) -> PathBuf {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConversationTitleUpdated {
+    /// "" = main chat; a tab id = that tab's AI sidebar. Lets each collection
+    /// ignore title updates that belong to a different conversation store.
+    scope: String,
     assistant_id: String,
     chat_id: String,
     title: String,
@@ -535,6 +540,7 @@ fn clean_generated_title(raw: &str) -> String {
 
 async fn generate_conversation_title(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
     first_message: String,
@@ -560,10 +566,17 @@ async fn generate_conversation_title(
     if title.is_empty() {
         return Err("标题生成模型没有返回有效标题。".into());
     }
-    if chat::set_generated_conversation_title(&app, &assistant_id, &chat_id, &title)? {
+    if chat::set_generated_conversation_title(
+        &app,
+        scope.as_deref(),
+        &assistant_id,
+        &chat_id,
+        &title,
+    )? {
         let _ = app.emit(
             "conversation-title-updated",
             ConversationTitleUpdated {
+                scope: scope.unwrap_or_default(),
                 assistant_id,
                 chat_id,
                 title,
@@ -575,17 +588,19 @@ async fn generate_conversation_title(
 
 fn spawn_title_generation(
     app: &AppHandle,
+    scope: Option<&str>,
     assistant_id: &str,
     chat_id: &str,
     first_message: String,
 ) {
     let app = app.clone();
+    let scope = scope.map(str::to_string);
     let assistant_id = assistant_id.to_string();
     let chat_id = chat_id.to_string();
     tauri::async_runtime::spawn(async move {
         // Title generation is intentionally best-effort: a missing/failed title
         // model must never turn a successful chat response into an error.
-        let _ = generate_conversation_title(app, assistant_id, chat_id, first_message).await;
+        let _ = generate_conversation_title(app, scope, assistant_id, chat_id, first_message).await;
     });
 }
 
@@ -607,6 +622,7 @@ pub async fn send_message(
     app: AppHandle,
     state: State<'_, ChatCancels>,
     render_jobs: State<'_, RenderJobs>,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
     request_id: String,
@@ -622,6 +638,7 @@ pub async fn send_message(
 
     let result = run_chat(
         &app,
+        scope.as_deref(),
         &assistant_id,
         &chat_id,
         text,
@@ -648,6 +665,7 @@ pub async fn generate_message_variant(
     app: AppHandle,
     state: State<'_, ChatCancels>,
     render_jobs: State<'_, RenderJobs>,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
     request_id: String,
@@ -664,6 +682,7 @@ pub async fn generate_message_variant(
     }
     let result = run_variant(
         &app,
+        scope.as_deref(),
         &assistant_id,
         &chat_id,
         &source_message_id,
@@ -688,6 +707,7 @@ pub async fn generate_message_variant(
 #[allow(clippy::too_many_arguments)]
 async fn run_variant(
     app: &AppHandle,
+    scope: Option<&str>,
     assistant_id: &str,
     chat_id: &str,
     source_message_id: &str,
@@ -702,8 +722,8 @@ async fn run_variant(
     let target = providers::resolve_chat_target(app, provider_id, model_id)?;
     let exa_key = exa::stored_key(app)?;
     let reasoning_effort = normalize_reasoning_effort(reasoning_effort.as_deref())?;
-    let (_assistant_name, system_prompt) = chat::assistant_profile(app, assistant_id)?;
-    let conv_dir = chat::conversation_dir(app, assistant_id, chat_id)?;
+    let (_assistant_name, system_prompt) = chat::assistant_profile(app, scope, assistant_id)?;
+    let conv_dir = chat::conversation_dir(app, scope, assistant_id, chat_id)?;
     let mut messages = chat::load_messages(&conv_dir);
     let source_index = messages
         .iter()
@@ -795,6 +815,7 @@ fn normalize_reasoning_effort(raw: Option<&str>) -> Result<Option<&str>, String>
 #[allow(clippy::too_many_arguments)]
 async fn run_chat(
     app: &AppHandle,
+    scope: Option<&str>,
     assistant_id: &str,
     chat_id: &str,
     text: String,
@@ -804,7 +825,7 @@ async fn run_chat(
     channel: &Channel<StreamEvent>,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let (provider_id, model_id) = chat::conversation_model(app, assistant_id, chat_id)?;
+    let (provider_id, model_id) = chat::conversation_model(app, scope, assistant_id, chat_id)?;
     let (provider_id, model_id) = match (provider_id, model_id) {
         (Some(p), Some(m)) if !p.is_empty() && !m.is_empty() => (p, m),
         _ => return Err("请先在对话右下角选择要使用的模型。".into()),
@@ -812,8 +833,8 @@ async fn run_chat(
     let target = providers::resolve_chat_target(app, &provider_id, &model_id)?;
     let exa_key = exa::stored_key(app)?;
     let reasoning_effort = normalize_reasoning_effort(reasoning_effort.as_deref())?;
-    let (_assistant_name, system_prompt) = chat::assistant_profile(app, assistant_id)?;
-    let conv_dir = chat::conversation_dir(app, assistant_id, chat_id)?;
+    let (_assistant_name, system_prompt) = chat::assistant_profile(app, scope, assistant_id)?;
+    let conv_dir = chat::conversation_dir(app, scope, assistant_id, chat_id)?;
 
     // 1. Persist the user's message.
     let mut messages = chat::load_messages(&conv_dir);
@@ -850,7 +871,7 @@ async fn run_chat(
         // The title is independent from the assistant reply. Start it as soon as
         // the first user message is durable so the conversation list can update
         // while the main response is still streaming.
-        spawn_title_generation(app, assistant_id, chat_id, title_source);
+        spawn_title_generation(app, scope, assistant_id, chat_id, title_source);
     }
 
     // 2. Which PDFs exist in this conversation (for the tools), and OpenAI messages.
@@ -1749,8 +1770,16 @@ mod tests {
             peak_input_price: Some(2.0),
             peak_output_price: Some(4.0),
             peak_cache_hit_input_price: Some(0.04),
-            peak_start_hour: Some(8),
-            peak_end_hour: Some(20),
+            peak_time_ranges: vec![
+                providers::PricingTimeRange {
+                    start_hour: 9,
+                    end_hour: 12,
+                },
+                providers::PricingTimeRange {
+                    start_hour: 14,
+                    end_hour: 18,
+                },
+            ],
         }
     }
 
@@ -1834,17 +1863,22 @@ mod tests {
     }
 
     #[test]
-    fn configured_time_prices_drive_the_cost_snapshot() {
-        // Unix epoch is 08:00 in Beijing, inside the configured peak window.
-        let (peak_cost, peak_period) = estimate_cost_cny(&priced_target(), &priced_usage(), 0);
-        assert_eq!(peak_period.as_deref(), Some("peak"));
-        assert!((peak_cost.unwrap() - 3.608).abs() < 1e-9);
+    fn multiple_time_ranges_drive_the_cost_snapshot() {
+        // Unix epoch is 08:00 in Beijing. Verify both configured windows and
+        // their exclusive end boundaries, including the midday gap.
+        for hour_after_epoch in [1, 6] {
+            let (peak_cost, peak_period) =
+                estimate_cost_cny(&priced_target(), &priced_usage(), hour_after_epoch * 3_600);
+            assert_eq!(peak_period.as_deref(), Some("peak"));
+            assert!((peak_cost.unwrap() - 3.608).abs() < 1e-9);
+        }
 
-        // Twelve hours later is 20:00 in Beijing, the off-peak boundary.
-        let (off_peak_cost, off_peak_period) =
-            estimate_cost_cny(&priced_target(), &priced_usage(), 12 * 3_600);
-        assert_eq!(off_peak_period.as_deref(), Some("offPeak"));
-        assert!((off_peak_cost.unwrap() - 1.804).abs() < 1e-9);
+        for hour_after_epoch in [4, 10] {
+            let (off_peak_cost, off_peak_period) =
+                estimate_cost_cny(&priced_target(), &priced_usage(), hour_after_epoch * 3_600);
+            assert_eq!(off_peak_period.as_deref(), Some("offPeak"));
+            assert!((off_peak_cost.unwrap() - 1.804).abs() < 1e-9);
+        }
     }
 
     #[test]

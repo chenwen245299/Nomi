@@ -853,6 +853,8 @@ function attachmentIcon(att: { mimeType?: string; kind?: string }, color: string
 }
 
 interface ToolImageContextValue {
+  /** "" = main chat; a tab id = that tab's AI sidebar store. */
+  scope: string;
   assistantId: string;
   chatId: string;
   openImage: (relativePath: string, name: string) => void;
@@ -970,6 +972,7 @@ function AttachmentBadges({
 
 function ToolCallImages({ imagePaths, styles }: { imagePaths: string[]; styles: Styles }) {
   const context = useContext(ToolImageContext);
+  const scope = context?.scope ?? "";
   const assistantId = context?.assistantId;
   const chatId = context?.chatId;
   const openImage = context?.openImage;
@@ -989,6 +992,7 @@ function ToolCallImages({ imagePaths, styles }: { imagePaths: string[]; styles: 
             assistantId,
             chatId,
             toolImageAttachment(path, name),
+            scope,
           );
           if (cancelled) {
             if (source.revokeOnClose) URL.revokeObjectURL(source.url);
@@ -1026,7 +1030,7 @@ function ToolCallImages({ imagePaths, styles }: { imagePaths: string[]; styles: 
       cancelled = true;
       loadedUrls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [assistantId, chatId, imagePaths]);
+  }, [scope, assistantId, chatId, imagePaths]);
 
   if (!assistantId || !chatId || !openImage || imagePaths.length === 0) return null;
   if (previews.length === 0) {
@@ -1074,12 +1078,17 @@ function ToolCallImages({ imagePaths, styles }: { imagePaths: string[]; styles: 
 
 /** Load an attachment's thumbnail: the image itself for an image, a first-page
  *  render (on demand, no stored file) for a PDF, or null → a generic file icon. */
-function loadAttachmentThumbnail(assistantId: string, chatId: string, att: Attachment) {
+function loadAttachmentThumbnail(
+  assistantId: string,
+  chatId: string,
+  att: Attachment,
+  scope: string,
+) {
   if (att.mimeType === "application/pdf") {
-    return loadPdfThumbnail(assistantId, chatId, att);
+    return loadPdfThumbnail(assistantId, chatId, att, scope);
   }
   if (att.kind === "image" || att.mimeType.startsWith("image/")) {
-    return loadChatAttachmentPreview(assistantId, chatId, att);
+    return loadChatAttachmentPreview(assistantId, chatId, att, scope);
   }
   return null;
 }
@@ -1184,6 +1193,7 @@ function AssistantAttachments({
   theme: Theme;
 }) {
   const context = useContext(ToolImageContext);
+  const scope = context?.scope ?? "";
   const assistantId = context?.assistantId;
   const chatId = context?.chatId;
   const openAttachment = context?.openAttachment;
@@ -1195,7 +1205,7 @@ function AssistantAttachments({
     const loadedUrls: string[] = [];
     void Promise.all(
       attachments.map(async (att) => {
-        const loader = loadAttachmentThumbnail(assistantId, chatId, att);
+        const loader = loadAttachmentThumbnail(assistantId, chatId, att, scope);
         if (!loader) return null;
         try {
           const loaded = await loader;
@@ -1225,7 +1235,7 @@ function AssistantAttachments({
       cancelled = true;
       loadedUrls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [assistantId, chatId, attachments]);
+  }, [scope, assistantId, chatId, attachments]);
 
   if (!assistantId || !chatId || attachments.length === 0) return null;
 
@@ -1235,7 +1245,7 @@ function AssistantAttachments({
         <AssistantAttachmentCard
           att={att}
           key={att.id}
-          onDownload={() => void downloadAttachment(assistantId, chatId, att)}
+          onDownload={() => void downloadAttachment(assistantId, chatId, att, scope)}
           onOpen={() => openAttachment?.(att)}
           preview={previews[att.id]}
           styles={styles}
@@ -1626,6 +1636,7 @@ function providerForMessage(
 function AnswerSurface({
   accent,
   fallbackProviderId,
+  hideFeedback = false,
   message,
   onDelete,
   onEdit,
@@ -1641,6 +1652,7 @@ function AnswerSurface({
 }: {
   accent: Accent;
   fallbackProviderId?: string | null;
+  hideFeedback?: boolean;
   message: ChatMessage;
   onDelete: (messageId: string) => Promise<void>;
   onEdit: (messageId: string, content: string) => Promise<void>;
@@ -1777,36 +1789,42 @@ function AnswerSurface({
               styles={styles}
               theme={theme}
             />
-            <AnswerAction
-              active={message.feedback === "good"}
-              icon={
-                message.feedback === "good" ? (
-                  <RiThumbUpFill color={accent.accentText} size={13} />
-                ) : (
-                  <RiThumbUpLine color={iconColor} size={13} />
-                )
-              }
-              label="回答有帮助"
-              onPress={() =>
-                void onFeedback(message.id, message.feedback === "good" ? null : "good")
-              }
-              styles={styles}
-              theme={theme}
-            />
-            <AnswerAction
-              active={message.feedback === "bad"}
-              icon={
-                message.feedback === "bad" ? (
-                  <RiThumbDownFill color={accent.accentText} size={13} />
-                ) : (
-                  <RiThumbDownLine color={iconColor} size={13} />
-                )
-              }
-              label="回答没有帮助"
-              onPress={() => void onFeedback(message.id, message.feedback === "bad" ? null : "bad")}
-              styles={styles}
-              theme={theme}
-            />
+            {!hideFeedback && (
+              <>
+                <AnswerAction
+                  active={message.feedback === "good"}
+                  icon={
+                    message.feedback === "good" ? (
+                      <RiThumbUpFill color={accent.accentText} size={13} />
+                    ) : (
+                      <RiThumbUpLine color={iconColor} size={13} />
+                    )
+                  }
+                  label="回答有帮助"
+                  onPress={() =>
+                    void onFeedback(message.id, message.feedback === "good" ? null : "good")
+                  }
+                  styles={styles}
+                  theme={theme}
+                />
+                <AnswerAction
+                  active={message.feedback === "bad"}
+                  icon={
+                    message.feedback === "bad" ? (
+                      <RiThumbDownFill color={accent.accentText} size={13} />
+                    ) : (
+                      <RiThumbDownLine color={iconColor} size={13} />
+                    )
+                  }
+                  label="回答没有帮助"
+                  onPress={() =>
+                    void onFeedback(message.id, message.feedback === "bad" ? null : "bad")
+                  }
+                  styles={styles}
+                  theme={theme}
+                />
+              </>
+            )}
             <AnswerAction
               icon={<RiDeleteBinLine color={iconColor} size={13} />}
               label="删除回答"
@@ -1869,6 +1887,7 @@ function AnswerSurface({
 function SplitAnswerPanel({
   accent,
   fallbackProviderId,
+  hideFeedback = false,
   message,
   onFeedback,
   onReasoningViewStateChange,
@@ -1882,6 +1901,7 @@ function SplitAnswerPanel({
 }: {
   accent: Accent;
   fallbackProviderId?: string | null;
+  hideFeedback?: boolean;
   message: ChatMessage;
   onFeedback: (messageId: string, feedback: "good" | "bad" | null) => Promise<void>;
   onReasoningViewStateChange: (state: ReasoningViewState) => void;
@@ -1955,36 +1975,42 @@ function SplitAnswerPanel({
               styles={styles}
               theme={theme}
             />
-            <AnswerAction
-              active={message.feedback === "good"}
-              icon={
-                message.feedback === "good" ? (
-                  <RiThumbUpFill color={accent.accentText} size={13} />
-                ) : (
-                  <RiThumbUpLine color={iconColor} size={13} />
-                )
-              }
-              label="回答有帮助"
-              onPress={() =>
-                void onFeedback(message.id, message.feedback === "good" ? null : "good")
-              }
-              styles={styles}
-              theme={theme}
-            />
-            <AnswerAction
-              active={message.feedback === "bad"}
-              icon={
-                message.feedback === "bad" ? (
-                  <RiThumbDownFill color={accent.accentText} size={13} />
-                ) : (
-                  <RiThumbDownLine color={iconColor} size={13} />
-                )
-              }
-              label="回答没有帮助"
-              onPress={() => void onFeedback(message.id, message.feedback === "bad" ? null : "bad")}
-              styles={styles}
-              theme={theme}
-            />
+            {!hideFeedback && (
+              <>
+                <AnswerAction
+                  active={message.feedback === "good"}
+                  icon={
+                    message.feedback === "good" ? (
+                      <RiThumbUpFill color={accent.accentText} size={13} />
+                    ) : (
+                      <RiThumbUpLine color={iconColor} size={13} />
+                    )
+                  }
+                  label="回答有帮助"
+                  onPress={() =>
+                    void onFeedback(message.id, message.feedback === "good" ? null : "good")
+                  }
+                  styles={styles}
+                  theme={theme}
+                />
+                <AnswerAction
+                  active={message.feedback === "bad"}
+                  icon={
+                    message.feedback === "bad" ? (
+                      <RiThumbDownFill color={accent.accentText} size={13} />
+                    ) : (
+                      <RiThumbDownLine color={iconColor} size={13} />
+                    )
+                  }
+                  label="回答没有帮助"
+                  onPress={() =>
+                    void onFeedback(message.id, message.feedback === "bad" ? null : "bad")
+                  }
+                  styles={styles}
+                  theme={theme}
+                />
+              </>
+            )}
           </View>
           {message.usage ? (
             <UsageFooter
@@ -2005,6 +2031,7 @@ function SplitAnswerPanel({
 function ResponseGroup({
   accent,
   fallbackProviderId,
+  hideFeedback = false,
   messages,
   onDelete,
   onEdit,
@@ -2020,6 +2047,7 @@ function ResponseGroup({
 }: {
   accent: Accent;
   fallbackProviderId?: string | null;
+  hideFeedback?: boolean;
   messages: ChatMessage[];
   onDelete: (messageId: string) => Promise<void>;
   onEdit: (messageId: string, content: string) => Promise<void>;
@@ -2099,6 +2127,7 @@ function ResponseGroup({
                   <SplitAnswerPanel
                     accent={accent}
                     fallbackProviderId={fallbackProviderId}
+                    hideFeedback={hideFeedback}
                     message={message}
                     onFeedback={onFeedback}
                     onReasoningViewStateChange={setReasoningViewState}
@@ -2132,6 +2161,7 @@ function ResponseGroup({
               <AnswerSurface
                 accent={accent}
                 fallbackProviderId={fallbackProviderId}
+                hideFeedback={hideFeedback}
                 message={selected}
                 onDelete={onDelete}
                 onEdit={onEdit}
@@ -2501,6 +2531,8 @@ export function ConversationView({
   providerKind,
   providerName,
   providers,
+  scope = "",
+  hideFeedback = false,
 }: {
   accent: Accent;
   assistantId: string;
@@ -2510,10 +2542,14 @@ export function ConversationView({
   providerKind?: string | null;
   providerName?: string | null;
   providers: Provider[];
+  /** "" = main chat; a tab id routes this view to that tab's AI sidebar store. */
+  scope?: string;
+  /** Hide the 👍/👎 feedback buttons (used by the compact AI sidebar). */
+  hideFeedback?: boolean;
 }) {
   const theme = useTheme();
   const styles = useMemo(() => makeStyles(theme, accent), [theme, accent]);
-  const convo = useConversation(assistantId, conversation.id);
+  const convo = useConversation(assistantId, conversation.id, scope);
   const thinkingModelKey = `${conversation.id}/${conversation.providerId ?? ""}/${conversation.modelId ?? ""}`;
 
   const [text, setText] = useState("");
@@ -2602,7 +2638,12 @@ export function ConversationView({
     if (!kind) return;
     setAttachmentPreviewError(null);
     try {
-      const source = await loadChatAttachmentPreview(assistantId, conversation.id, attachment);
+      const source = await loadChatAttachmentPreview(
+        assistantId,
+        conversation.id,
+        attachment,
+        scope,
+      );
       setAttachmentPreview({ kind, name: attachment.name, attachment, ...source });
     } catch (error) {
       setAttachmentPreviewError(
@@ -2615,7 +2656,12 @@ export function ConversationView({
     setAttachmentPreviewError(null);
     try {
       const attachment = toolImageAttachment(relativePath, name);
-      const source = await loadChatAttachmentPreview(assistantId, conversation.id, attachment);
+      const source = await loadChatAttachmentPreview(
+        assistantId,
+        conversation.id,
+        attachment,
+        scope,
+      );
       setAttachmentPreview({ kind: "image", name, attachment, ...source });
     } catch (error) {
       setAttachmentPreviewError(
@@ -2661,7 +2707,7 @@ export function ConversationView({
       const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       setPending((prev) => [...prev, { key, name: basename(path), status: "uploading" }]);
       try {
-        const att = await saveChatAttachment(assistantId, conversation.id, path);
+        const att = await saveChatAttachment(assistantId, conversation.id, path, undefined, scope);
         setPending((prev) =>
           prev.map((x) =>
             x.key === key ? { ...x, status: "ready", attachment: att, name: att.name } : x,
@@ -2701,6 +2747,7 @@ export function ConversationView({
           dataBase64,
           name,
           mimeType,
+          scope,
         );
         setPending((prev) =>
           prev.map((item) =>
@@ -2786,6 +2833,7 @@ export function ConversationView({
     <>
       <ToolImageContext.Provider
         value={{
+          scope,
           assistantId,
           chatId: conversation.id,
           openImage: (relativePath, name) => void openToolImagePreview(relativePath, name),
@@ -2853,6 +2901,7 @@ export function ConversationView({
                       accent={accent}
                       fallbackProviderId={conversation.providerId}
                       key={groupId}
+                      hideFeedback={hideFeedback}
                       messages={groupMessages}
                       onDelete={convo.remove}
                       onEdit={convo.edit}
@@ -3165,6 +3214,7 @@ export function ConversationView({
                     assistantId,
                     conversation.id,
                     attachmentPreview.attachment!,
+                    scope,
                   )
               : undefined
           }

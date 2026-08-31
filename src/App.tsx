@@ -36,6 +36,7 @@ import {
   RiExternalLinkLine,
   RiFolderOpenLine,
   RiHardDrive2Line,
+  RiLayoutRightLine,
   RiNodeTree,
   RiRobot2Line,
   RiSearch2Line,
@@ -57,6 +58,7 @@ import {
 } from "./chat/ChatSection";
 import { ConversationAssistantPicker } from "./chat/AssistantPicker";
 import { ConversationModelPicker } from "./chat/ModelPicker";
+import { AiChatPanel } from "./chat/AiChatPanel";
 import { ChatSettings } from "./chat/ChatSettings";
 import { useChat, type ChatData } from "./chat/useChat";
 import { ProvidersSettings } from "./providers/ProvidersSettings";
@@ -195,6 +197,28 @@ const sections: SectionMeta[] = [
 const featureSections = sections.filter((section) => section.id !== "settings");
 const metaFor = (id: SectionId): SectionMeta =>
   sections.find((section) => section.id === id) ?? sections[0];
+
+/** Tabs that carry a right-hand AI-chat sidebar. Finance already embeds its own
+ *  AI capture chat, and settings has no conversation surface, so both opt out. */
+const SIDEBAR_SECTIONS = new Set<SectionId>(["chat", "notes", "todo", "travel"]);
+
+const SIDEBAR_MIN_WIDTH = 300;
+const SIDEBAR_MAX_WIDTH = 720;
+const SIDEBAR_DEFAULT_WIDTH = 384;
+const SIDEBAR_WIDTH_KEY = "nomi.sidebarWidth";
+
+const clampSidebarWidth = (value: number) =>
+  Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(value)));
+
+function readStoredSidebarWidth(): number {
+  try {
+    const stored = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    if (Number.isFinite(stored) && stored > 0) return clampSidebarWidth(stored);
+  } catch {
+    // localStorage may be unavailable (e.g. private mode) — fall back to default.
+  }
+  return SIDEBAR_DEFAULT_WIDTH;
+}
 
 // Make the whole titlebar draggable. Tauri v2's "deep" mode drags on clicks
 // anywhere in the subtree EXCEPT clickable elements (role=button/tab, tabindex),
@@ -1011,6 +1035,8 @@ function App() {
   const [storage, setStorage] = useState<StorageStatus | null | undefined>(undefined);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [isChoosingFolder, setIsChoosingFolder] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(readStoredSidebarWidth);
   const [assistantEditor, setAssistantEditor] = useState<
     | { kind: "new" }
     | { kind: "assistant"; assistantId: string }
@@ -1020,6 +1046,14 @@ function App() {
 
   const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
   const activeSection = activeTab?.section ?? "chat";
+  // Which tabs carry an AI-chat sidebar (finance has its own chat; settings none).
+  const sidebarScope = SIDEBAR_SECTIONS.has(activeSection) ? activeSection : null;
+  // Cap the sidebar so the rail + collection + a usable main column always fit.
+  const sidebarMaxWidth = Math.max(
+    SIDEBAR_MIN_WIDTH,
+    Math.min(SIDEBAR_MAX_WIDTH, width - (compact ? 380 : 540)),
+  );
+  const effectiveSidebarWidth = Math.min(sidebarWidth, sidebarMaxWidth);
   const accent = useMemo(() => accentFor(activeSection), [activeSection]);
   const activeMeta = useMemo(() => metaFor(activeSection), [activeSection]);
   const chat = useChat(activeSection === "chat");
@@ -1340,6 +1374,9 @@ function App() {
           onClose={closeTab}
           onReorder={reorderTabs}
           onSelect={setActiveId}
+          onToggleSidebar={() => setSidebarOpen((open) => !open)}
+          sidebarAvailable={sidebarScope !== null}
+          sidebarOpen={sidebarOpen}
           tabs={tabs}
         />
 
@@ -1401,6 +1438,40 @@ function App() {
             tab={activeTab}
             todos={todos}
           />
+
+          {sidebarScope && sidebarOpen ? (
+            <View
+              style={
+                {
+                  width: effectiveSidebarWidth,
+                  borderLeftColor: theme.t.separator,
+                  borderLeftWidth: StyleSheet.hairlineWidth,
+                  position: "relative",
+                } as ViewStyle
+              }
+            >
+              <SidebarResizeHandle
+                color={accent.accent}
+                max={sidebarMaxWidth}
+                onChange={(next) => {
+                  setSidebarWidth(next);
+                  try {
+                    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
+                  } catch {
+                    // ignore persistence failures
+                  }
+                }}
+                width={effectiveSidebarWidth}
+              />
+              <AiChatPanel
+                accent={accentFor(sidebarScope)}
+                key={sidebarScope}
+                onBalance={providers.balance}
+                providers={providers.providers}
+                scope={sidebarScope}
+              />
+            </View>
+          ) : null}
         </View>
 
         {assistantEditor ? (
@@ -1464,6 +1535,62 @@ function LoadingScreen() {
 }
 
 // ── Titlebar tabs ─────────────────────────────────────────────────────────────
+/** A col-resize strip sitting on the sidebar's left border. Dragging it left
+ *  widens the panel; the divider highlights while dragging. */
+function SidebarResizeHandle({
+  width,
+  max,
+  color,
+  onChange,
+}: {
+  width: number;
+  max: number;
+  color: string;
+  onChange: (next: number) => void;
+}) {
+  const [active, setActive] = useState(false);
+  return (
+    <div
+      onPointerDown={(event) => {
+        event.preventDefault();
+        const startX = event.clientX;
+        const startWidth = width;
+        const handle = event.currentTarget;
+        handle.setPointerCapture(event.pointerId);
+        setActive(true);
+        const move = (moveEvent: PointerEvent) => {
+          const next = Math.round(startWidth + (startX - moveEvent.clientX));
+          onChange(Math.min(max, Math.max(SIDEBAR_MIN_WIDTH, next)));
+        };
+        const up = () => {
+          setActive(false);
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+      }}
+      style={{
+        bottom: 0,
+        cursor: "col-resize",
+        left: -3,
+        position: "absolute",
+        top: 0,
+        touchAction: "none",
+        width: 7,
+        zIndex: 20,
+      }}
+      title="拖动调整宽度"
+    >
+      {active ? (
+        <div
+          style={{ background: color, bottom: 0, left: 3, position: "absolute", top: 0, width: 2 }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function TitleBar({
   accent,
   activeId,
@@ -1472,6 +1599,9 @@ function TitleBar({
   onClose,
   onReorder,
   onSelect,
+  sidebarAvailable,
+  sidebarOpen,
+  onToggleSidebar,
   tabs,
 }: {
   accent: Accent;
@@ -1481,6 +1611,9 @@ function TitleBar({
   onClose: (id: number) => void;
   onReorder: (sourceId: number, targetId: number, position: TabDropPosition) => void;
   onSelect: (id: number) => void;
+  sidebarAvailable: boolean;
+  sidebarOpen: boolean;
+  onToggleSidebar: () => void;
   tabs: Tab[];
 }) {
   const { styles, theme } = useStyles(accent);
@@ -1662,6 +1795,25 @@ function TitleBar({
         </Pressable>
       </View>
       <View style={styles.tbFlex} {...SPACER_DRAG} />
+      {sidebarAvailable ? (
+        <Pressable
+          accessibilityLabel={sidebarOpen ? "隐藏 AI 侧边栏" : "显示 AI 侧边栏"}
+          accessibilityRole="button"
+          onPress={onToggleSidebar}
+          style={({ hovered, pressed }: PressState) => [
+            styles.tabAdd,
+            motion,
+            sidebarOpen && { backgroundColor: accent.selectedFill },
+            hovered && !sidebarOpen && styles.tabAddHover,
+            pressed && styles.primaryButtonPressed,
+          ]}
+        >
+          <RiLayoutRightLine
+            color={sidebarOpen ? accent.accentText : theme.t.textTertiary}
+            size={17}
+          />
+        </Pressable>
+      ) : null}
     </View>
   );
 }

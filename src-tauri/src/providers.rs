@@ -44,12 +44,44 @@ const API_KEYS_FILE: &str = "api_keys.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct PricingTimeRange {
+    pub(crate) start_hour: u8,
+    pub(crate) end_hour: u8,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchedProviderModel {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) capabilities: Vec<String>,
+    pub(crate) category: String,
+    pub(crate) context_length: Option<u64>,
+    pub(crate) input_modalities: Vec<String>,
+    pub(crate) output_modalities: Vec<String>,
+}
+
+impl PricingTimeRange {
+    pub(crate) fn contains_hour(&self, hour: u8) -> Option<bool> {
+        if self.start_hour > 23 || self.end_hour > 24 || self.start_hour == self.end_hour {
+            return None;
+        }
+        Some(if self.start_hour < self.end_hour {
+            hour >= self.start_hour && hour < self.end_hour
+        } else {
+            hour >= self.start_hour || hour < self.end_hour
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderModel {
     id: String,
     name: String,
     #[serde(default)]
     capabilities: Vec<String>, // "audio" | "video" | "image" | "tool" | "reasoning"
-    /// Primary modality: "text" | "vision" | "embedding" | "audio" (empty = text).
+    /// Primary modality: "text" | "vision" | "audio" | "video" | "embedding".
     #[serde(default)]
     category: String,
     #[serde(default)]
@@ -58,6 +90,11 @@ pub struct ProviderModel {
     starred: bool,
     #[serde(default)]
     context_length: Option<u64>,
+    /// Provider-reported modalities, when its model catalogue publishes them.
+    #[serde(default)]
+    input_modalities: Vec<String>,
+    #[serde(default)]
+    output_modalities: Vec<String>,
     /// User-maintained CNY prices per one million tokens.
     #[serde(default)]
     input_price: Option<f64>,
@@ -74,7 +111,10 @@ pub struct ProviderModel {
     peak_output_price: Option<f64>,
     #[serde(default)]
     peak_cache_hit_input_price: Option<f64>,
-    /// Whole hours in China Standard Time; ranges may cross midnight.
+    /// Whole-hour windows in China Standard Time; ranges may cross midnight.
+    #[serde(default)]
+    peak_time_ranges: Vec<PricingTimeRange>,
+    /// Legacy single-window fields, retained for existing providers.json files.
     #[serde(default)]
     peak_start_hour: Option<u8>,
     #[serde(default)]
@@ -146,7 +186,12 @@ fn write_providers(app: &AppHandle, providers: &[Provider]) -> Result<(), String
 }
 
 fn is_chat_model(model: &ProviderModel) -> bool {
-    !matches!(model.category.as_str(), "embedding" | "audio")
+    let produces_text = model.output_modalities.is_empty()
+        || model
+            .output_modalities
+            .iter()
+            .any(|modality| modality == "text");
+    produces_text && !matches!(model.category.as_str(), "embedding" | "audio" | "video")
 }
 
 /// Keep at most one starred model across every provider. With no explicit
@@ -385,8 +430,7 @@ pub(crate) struct ChatTarget {
     pub peak_input_price: Option<f64>,
     pub peak_output_price: Option<f64>,
     pub peak_cache_hit_input_price: Option<f64>,
-    pub peak_start_hour: Option<u8>,
-    pub peak_end_hour: Option<u8>,
+    pub peak_time_ranges: Vec<PricingTimeRange>,
 }
 
 impl ChatTarget {
@@ -394,6 +438,33 @@ impl ChatTarget {
     /// point for per-provider chat-runtime seams.
     pub(crate) fn spec(&self) -> &'static dyn ProviderSpec {
         spec_for(&self.kind)
+    }
+}
+
+fn pricing_time_ranges(model: &ProviderModel) -> Vec<PricingTimeRange> {
+    let ranges: Vec<_> = model
+        .peak_time_ranges
+        .iter()
+        .filter(|range| range.contains_hour(0).is_some())
+        .cloned()
+        .collect();
+    if !ranges.is_empty() {
+        return ranges;
+    }
+    match (model.peak_start_hour, model.peak_end_hour) {
+        (Some(start_hour), Some(end_hour)) => {
+            let legacy = PricingTimeRange {
+                start_hour,
+                end_hour,
+            };
+            legacy
+                .contains_hour(0)
+                .is_some()
+                .then_some(legacy)
+                .into_iter()
+                .collect()
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -423,6 +494,9 @@ pub(crate) fn resolve_chat_target(
                 // The category keeps old data working while the explicit image
                 // capability lets users correct incomplete provider catalogues.
                 m.category == "vision"
+                    || m.input_modalities
+                        .iter()
+                        .any(|modality| modality == "image" || modality == "video")
                     || m.capabilities.iter().any(|c| c == "image" || c == "vision"),
             )
         })
@@ -442,8 +516,7 @@ pub(crate) fn resolve_chat_target(
         peak_input_price: model.and_then(|m| m.peak_input_price),
         peak_output_price: model.and_then(|m| m.peak_output_price),
         peak_cache_hit_input_price: model.and_then(|m| m.peak_cache_hit_input_price),
-        peak_start_hour: model.and_then(|m| m.peak_start_hour),
-        peak_end_hour: model.and_then(|m| m.peak_end_hour),
+        peak_time_ranges: model.map(pricing_time_ranges).unwrap_or_default(),
     })
 }
 
@@ -570,18 +643,114 @@ pub fn provider_has_key(app: AppHandle, id: String) -> Result<bool, String> {
     Ok(read_key(&app, &id)?.is_some())
 }
 
-fn models_url(base_url: &str) -> String {
-    format!("{}/models", base_url.trim().trim_end_matches('/'))
+#[derive(Default, Deserialize)]
+struct ModelArchitecture {
+    #[serde(default)]
+    input_modalities: Vec<String>,
+    #[serde(default)]
+    output_modalities: Vec<String>,
 }
 
-async fn fetch_models_raw(base_url: &str, key: Option<&str>) -> Result<Vec<String>, String> {
+#[derive(Deserialize)]
+struct ModelEntry {
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    architecture: ModelArchitecture,
+    #[serde(default)]
+    supported_parameters: Vec<String>,
+    #[serde(default)]
+    context_length: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct ModelsResponse {
+    data: Vec<ModelEntry>,
+}
+
+fn contains_modality(modalities: &[String], wanted: &str) -> bool {
+    modalities
+        .iter()
+        .any(|modality| modality.eq_ignore_ascii_case(wanted))
+}
+
+fn fetched_model(entry: ModelEntry) -> FetchedProviderModel {
+    let inputs = entry.architecture.input_modalities;
+    let outputs = entry.architecture.output_modalities;
+    let has_modality =
+        |wanted| contains_modality(&inputs, wanted) || contains_modality(&outputs, wanted);
+    let mut capabilities = Vec::new();
+    for (modality, capability) in [("image", "image"), ("audio", "audio"), ("video", "video")] {
+        if has_modality(modality) {
+            capabilities.push(capability.to_string());
+        }
+    }
+    if entry.supported_parameters.iter().any(|parameter| {
+        matches!(
+            parameter.as_str(),
+            "tools" | "tool_choice" | "parallel_tool_calls"
+        )
+    }) {
+        capabilities.push("tool".into());
+    }
+    if entry
+        .supported_parameters
+        .iter()
+        .any(|parameter| matches!(parameter.as_str(), "reasoning" | "include_reasoning"))
+    {
+        capabilities.push("reasoning".into());
+    }
+
+    let category = if inputs.is_empty() && outputs.is_empty() {
+        ""
+    } else if contains_modality(&outputs, "embeddings") || contains_modality(&outputs, "embedding")
+    {
+        "embedding"
+    } else if contains_modality(&outputs, "video") {
+        "video"
+    } else if contains_modality(&outputs, "audio") {
+        "audio"
+    } else if contains_modality(&outputs, "image") {
+        "vision"
+    } else if contains_modality(&inputs, "image") || contains_modality(&inputs, "video") {
+        // Image/video understanding models still answer with text and remain
+        // eligible for conversations, so they share the visual category.
+        "vision"
+    } else if contains_modality(&inputs, "audio") {
+        "audio"
+    } else {
+        "text"
+    };
+
+    FetchedProviderModel {
+        name: if entry.name.trim().is_empty() {
+            entry.id.clone()
+        } else {
+            entry.name
+        },
+        id: entry.id,
+        capabilities,
+        category: category.into(),
+        context_length: entry.context_length,
+        input_modalities: inputs,
+        output_modalities: outputs,
+    }
+}
+
+async fn fetch_models_raw(
+    base_url: &str,
+    key: Option<&str>,
+    kind: &str,
+) -> Result<Vec<FetchedProviderModel>, String> {
     if base_url.trim().is_empty() {
         return Err("请先填写 API 地址。".into());
     }
+    let spec = spec_for(kind);
     let client = reqwest::Client::new();
-    let mut request = client.get(models_url(base_url));
+    let mut request = client.get(spec.models_url(base_url));
     if let Some(key) = key {
-        request = request.bearer_auth(key);
+        request = spec.apply_auth(request, key);
     }
     let response = request
         .send()
@@ -594,20 +763,16 @@ async fn fetch_models_raw(base_url: &str, key: Option<&str>) -> Result<Vec<Strin
         return Err(format!("接口返回 {status}：{snippet}"));
     }
 
-    #[derive(Deserialize)]
-    struct ModelEntry {
-        id: String,
-    }
-    #[derive(Deserialize)]
-    struct ModelsResponse {
-        data: Vec<ModelEntry>,
-    }
-
     let parsed: ModelsResponse = response
         .json()
         .await
         .map_err(|error| format!("无法解析模型列表：{error}"))?;
-    Ok(parsed.data.into_iter().map(|entry| entry.id).collect())
+    Ok(parsed
+        .data
+        .into_iter()
+        .map(fetched_model)
+        .map(|model| spec.enrich_fetched_model(model))
+        .collect())
 }
 
 /// Query a provider's account balance, dispatched to its [`ProviderSpec`]. Only
@@ -631,18 +796,23 @@ pub async fn test_provider(app: AppHandle, id: String) -> Result<String, String>
     let providers = read_providers(&app)?;
     let index = find_index(&providers, &id)?;
     let base_url = providers[index].base_url.clone();
+    let kind = providers[index].kind.clone();
     let key = read_key(&app, &id)?;
-    let models = fetch_models_raw(&base_url, key.as_deref()).await?;
+    let models = fetch_models_raw(&base_url, key.as_deref(), &kind).await?;
     Ok(format!("连接成功，可用模型 {} 个", models.len()))
 }
 
 #[tauri::command]
-pub async fn fetch_provider_models(app: AppHandle, id: String) -> Result<Vec<String>, String> {
+pub async fn fetch_provider_models(
+    app: AppHandle,
+    id: String,
+) -> Result<Vec<FetchedProviderModel>, String> {
     let providers = read_providers(&app)?;
     let index = find_index(&providers, &id)?;
     let base_url = providers[index].base_url.clone();
+    let kind = providers[index].kind.clone();
     let key = read_key(&app, &id)?;
-    fetch_models_raw(&base_url, key.as_deref()).await
+    fetch_models_raw(&base_url, key.as_deref(), &kind).await
 }
 
 fn now_nanos() -> u128 {
@@ -713,6 +883,89 @@ mod tests {
         // Wrong master key must fail to decrypt (authentication tag mismatch).
         let wrong = Aes256Gcm::new_from_slice(&[9u8; 32]).unwrap();
         assert!(wrong.decrypt(Nonce::from_slice(&nb), cb.as_ref()).is_err());
+    }
+
+    #[test]
+    fn fetched_models_keep_provider_modalities_and_capabilities() {
+        let entry: ModelEntry = serde_json::from_value(serde_json::json!({
+            "id": "vendor/omni",
+            "name": "Omni",
+            "context_length": 262144,
+            "architecture": {
+                "input_modalities": ["text", "image", "audio", "video"],
+                "output_modalities": ["text"]
+            },
+            "supported_parameters": ["tools", "reasoning"]
+        }))
+        .unwrap();
+        let model = fetched_model(entry);
+        assert_eq!(model.category, "vision");
+        assert_eq!(model.context_length, Some(262_144));
+        assert_eq!(
+            model.capabilities,
+            vec!["image", "audio", "video", "tool", "reasoning"]
+        );
+        assert_eq!(
+            model.input_modalities,
+            vec!["text", "image", "audio", "video"]
+        );
+        assert_eq!(model.output_modalities, vec!["text"]);
+
+        let video: ModelEntry = serde_json::from_value(serde_json::json!({
+            "id": "vendor/video-generator",
+            "architecture": {
+                "input_modalities": ["text", "image"],
+                "output_modalities": ["video"]
+            }
+        }))
+        .unwrap();
+        let video = fetched_model(video);
+        assert_eq!(video.category, "video");
+        assert_eq!(video.capabilities, vec!["image", "video"]);
+    }
+
+    #[test]
+    fn id_only_catalogues_are_left_for_the_frontend_fallback() {
+        let entry: ModelEntry = serde_json::from_value(serde_json::json!({
+            "id": "vendor/future-audio-model"
+        }))
+        .unwrap();
+        let model = fetched_model(entry);
+        assert!(model.category.is_empty());
+        assert!(model.capabilities.is_empty());
+        assert_eq!(model.name, model.id);
+    }
+
+    #[test]
+    fn pricing_ranges_support_multiple_windows_and_legacy_data() {
+        let multiple: ProviderModel = serde_json::from_value(serde_json::json!({
+            "id": "priced",
+            "name": "Priced",
+            "peakTimeRanges": [
+                { "startHour": 9, "endHour": 12 },
+                { "startHour": 14, "endHour": 18 }
+            ]
+        }))
+        .unwrap();
+        let ranges = pricing_time_ranges(&multiple);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].contains_hour(9), Some(true));
+        assert_eq!(ranges[0].contains_hour(12), Some(false));
+        assert_eq!(ranges[1].contains_hour(14), Some(true));
+        assert_eq!(ranges[1].contains_hour(18), Some(false));
+
+        let legacy: ProviderModel = serde_json::from_value(serde_json::json!({
+            "id": "legacy",
+            "name": "Legacy",
+            "peakStartHour": 22,
+            "peakEndHour": 2
+        }))
+        .unwrap();
+        let ranges = pricing_time_ranges(&legacy);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].contains_hour(23), Some(true));
+        assert_eq!(ranges[0].contains_hour(1), Some(true));
+        assert_eq!(ranges[0].contains_hour(2), Some(false));
     }
 
     #[test]

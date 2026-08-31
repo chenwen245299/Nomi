@@ -11,6 +11,9 @@ use tauri_plugin_opener::OpenerExt;
 use crate::{providers, storage};
 
 const CHAT_DIR: &str = "chat";
+/// Subfolder under a feature tab's own directory that holds that tab's AI-sidebar
+/// conversation store, kept separate from the main `chat/` tree.
+const AI_SIDEBAR_DIR: &str = "ai-sidebar";
 const ASSISTANT_FILE: &str = "assistant.json";
 const CONVERSATION_FILE: &str = "conversation.json";
 const ASSETS_DIR: &str = "assets";
@@ -151,9 +154,28 @@ fn now() -> u64 {
         .as_secs()
 }
 
-fn chat_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = storage::current_root(app)?.join(CHAT_DIR);
-    fs::create_dir_all(&dir).map_err(|error| format!("无法创建 chat 目录：{error}"))?;
+/// Feature tabs that get their own AI-sidebar conversation store. Validated as an
+/// allowlist so a scope can never escape the data folder via path traversal.
+fn safe_scope(scope: &str) -> Result<&'static str, String> {
+    match scope {
+        "chat" => Ok("chat"),
+        "notes" => Ok("notes"),
+        "todo" => Ok("todo"),
+        "travel" => Ok("travel"),
+        _ => Err("未知的侧边栏作用域。".into()),
+    }
+}
+
+/// Root folder for a conversation store. `None` is the main chat (`chat/`);
+/// `Some(tab)` is that tab's AI sidebar (`<tab>/ai-sidebar/`). Both hold the same
+/// `<assistant>/<conversation>/…` layout, so every helper below works unchanged.
+fn chat_root(app: &AppHandle, scope: Option<&str>) -> Result<PathBuf, String> {
+    let base = storage::current_root(app)?;
+    let dir = match scope {
+        None | Some("") => base.join(CHAT_DIR),
+        Some(tab) => base.join(safe_scope(tab)?).join(AI_SIDEBAR_DIR),
+    };
+    fs::create_dir_all(&dir).map_err(|error| format!("无法创建对话目录：{error}"))?;
     Ok(dir)
 }
 
@@ -211,11 +233,12 @@ pub fn set_chat_settings(
 /// changed while generation was in flight.
 pub(crate) fn set_generated_conversation_title(
     app: &AppHandle,
+    scope: Option<&str>,
     assistant_id: &str,
     id: &str,
     title: &str,
 ) -> Result<bool, String> {
-    let config = assistant_dir(app, assistant_id)?
+    let config = assistant_dir(app, scope, assistant_id)?
         .join(safe_id(id)?)
         .join(CONVERSATION_FILE);
     let mut conversation: Conversation = read_json(&config)?;
@@ -298,8 +321,8 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     fs::write(path, contents).map_err(|error| error.to_string())
 }
 
-fn assistant_dir(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
-    let dir = chat_root(app)?.join(safe_id(id)?);
+fn assistant_dir(app: &AppHandle, scope: Option<&str>, id: &str) -> Result<PathBuf, String> {
+    let dir = chat_root(app, scope)?.join(safe_id(id)?);
     if !dir.is_dir() {
         return Err("助手不存在。".into());
     }
@@ -328,7 +351,7 @@ fn normalized_assistant_emoji(emoji: String) -> String {
 
 #[tauri::command]
 pub fn list_assistants(app: AppHandle) -> Result<Vec<Assistant>, String> {
-    let root = chat_root(&app)?;
+    let root = chat_root(&app, None)?;
     let mut assistants = Vec::new();
     for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -355,7 +378,7 @@ pub fn create_assistant(
     default_provider_id: Option<String>,
     default_model_id: Option<String>,
 ) -> Result<Assistant, String> {
-    let root = chat_root(&app)?;
+    let root = chat_root(&app, None)?;
     let id = unique_dir_name(&root, &name);
     let dir = root.join(&id);
     fs::create_dir_all(&dir).map_err(|error| format!("无法创建助手目录：{error}"))?;
@@ -385,7 +408,7 @@ pub fn update_assistant(
     default_provider_id: Option<String>,
     default_model_id: Option<String>,
 ) -> Result<Assistant, String> {
-    let dir = assistant_dir(&app, &id)?;
+    let dir = assistant_dir(&app, None, &id)?;
     let config = dir.join(ASSISTANT_FILE);
     let mut assistant: Assistant = read_json(&config)?;
     assistant.name = name.trim().to_string();
@@ -404,7 +427,7 @@ pub fn update_assistant(
 
 #[tauri::command]
 pub fn delete_assistant(app: AppHandle, id: String) -> Result<(), String> {
-    let dir = assistant_dir(&app, &id)?;
+    let dir = assistant_dir(&app, None, &id)?;
     fs::remove_dir_all(&dir).map_err(|error| format!("无法删除助手：{error}"))
 }
 
@@ -413,9 +436,10 @@ pub fn delete_assistant(app: AppHandle, id: String) -> Result<(), String> {
 #[tauri::command]
 pub fn list_conversations(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
 ) -> Result<Vec<Conversation>, String> {
-    let dir = assistant_dir(&app, &assistant_id)?;
+    let dir = assistant_dir(&app, scope.as_deref(), &assistant_id)?;
     let assistant: Assistant = read_json(&dir.join(ASSISTANT_FILE))?;
     let mut conversations = Vec::new();
     for entry in fs::read_dir(&dir).map_err(|error| error.to_string())? {
@@ -456,7 +480,7 @@ pub struct ConversationSummary {
 /// view; each row carries its owning assistant so it can be opened directly.
 #[tauri::command]
 pub fn list_all_conversations(app: AppHandle) -> Result<Vec<ConversationSummary>, String> {
-    let root = chat_root(&app)?;
+    let root = chat_root(&app, None)?;
     let mut out = Vec::new();
     for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -499,8 +523,8 @@ pub fn list_all_conversations(app: AppHandle) -> Result<Vec<ConversationSummary>
 }
 
 /// Create (if missing) the reserved default assistant and return its folder.
-fn ensure_default_assistant(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = chat_root(app)?.join(DEFAULT_ASSISTANT_ID);
+fn ensure_default_assistant(app: &AppHandle, scope: Option<&str>) -> Result<PathBuf, String> {
+    let dir = chat_root(app, scope)?.join(DEFAULT_ASSISTANT_ID);
     let config = dir.join(ASSISTANT_FILE);
     if !config.exists() {
         fs::create_dir_all(&dir).map_err(|error| format!("无法创建默认助手目录：{error}"))?;
@@ -525,10 +549,11 @@ fn ensure_default_assistant(app: &AppHandle) -> Result<PathBuf, String> {
 #[tauri::command]
 pub fn create_default_conversation(
     app: AppHandle,
+    scope: Option<String>,
     title: String,
 ) -> Result<ConversationSummary, String> {
-    ensure_default_assistant(&app)?;
-    let conversation = create_conversation(app, DEFAULT_ASSISTANT_ID.to_string(), title)?;
+    ensure_default_assistant(&app, scope.as_deref())?;
+    let conversation = create_conversation(app, scope, DEFAULT_ASSISTANT_ID.to_string(), title)?;
     Ok(ConversationSummary {
         conversation,
         assistant_id: DEFAULT_ASSISTANT_ID.to_string(),
@@ -547,7 +572,7 @@ pub fn set_default_conversation_settings(
     provider_id: Option<String>,
     model_id: Option<String>,
 ) -> Result<Assistant, String> {
-    let dir = ensure_default_assistant(&app)?;
+    let dir = ensure_default_assistant(&app, None)?;
     let config = dir.join(ASSISTANT_FILE);
     let mut assistant: Assistant = read_json(&config)?;
     assistant.emoji = normalized_assistant_emoji(emoji);
@@ -567,10 +592,11 @@ pub fn set_default_conversation_settings(
 #[tauri::command]
 pub fn create_conversation(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     title: String,
 ) -> Result<Conversation, String> {
-    let dir = assistant_dir(&app, &assistant_id)?;
+    let dir = assistant_dir(&app, scope.as_deref(), &assistant_id)?;
     // New conversations inherit the assistant's default provider + model.
     let assistant: Assistant = read_json(&dir.join(ASSISTANT_FILE))?;
     // Opaque, stable folder name so the async-generated title never has to rename
@@ -608,7 +634,7 @@ pub fn set_conversation_assistant(
     id: String,
     target_assistant_id: String,
 ) -> Result<ConversationSummary, String> {
-    let source_parent = assistant_dir(&app, &assistant_id)?;
+    let source_parent = assistant_dir(&app, None, &assistant_id)?;
     let source_dir = source_parent.join(safe_id(&id)?);
     if !source_dir.is_dir() {
         return Err("对话不存在。".into());
@@ -617,9 +643,9 @@ pub fn set_conversation_assistant(
     let first_response_model = first_response_model(&messages);
 
     let target_parent = if target_assistant_id == DEFAULT_ASSISTANT_ID {
-        ensure_default_assistant(&app)?
+        ensure_default_assistant(&app, None)?
     } else {
-        assistant_dir(&app, &target_assistant_id)?
+        assistant_dir(&app, None, &target_assistant_id)?
     };
     let target_assistant: Assistant = read_json(&target_parent.join(ASSISTANT_FILE))?;
     let original: Conversation = read_json(&source_dir.join(CONVERSATION_FILE))?;
@@ -670,12 +696,13 @@ pub fn set_conversation_assistant(
 #[tauri::command]
 pub fn set_conversation_model(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     id: String,
     provider_id: Option<String>,
     model_id: Option<String>,
 ) -> Result<Conversation, String> {
-    let config = assistant_dir(&app, &assistant_id)?
+    let config = assistant_dir(&app, scope.as_deref(), &assistant_id)?
         .join(safe_id(&id)?)
         .join(CONVERSATION_FILE);
     let mut conversation: Conversation = read_json(&config)?;
@@ -689,11 +716,12 @@ pub fn set_conversation_model(
 #[tauri::command]
 pub fn rename_conversation(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     id: String,
     title: String,
 ) -> Result<Conversation, String> {
-    let config = assistant_dir(&app, &assistant_id)?
+    let config = assistant_dir(&app, scope.as_deref(), &assistant_id)?
         .join(safe_id(&id)?)
         .join(CONVERSATION_FILE);
     let mut conversation: Conversation = read_json(&config)?;
@@ -704,8 +732,13 @@ pub fn rename_conversation(
 }
 
 #[tauri::command]
-pub fn delete_conversation(app: AppHandle, assistant_id: String, id: String) -> Result<(), String> {
-    let dir = assistant_dir(&app, &assistant_id)?.join(safe_id(&id)?);
+pub fn delete_conversation(
+    app: AppHandle,
+    scope: Option<String>,
+    assistant_id: String,
+    id: String,
+) -> Result<(), String> {
+    let dir = assistant_dir(&app, scope.as_deref(), &assistant_id)?.join(safe_id(&id)?);
     if !dir.is_dir() {
         return Err("对话不存在。".into());
     }
@@ -715,8 +748,13 @@ pub fn delete_conversation(app: AppHandle, assistant_id: String, id: String) -> 
 /// Reveal a conversation's own folder in Finder / Explorer. Both ids pass
 /// through the same safe-component validation used by every chat file access.
 #[tauri::command]
-pub fn reveal_conversation(app: AppHandle, assistant_id: String, id: String) -> Result<(), String> {
-    let dir = conversation_dir(&app, &assistant_id, &id)?;
+pub fn reveal_conversation(
+    app: AppHandle,
+    scope: Option<String>,
+    assistant_id: String,
+    id: String,
+) -> Result<(), String> {
+    let dir = conversation_dir(&app, scope.as_deref(), &assistant_id, &id)?;
     app.opener()
         .reveal_item_in_dir(dir)
         .map_err(|error| format!("无法在文件管理器中显示对话：{error}"))
@@ -845,10 +883,11 @@ struct MessagesDoc {
 /// components. Shared with the chat runtime (`chat_agent`).
 pub(crate) fn conversation_dir(
     app: &AppHandle,
+    scope: Option<&str>,
     assistant_id: &str,
     conversation_id: &str,
 ) -> Result<PathBuf, String> {
-    let dir = assistant_dir(app, assistant_id)?.join(safe_id(conversation_id)?);
+    let dir = assistant_dir(app, scope, assistant_id)?.join(safe_id(conversation_id)?);
     if !dir.is_dir() {
         return Err("对话不存在。".into());
     }
@@ -924,19 +963,26 @@ pub(crate) fn assets_dir(conversation_dir: &Path) -> Result<PathBuf, String> {
 #[tauri::command]
 pub fn list_messages(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     id: String,
 ) -> Result<Vec<ChatMessage>, String> {
-    Ok(load_messages(&conversation_dir(&app, &assistant_id, &id)?))
+    Ok(load_messages(&conversation_dir(
+        &app,
+        scope.as_deref(),
+        &assistant_id,
+        &id,
+    )?))
 }
 
 #[tauri::command]
 pub fn add_context_marker(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
 ) -> Result<Vec<ChatMessage>, String> {
-    let dir = conversation_dir(&app, &assistant_id, &chat_id)?;
+    let dir = conversation_dir(&app, scope.as_deref(), &assistant_id, &chat_id)?;
     let mut messages = load_messages(&dir);
     let has_active_context = messages
         .iter()
@@ -972,12 +1018,13 @@ fn response_group_id(message: &ChatMessage) -> &str {
 #[tauri::command]
 pub fn edit_chat_message(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
     message_id: String,
     content: String,
 ) -> Result<Vec<ChatMessage>, String> {
-    let dir = conversation_dir(&app, &assistant_id, &chat_id)?;
+    let dir = conversation_dir(&app, scope.as_deref(), &assistant_id, &chat_id)?;
     let mut messages = load_messages(&dir);
     let message = messages
         .iter_mut()
@@ -993,6 +1040,7 @@ pub fn edit_chat_message(
 #[tauri::command]
 pub fn set_chat_message_feedback(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
     message_id: String,
@@ -1001,7 +1049,7 @@ pub fn set_chat_message_feedback(
     if !matches!(feedback.as_deref(), None | Some("good") | Some("bad")) {
         return Err("不支持的评价。".into());
     }
-    let dir = conversation_dir(&app, &assistant_id, &chat_id)?;
+    let dir = conversation_dir(&app, scope.as_deref(), &assistant_id, &chat_id)?;
     let mut messages = load_messages(&dir);
     let message = messages
         .iter_mut()
@@ -1015,6 +1063,7 @@ pub fn set_chat_message_feedback(
 #[tauri::command]
 pub fn set_response_group_state(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
     group_id: String,
@@ -1024,7 +1073,7 @@ pub fn set_response_group_state(
     if layout != "tabs" && layout != "split" {
         return Err("不支持的回答布局。".into());
     }
-    let dir = conversation_dir(&app, &assistant_id, &chat_id)?;
+    let dir = conversation_dir(&app, scope.as_deref(), &assistant_id, &chat_id)?;
     let mut messages = load_messages(&dir);
     let selected_is_member = messages.iter().any(|message| {
         message.role == "assistant"
@@ -1048,11 +1097,12 @@ pub fn set_response_group_state(
 #[tauri::command]
 pub fn delete_chat_message(
     app: AppHandle,
+    scope: Option<String>,
     assistant_id: String,
     chat_id: String,
     message_id: String,
 ) -> Result<Vec<ChatMessage>, String> {
-    let dir = conversation_dir(&app, &assistant_id, &chat_id)?;
+    let dir = conversation_dir(&app, scope.as_deref(), &assistant_id, &chat_id)?;
     let mut messages = load_messages(&dir);
     let removed = messages
         .iter()
@@ -1082,9 +1132,10 @@ pub(crate) fn now_secs() -> u64 {
 /// The assistant's display name + system prompt, for the chat runtime.
 pub(crate) fn assistant_profile(
     app: &AppHandle,
+    scope: Option<&str>,
     assistant_id: &str,
 ) -> Result<(String, String), String> {
-    let dir = assistant_dir(app, assistant_id)?;
+    let dir = assistant_dir(app, scope, assistant_id)?;
     let assistant: Assistant = read_json(&dir.join(ASSISTANT_FILE))?;
     Ok((assistant.name, assistant.system_prompt))
 }
@@ -1093,15 +1144,17 @@ pub(crate) fn assistant_profile(
 /// global starred model.
 pub(crate) fn conversation_model(
     app: &AppHandle,
+    scope: Option<&str>,
     assistant_id: &str,
     conversation_id: &str,
 ) -> Result<(Option<String>, Option<String>), String> {
-    let config = conversation_dir(app, assistant_id, conversation_id)?.join(CONVERSATION_FILE);
+    let config =
+        conversation_dir(app, scope, assistant_id, conversation_id)?.join(CONVERSATION_FILE);
     let conversation: Conversation = read_json(&config)?;
     if conversation.provider_id.is_some() && conversation.model_id.is_some() {
         return Ok((conversation.provider_id, conversation.model_id));
     }
-    let assistant_dir = assistant_dir(app, assistant_id)?;
+    let assistant_dir = assistant_dir(app, scope, assistant_id)?;
     let assistant: Assistant = read_json(&assistant_dir.join(ASSISTANT_FILE))?;
     Ok(inherited_model(app, &assistant)
         .map(|(provider_id, model_id)| (Some(provider_id), Some(model_id)))
