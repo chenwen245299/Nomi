@@ -130,19 +130,19 @@ fn recognize_impl(image_bytes: &[u8]) -> Result<String, String> {
     let stream = InMemoryRandomAccessStream::new().map_err(win)?;
     let writer = DataWriter::CreateDataWriter(&stream).map_err(win)?;
     writer.WriteBytes(image_bytes).map_err(win)?;
-    writer.StoreAsync().map_err(win)?.get().map_err(win)?;
-    writer.FlushAsync().map_err(win)?.get().map_err(win)?;
+    writer.StoreAsync().map_err(win)?.join().map_err(win)?;
+    writer.FlushAsync().map_err(win)?.join().map_err(win)?;
     writer.DetachStream().map_err(win)?;
     stream.Seek(0).map_err(win)?;
 
     let decoder = BitmapDecoder::CreateAsync(&stream)
         .map_err(win)?
-        .get()
+        .join()
         .map_err(win)?;
     let bitmap = decoder
         .GetSoftwareBitmapAsync()
         .map_err(win)?
-        .get()
+        .join()
         .map_err(win)?;
 
     // Uses whatever OCR languages the profile has installed. On a system with no
@@ -154,7 +154,7 @@ fn recognize_impl(image_bytes: &[u8]) -> Result<String, String> {
     let result = engine
         .RecognizeAsync(&bitmap)
         .map_err(win)?
-        .get()
+        .join()
         .map_err(win)?;
     Ok(result.Text().map_err(win)?.to_string())
 }
