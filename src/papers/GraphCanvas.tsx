@@ -146,6 +146,21 @@ export function GraphCanvas(props: GraphCanvasProps) {
   // native dblclick to the viewport (not the node), so we time clicks ourselves.
   const lastClickRef = useRef<{ id: string; t: number } | null>(null);
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
+  // Real (unscaled) node sizes — card height varies, so edges use the measured
+  // size to land the arrowhead just outside each card instead of under it.
+  const [nodeSizes, setNodeSizes] = useState<Map<string, { w: number; h: number }>>(new Map());
+  const measureNode = useCallback((id: string, el: HTMLDivElement | null) => {
+    if (!el) return;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    setNodeSizes((prev) => {
+      const cur = prev.get(id);
+      if (cur && cur.w === w && cur.h === h) return prev;
+      const next = new Map(prev);
+      next.set(id, { w, h });
+      return next;
+    });
+  }, []);
   // Latest render values that stable callbacks (wheel listener, pointer handlers)
   // need to read without re-subscribing / going stale. Updated after every commit
   // in a dep-less effect (never during render).
@@ -222,6 +237,9 @@ export function GraphCanvas(props: GraphCanvasProps) {
     const sx = event.clientX - rect.left;
     const sy = event.clientY - rect.top;
     const target = event.target as HTMLElement;
+    // Floating controls (＋ / zoom / fit / legend) handle their own clicks — don't
+    // capture the pointer for them, or the capture steals their click event.
+    if (target.closest("button, [data-graph-ui]")) return;
     const handleEl = target.closest("[data-connect-handle]");
     const nodeEl = target.closest("[data-paper-id]") as HTMLElement | null;
     const nodeId = nodeEl?.getAttribute("data-paper-id") ?? undefined;
@@ -366,7 +384,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
         const bx = tf.x + tf.k * b.x;
         const by = tf.y + tf.k * b.y;
         const d = distToSegment(sx, sy, ax, ay, bx, by);
-        if (d < 10 && (!best || d < best.d)) best = { id: edge.id, d };
+        if (d < 16 && (!best || d < best.d)) best = { id: edge.id, d };
       }
       if (best) {
         setMenu({ kind: "edge", id: best.id, x: event.clientX, y: event.clientY });
@@ -411,24 +429,30 @@ export function GraphCanvas(props: GraphCanvasProps) {
 
   // ── Edge geometry (screen space) for the SVG overlay.
   const rendered = useMemo(() => {
-    const hw = (NODE_W / 2) * transform.k;
-    const hh = (NODE_H / 2) * transform.k;
+    const k = transform.k;
+    const gap = 3 * k; // land the arrowhead just outside the card, never under it
+    const half = (id: string) => {
+      const s = nodeSizes.get(id) ?? { w: NODE_W, h: NODE_H };
+      return { hw: (s.w / 2) * k + gap, hh: (s.h / 2) * k + gap };
+    };
     return edges
       .map((edge) => {
         const a = paperById.get(edge.from);
         const b = paperById.get(edge.to);
         if (!a || !b) return null;
-        const acx = transform.x + transform.k * a.x;
-        const acy = transform.y + transform.k * a.y;
-        const bcx = transform.x + transform.k * b.x;
-        const bcy = transform.y + transform.k * b.y;
-        const start = borderPoint(acx, acy, hw, hh, bcx, bcy);
-        const end = borderPoint(bcx, bcy, hw, hh, acx, acy);
+        const acx = transform.x + k * a.x;
+        const acy = transform.y + k * a.y;
+        const bcx = transform.x + k * b.x;
+        const bcy = transform.y + k * b.y;
+        const aHalf = half(edge.from);
+        const bHalf = half(edge.to);
+        const start = borderPoint(acx, acy, aHalf.hw, aHalf.hh, bcx, bcy);
+        const end = borderPoint(bcx, bcy, bHalf.hw, bHalf.hh, acx, acy);
         const active = selectedId === edge.from || selectedId === edge.to;
         return { edge, start, end, active };
       })
       .filter((v): v is NonNullable<typeof v> => v !== null);
-  }, [edges, paperById, transform, selectedId]);
+  }, [edges, paperById, transform, selectedId, nodeSizes]);
 
   const linkSource = useMemo(() => {
     if (!linkCursor || !linkFrom) return null;
@@ -458,6 +482,8 @@ export function GraphCanvas(props: GraphCanvasProps) {
         overflow: "hidden",
         cursor: "grab",
         touchAction: "none",
+        userSelect: "none",
+        WebkitUserSelect: "none",
         background:
           "radial-gradient(circle at 1px 1px, rgba(60,70,85,0.10) 1px, transparent 0) 0 0 / 26px 26px",
       }}
@@ -545,6 +571,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
           return (
             <div
               key={paper.id}
+              ref={(el) => measureNode(paper.id, el)}
               data-paper-id={paper.id}
               className="nomi-paper-node"
               style={{
@@ -728,6 +755,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
 
       {/* Legend (bottom-left). */}
       <div
+        data-graph-ui
         style={{
           position: "absolute",
           left: 14,
@@ -760,6 +788,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
 
       {/* Zoom / fit / new toolbar (bottom-right). */}
       <div
+        data-graph-ui
         style={{
           position: "absolute",
           right: 14,

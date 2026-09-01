@@ -174,10 +174,6 @@ export function AiChatPanel({
           counts={counts}
           onClose={() => setHistoryOpen(false)}
           onDelete={(id) => void sidebar.removeConversation(id)}
-          onNew={() => {
-            setHistoryOpen(false);
-            void sidebar.newConversation();
-          }}
           onSelect={(id) => {
             sidebar.select(id);
             setHistoryOpen(false);
@@ -230,7 +226,6 @@ function HistoryPanel({
   counts,
   onClose,
   onDelete,
-  onNew,
   onSelect,
   styles,
   theme,
@@ -241,7 +236,6 @@ function HistoryPanel({
   counts: Record<string, number>;
   onClose: () => void;
   onDelete: (id: string) => void;
-  onNew: () => void;
   onSelect: (id: string) => void;
   styles: Styles;
   theme: Theme;
@@ -276,23 +270,9 @@ function HistoryPanel({
           </Pressable>
         </View>
 
-        <Pressable
-          accessibilityRole="button"
-          onPress={onNew}
-          style={({ hovered, pressed }: PressState) => [
-            styles.newConvBtn,
-            motion,
-            hovered && styles.newConvBtnHover,
-            pressed && ({ opacity: 0.9 } as ViewStyle),
-          ]}
-        >
-          <RiAddLine color={accent.accentText} size={17} />
-          <Text style={styles.newConvLabel}>新对话</Text>
-        </Pressable>
-
         {conversations.length === 0 ? (
           <View style={styles.historyEmpty}>
-            <Text style={styles.historyEmptyText}>还没有历史对话{"\n"}点上方「新对话」开始</Text>
+            <Text style={styles.historyEmptyText}>还没有历史对话</Text>
           </View>
         ) : (
           <ScrollView contentContainerStyle={styles.historyList} style={{ flex: 1 } as ViewStyle}>
@@ -490,38 +470,25 @@ function makeStyles(theme: Theme, accent: Accent) {
       justifyContent: "space-between",
       paddingHorizontal: 16,
     },
-    historyTitle: { color: t.textPrimary, fontSize: 15, fontWeight: "700", letterSpacing: -0.2 },
-    historyCount: { color: t.textTertiary, fontSize: 12, marginTop: 2 },
-    newConvBtn: {
-      alignItems: "center",
-      backgroundColor: accent.selectedFill,
-      borderRadius: 11,
-      flexDirection: "row",
-      gap: 6,
-      justifyContent: "center",
-      marginHorizontal: 14,
-      marginTop: 12,
-      paddingVertical: 11,
-    },
-    newConvBtnHover: { backgroundColor: accent.iconBadge },
-    newConvLabel: { color: accent.accentText, fontSize: 13.5, fontWeight: "600" },
-    historyList: { gap: 2, paddingBottom: 14, paddingHorizontal: 8, paddingTop: 10 },
+    historyTitle: { color: t.textPrimary, fontSize: 13.5, fontWeight: "700", letterSpacing: -0.2 },
+    historyCount: { color: t.textTertiary, fontSize: 11, marginTop: 2 },
+    historyList: { gap: 2, paddingBottom: 14, paddingHorizontal: 8, paddingTop: 8 },
     historyEmpty: { alignItems: "center", paddingHorizontal: 20, paddingVertical: 40 },
-    historyEmptyText: { color: t.textTertiary, fontSize: 12.5, textAlign: "center" },
+    historyEmptyText: { color: t.textTertiary, fontSize: 12, textAlign: "center" },
     historyRow: {
       alignItems: "center",
       borderRadius: 10,
       flexDirection: "row",
       gap: 8,
-      minHeight: 50,
+      minHeight: 46,
       paddingHorizontal: 12,
-      paddingVertical: 9,
+      paddingVertical: 8,
     },
     historyRowActive: { backgroundColor: accent.selectedFill },
     historyRowHover: { backgroundColor: t.controlHover },
-    historyRowTitle: { color: t.textPrimary, fontSize: 13.5, fontWeight: "600" },
+    historyRowTitle: { color: t.textPrimary, fontSize: 12.5, fontWeight: "600" },
     historyRowActiveTitle: { color: accent.accentText },
-    historyRowMeta: { color: t.textTertiary, fontSize: 11.5, marginTop: 3 },
+    historyRowMeta: { color: t.textTertiary, fontSize: 11, marginTop: 2 },
     historyDelete: {
       alignItems: "center",
       borderRadius: 7,

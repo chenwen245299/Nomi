@@ -449,6 +449,8 @@ export function TravelMainColumn({
   );
 
   const basemap = travel.settings?.basemap ?? "online";
+  // A selected note shows as a docked panel over the current view — no dedicated
+  // tab, no view switch (the panel just appears on top).
   const openNote = travel.findNote(selectedId);
   const activePlan = travel.plans.find((plan) => plan.id === activePlanId) ?? null;
 
@@ -675,12 +677,14 @@ export function TravelMainColumn({
         />
       ) : null}
 
+      {/* A selected note docks to the left of the map (over the current view). */}
       {openNote ? (
         <TravelNoteEditor
           accent={accent}
           basemap={basemap}
           categories={travel.categories}
           getMapCenter={getMapCenter}
+          key={openNote.id}
           note={openNote}
           onClose={() => onSelect(null)}
           onDelete={(id) => {
@@ -1100,15 +1104,19 @@ function makeStyles(theme: Theme, accent: Accent) {
       paddingHorizontal: 24,
     },
     emptyText: { color: t.textTertiary, fontSize: 12.5, lineHeight: 19, textAlign: "center" },
-    list: { gap: 8, paddingBottom: 16, paddingHorizontal: 12, paddingTop: 4 },
+    // list paddingHorizontal (4) + card paddingLeft (6) = 10 = the search box's
+    // left inset, so the thumbnail lines up with the search box while the highlight
+    // extends wider (to 4px from the column edges).
+    list: { gap: 6, paddingBottom: 16, paddingHorizontal: 4, paddingTop: 4 },
     card: {
       alignItems: "flex-start",
       backgroundColor: "transparent",
       borderColor: "transparent",
-      borderRadius: 14,
+      borderRadius: 12,
       borderWidth: 1,
       flexDirection: "row",
-      padding: 10,
+      paddingHorizontal: 6,
+      paddingVertical: 10,
     },
     cardHover: { backgroundColor: t.controlHover },
     cardActive: {

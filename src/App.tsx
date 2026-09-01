@@ -433,11 +433,21 @@ function makeStyles(theme: Theme, accent: Accent) {
       flexDirection: "row",
       flexShrink: 1,
       gap: 7,
+      minWidth: 0,
+    },
+    tabIcon: {
+      alignItems: "center",
+      flexShrink: 0,
+      height: 16,
+      justifyContent: "center",
+      width: 16,
     },
     tabLabel: {
+      flexShrink: 1,
       fontSize: 12.5,
       fontWeight: "500",
       letterSpacing: -0.1,
+      minWidth: 0,
     },
     tabClose: {
       alignItems: "center",
@@ -1328,9 +1338,23 @@ function App() {
     const preventBrowserDrag = (event: DragEvent) => event.preventDefault();
     document.addEventListener("dragstart", preventBrowserDrag);
     document.addEventListener("drop", preventBrowserDrag);
+    // Suppress the native WebView context menu (Reload / Share / Services) — this is
+    // a desktop app. Text fields and the Markdown editor keep theirs (for paste),
+    // and our own right-click menus set their own state before this fires.
+    const suppressNativeMenu = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.closest("input, textarea, [contenteditable='true'], [contenteditable=''], .vditor")
+      ) {
+        return;
+      }
+      event.preventDefault();
+    };
+    document.addEventListener("contextmenu", suppressNativeMenu);
     return () => {
       document.removeEventListener("dragstart", preventBrowserDrag);
       document.removeEventListener("drop", preventBrowserDrag);
+      document.removeEventListener("contextmenu", suppressNativeMenu);
     };
   }, []);
 
@@ -1935,7 +1959,11 @@ function TabButton({
     >
       <div style={{ display: "flex", flexShrink: 1, minWidth: 0 }}>
         <View style={styles.tabMain}>
-          <Icon color={iconColor} size={16} />
+          {/* Fixed-size icon: without flexShrink:0 the flex row squishes the icon
+              (not just the label) once a long title pushes the tab to its max width. */}
+          <View style={styles.tabIcon}>
+            <Icon color={iconColor} size={16} />
+          </View>
           <Text numberOfLines={1} style={[styles.tabLabel, { color: labelColor }]}>
             {label}
           </Text>

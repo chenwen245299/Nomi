@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -10,9 +10,13 @@ import {
   type ViewStyle,
 } from "react-native";
 import { createPortal } from "react-dom";
+import { confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
 import {
   RiAddLine,
   RiCloseLine,
+  RiDeleteBinLine,
+  RiExternalLinkLine,
+  RiFolderOpenLine,
   RiNodeTree,
   RiSearch2Line,
   RiFileList3Line,
@@ -36,6 +40,17 @@ import type { PapersData } from "./usePapers";
 export type PapersView = "graph" | "detail";
 
 type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
+
+const isTauriRuntime = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+async function confirmDelete(message: string): Promise<boolean> {
+  try {
+    if (isTauriRuntime()) return await tauriConfirm(message, { title: "删除", kind: "warning" });
+  } catch {
+    /* fall through */
+  }
+  return typeof window !== "undefined" ? window.confirm(message) : true;
+}
 
 const NEW_PAPER = (x: number, y: number) => ({
   title: "未命名论文",
@@ -62,8 +77,20 @@ export function PapersCollection({
   const styles = useMemo(() => makeStyles(theme, accent), [theme, accent]);
   const [query, setQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   // Status filter: empty set = show everything. Otherwise only the chosen statuses.
   const [filters, setFilters] = useState<Set<PaperStatus>>(new Set());
+
+  const deletePaper = useCallback(
+    async (id: string) => {
+      const paper = papers.papers.find((p) => p.id === id);
+      const ok = await confirmDelete(
+        `确定删除论文「${paper?.title || "未命名论文"}」吗？此操作无法撤销。`,
+      );
+      if (ok) void papers.deletePaper(id);
+    },
+    [papers],
+  );
 
   const toggleFilter = useCallback((status: PaperStatus) => {
     setFilters((prev) => {
@@ -220,6 +247,7 @@ export function PapersCollection({
                     active={paper.id === selectedId}
                     paper={paper}
                     styles={styles}
+                    onContextMenu={(x, y) => setMenu({ id: paper.id, x, y })}
                     onPress={() => onOpenPaper(paper.id)}
                   />
                 ))}
@@ -228,7 +256,158 @@ export function PapersCollection({
           })}
         </ScrollView>
       )}
+
+      {menu ? (
+        <ListContextMenu
+          accent={accent}
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          onOpen={() => {
+            onOpenPaper(menu.id);
+            setMenu(null);
+          }}
+          onReveal={() => {
+            const id = menu.id;
+            setMenu(null);
+            void revealPaper(id);
+          }}
+          onDelete={() => {
+            const id = menu.id;
+            setMenu(null);
+            void deletePaper(id);
+          }}
+        />
+      ) : null}
     </View>
+  );
+}
+
+function ListContextMenu({
+  accent,
+  x,
+  y,
+  onOpen,
+  onReveal,
+  onDelete,
+  onClose,
+}: {
+  accent: Accent;
+  x: number;
+  y: number;
+  onOpen: () => void;
+  onReveal: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  const theme = useTheme();
+  const { t } = theme;
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    el.style.left = `${Math.max(8, Math.min(x, window.innerWidth - 8 - rect.width))}px`;
+    el.style.top = `${Math.max(8, Math.min(y, window.innerHeight - 8 - rect.height))}px`;
+  }, [x, y]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const rows: { label: string; icon: React.ReactNode; onPress: () => void; danger?: boolean }[] = [
+    {
+      label: "打开",
+      icon: <RiExternalLinkLine color={t.textSecondary} size={15} />,
+      onPress: onOpen,
+    },
+    // Reveal only works on the desktop build (Finder / file manager).
+    ...(isTauriRuntime()
+      ? [
+          {
+            label: "在访达中显示",
+            icon: <RiFolderOpenLine color={t.textSecondary} size={15} />,
+            onPress: onReveal,
+          },
+        ]
+      : []),
+    {
+      label: "删除",
+      icon: <RiDeleteBinLine color={t.errorText} size={15} />,
+      onPress: onDelete,
+      danger: true,
+    },
+  ];
+
+  return createPortal(
+    <div
+      onClick={onClose}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      style={{ position: "fixed", inset: 0, zIndex: 2000 }}
+    >
+      <div
+        ref={ref}
+        onClick={(event) => event.stopPropagation()}
+        style={{
+          position: "fixed",
+          left: x,
+          top: y,
+          minWidth: 160,
+          padding: 6,
+          background: t.cardSurface,
+          border: `1px solid ${t.separator}`,
+          borderRadius: 12,
+          boxShadow: "0 12px 32px rgba(16,24,36,0.18), 0 2px 8px rgba(16,24,36,0.10)",
+          fontFamily: "inherit",
+        }}
+      >
+        {rows.map((row) => (
+          <button
+            key={row.label}
+            type="button"
+            onClick={row.onPress}
+            onMouseEnter={(event) => {
+              event.currentTarget.style.background = row.danger
+                ? "rgba(178,77,77,0.10)"
+                : `rgba(${accent.rgb},0.12)`;
+            }}
+            onMouseLeave={(event) => (event.currentTarget.style.background = "transparent")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              width: "100%",
+              border: "none",
+              background: "transparent",
+              padding: "7px 10px",
+              borderRadius: 8,
+              fontSize: 13,
+              fontWeight: 500,
+              lineHeight: 1.2,
+              cursor: "pointer",
+              textAlign: "left",
+              fontFamily: "inherit",
+              color: row.danger ? t.errorText : t.textPrimary,
+              transition: "background-color 120ms ease",
+            }}
+          >
+            <span style={{ display: "inline-flex", width: 18, justifyContent: "center" }}>
+              {row.icon}
+            </span>
+            {row.label}
+          </button>
+        ))}
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -236,45 +415,56 @@ function PaperListCard({
   active,
   paper,
   styles,
+  onContextMenu,
   onPress,
 }: {
   active: boolean;
   paper: Paper;
   styles: Styles;
+  onContextMenu: (x: number, y: number) => void;
   onPress: () => void;
 }) {
   const theme = useTheme();
   return (
-    <Pressable
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ hovered }: PressState) => [
-        styles.card,
-        motion,
-        hovered && !active && styles.cardHover,
-        active && styles.cardActive,
-      ]}
+    <div
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onContextMenu(event.clientX, event.clientY);
+      }}
+      style={{ width: "100%" }}
     >
-      <Text numberOfLines={2} style={styles.cardTitle}>
-        {paper.title}
-      </Text>
-      {paper.venue || paper.tags.length > 0 ? (
-        <View style={styles.cardBadgeRow}>
-          {paper.venue ? (
-            <View style={styles.venueBadge}>
-              <Text numberOfLines={1} style={styles.venueBadgeText}>
-                {paper.venue}
+      <Pressable
+        accessibilityRole="button"
+        onPress={onPress}
+        style={({ hovered }: PressState) => [
+          styles.card,
+          motion,
+          hovered && !active && styles.cardHover,
+          active && styles.cardActive,
+        ]}
+      >
+        <Text numberOfLines={2} style={styles.cardTitle}>
+          {paper.title}
+        </Text>
+        {paper.venue || paper.tags.length > 0 ? (
+          <View style={styles.cardBadgeRow}>
+            {paper.venue ? (
+              <View style={styles.venueBadge}>
+                <Text numberOfLines={1} style={styles.venueBadgeText}>
+                  {paper.venue}
+                </Text>
+              </View>
+            ) : null}
+            {paper.tags.length > 0 ? (
+              <Text numberOfLines={1} style={[styles.cardTags, { color: theme.t.textTertiary }]}>
+                #{paper.tags.slice(0, 4).join("  #")}
               </Text>
-            </View>
-          ) : null}
-          {paper.tags.length > 0 ? (
-            <Text numberOfLines={1} style={[styles.cardTags, { color: theme.t.textTertiary }]}>
-              #{paper.tags.slice(0, 4).join("  #")}
-            </Text>
-          ) : null}
-        </View>
-      ) : null}
-    </Pressable>
+            ) : null}
+          </View>
+        ) : null}
+      </Pressable>
+    </div>
   );
 }
 

@@ -41,6 +41,9 @@ import {
 
 type PressState = { hovered?: boolean; pressed: boolean };
 
+/** localStorage key for the last display currency chosen in the statistics view. */
+const DISPLAY_CURRENCY_KEY = "nomi.finance.displayCurrency";
+
 const RANGE_LABELS: Record<TrendRange, string> = {
   day: "每日",
   week: "每周",
@@ -811,7 +814,25 @@ export function StatisticsView({
     () => availableCurrencies(records, preferredCurrency),
     [records, preferredCurrency],
   );
-  const [currency, setCurrency] = useState(preferredCurrency.toUpperCase());
+  // Remember the display currency the user last picked (a UI preference), so it
+  // isn't reset to the default every time the statistics view is reopened.
+  const [currency, setCurrency] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem(DISPLAY_CURRENCY_KEY);
+      if (saved) return saved.toUpperCase();
+    } catch {
+      /* localStorage unavailable — fall back to the preferred currency */
+    }
+    return preferredCurrency.toUpperCase();
+  });
+  const changeCurrency = (next: string) => {
+    setCurrency(next);
+    try {
+      window.localStorage.setItem(DISPLAY_CURRENCY_KEY, next);
+    } catch {
+      /* ignore persistence failures */
+    }
+  };
   const [range, setRange] = useState<TrendRange>("day");
   const [rateState, setRateState] = useState<{
     key: string;
@@ -905,7 +926,7 @@ export function StatisticsView({
           <View style={styles.currencyWrap}>
             <select
               aria-label={`统计币种${activeRates ? `，参考汇率日期 ${activeRates.date}` : ""}`}
-              onChange={(event) => setCurrency(event.target.value)}
+              onChange={(event) => changeCurrency(event.target.value)}
               style={currencySelectStyle}
               title={
                 activeRates

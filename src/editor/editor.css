@@ -229,6 +229,13 @@
   white-space: nowrap;
 }
 
+/* Vditor's floating block popover trails the cursor and overlaps the text. The
+   hosted toolbar covers every command, so hide the in-content popovers entirely. */
+.nomi-editor .vditor-wysiwyg__popover,
+.nomi-editor .vditor-ir__popover {
+  display: none !important;
+}
+
 /* ── Content ──────────────────────────────────────────────────────────────── */
 .nomi-editor .vditor-reset,
 .nomi-editor .vditor-sv,

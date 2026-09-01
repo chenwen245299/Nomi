@@ -290,6 +290,14 @@ const ANIM = StyleSheet.create({
     animationDuration: "240ms",
     animationTimingFunction: "cubic-bezier(0.32,0.72,0,1)",
   } as unknown as ViewStyle,
+  enterLeft: {
+    animationKeyframes: {
+      "0%": { opacity: 0, transform: [{ translateX: -28 }] },
+      "100%": { opacity: 1, transform: [{ translateX: 0 }] },
+    },
+    animationDuration: "240ms",
+    animationTimingFunction: "cubic-bezier(0.32,0.72,0,1)",
+  } as unknown as ViewStyle,
   shimmer: {
     animationKeyframes: {
       "0%": { transform: [{ translateX: -48 }] },
@@ -319,6 +327,11 @@ export function enterFade(): ViewStyle | undefined {
 /** Slide-in-from-right entrance for right-edge drawers. */
 export function enterRight(): ViewStyle | undefined {
   return reduceMotion ? undefined : ANIM.enterRight;
+}
+
+/** Slide-in-from-left entrance for left-edge drawers / docked panels. */
+export function enterLeft(): ViewStyle | undefined {
+  return reduceMotion ? undefined : ANIM.enterLeft;
 }
 
 /** Looping specular sweep for the download progress bar. */

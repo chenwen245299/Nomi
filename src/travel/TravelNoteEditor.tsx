@@ -9,7 +9,6 @@ import {
   View,
   type ViewStyle,
 } from "react-native";
-import { createPortal } from "react-dom";
 import { confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
 import {
   RiDeleteBinLine,
@@ -18,16 +17,7 @@ import {
   RiMapPin2Line,
 } from "@remixicon/react";
 import { MarkdownEditor } from "../editor";
-import {
-  enterFade,
-  enterModal,
-  glass,
-  modalShadow,
-  motion,
-  useTheme,
-  type Accent,
-  type Theme,
-} from "../theme";
+import { enterLeft, motion, useTheme, type Accent, type Theme } from "../theme";
 import { readNote, revealTravel, saveNote, type NoteInput, type TravelNote } from "./api";
 import {
   createImageMap,
@@ -276,12 +266,10 @@ export function TravelNoteEditor({
   const locationLabel =
     address || (lat != null && lng != null ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : "");
 
-  return createPortal(
-    <View style={[styles.scrim, glass(8, 115), enterFade()]}>
-      <Pressable accessibilityLabel="关闭" onPress={() => void close()} style={styles.scrimHit} />
-      <View style={[styles.card, glass(40, 180), enterModal()]}>
-        {/* Header: title + save state + actions */}
-        <View style={styles.header}>
+  return (
+    <View style={[styles.panel, enterLeft()]}>
+      {/* Header: title + save state + actions */}
+      <View style={styles.header}>
           <TextInput
             accessibilityLabel="旅行标题"
             onBlur={() => setTitleFocused(false)}
@@ -488,7 +476,6 @@ export function TravelNoteEditor({
             />
           )}
         </View>
-      </View>
 
       {picking ? (
         <LocationPicker
@@ -506,58 +493,53 @@ export function TravelNoteEditor({
           }}
         />
       ) : null}
-    </View>,
-    document.body,
+    </View>
   );
 }
 
 function makeStyles(theme: Theme, accent: Accent) {
   const { t } = theme;
   return StyleSheet.create({
-    scrim: {
-      alignItems: "center",
-      backgroundColor: t.scrim,
-      bottom: 0,
-      justifyContent: "center",
-      left: 0,
-      padding: 24,
-      position: "absolute",
-      right: 0,
-      top: 0,
-      zIndex: 2400,
-    },
-    scrimHit: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
-    card: {
+    // A left-docked panel over the map (mirrors the planning panel's geometry),
+    // replacing the former centered modal. The map stays visible to its right.
+    // zIndex sits above the planning panel (9) so a note selected while planning
+    // is open still shows on top.
+    panel: {
       backgroundColor: t.overlaySolid,
       borderColor: t.separator,
-      borderRadius: 18,
+      borderRadius: 14,
       borderWidth: 1,
-      boxShadow: modalShadow(t),
+      bottom: 20,
+      boxShadow: "0 10px 30px rgba(16,24,36,0.18)",
       display: "flex",
       flexDirection: "column",
-      height: "90%",
-      maxWidth: 900,
+      left: 16,
       overflow: "hidden",
-      width: "100%",
+      position: "absolute",
+      top: 74,
+      width: 420,
+      zIndex: 11,
     },
     header: {
       alignItems: "center",
       borderBottomColor: t.separator,
       borderBottomWidth: 1,
       flexDirection: "row",
-      gap: 12,
-      paddingHorizontal: 18,
-      paddingVertical: 11,
+      gap: 8,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
     },
+    // 15 to match the papers detail title, note headers, and collection titles —
+    // the docked note panel should read as part of the same compact UI.
     titleInput: {
       borderColor: "transparent",
       borderRadius: 8,
       borderWidth: 1,
       color: t.textPrimary,
       flex: 1,
-      fontSize: 17,
+      fontSize: 15,
       fontWeight: "700",
-      letterSpacing: -0.3,
+      letterSpacing: -0.2,
       minWidth: 0,
       paddingHorizontal: 8,
       paddingVertical: 5,
@@ -597,10 +579,10 @@ function makeStyles(theme: Theme, accent: Accent) {
       borderBottomColor: t.separator,
       borderBottomWidth: 1,
       gap: 8,
-      paddingHorizontal: 18,
+      paddingHorizontal: 14,
       paddingVertical: 12,
     },
-    metaTopRow: { alignItems: "flex-end", flexDirection: "row", gap: 20 },
+    metaTopRow: { alignItems: "flex-end", flexDirection: "row", gap: 16 },
     metaField: { gap: 4 },
     metaFieldGrow: { flex: 1, gap: 6 },
     metaLabel: { color: t.textTertiary, fontSize: 11, fontWeight: "600" },
