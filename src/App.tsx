@@ -30,11 +30,15 @@ import {
   RiChat3Fill,
   RiChat3Line,
   RiChatSettingsLine,
+  RiCheckboxCircleFill,
+  RiCheckboxCircleLine,
   RiCloseLine,
   RiCompass3Fill,
   RiCompass3Line,
   RiExternalLinkLine,
   RiFolderOpenLine,
+  RiGraduationCapFill,
+  RiGraduationCapLine,
   RiHardDrive2Line,
   RiLayoutRightLine,
   RiNodeTree,
@@ -43,8 +47,6 @@ import {
   RiSettings4Fill,
   RiSettings4Line,
   RiTerminalBoxLine,
-  RiTodoFill,
-  RiTodoLine,
   RiWallet3Fill,
   RiWallet3Line,
 } from "@remixicon/react";
@@ -69,10 +71,18 @@ import { useMcp, type McpController } from "./mcp/useMcp";
 import { ExaSettings } from "./exa/ExaSettings";
 import { NotesCollection, NotesMainColumn } from "./notes/NotesSection";
 import { useNotes, type NotesData } from "./notes/useNotes";
+import {
+  PapersCollection,
+  PapersMainColumn,
+  usePapers,
+  type PapersData,
+  type PapersView,
+} from "./papers";
 import { FinanceCollection, FinanceMainColumn } from "./finance/FinanceSection";
 import { useFinance, type FinanceData } from "./finance/useFinance";
 import { TodoCollection, TodoMainColumn } from "./todo/TodoSection";
 import { useTodos, type TodosData } from "./todo/useTodos";
+import { TravelCollection, TravelMainColumn, useTravel, type TravelData } from "./travel";
 import { scopeLabel, type TodoLayout, type TodoScope } from "./todo/views";
 import { initVersion, startAutoUpdate, stopAutoUpdate } from "./updater/store";
 import {
@@ -138,6 +148,17 @@ const sections: SectionMeta[] = [
     iconFill: RiChat3Fill,
   },
   {
+    id: "papers",
+    label: "论文",
+    collectionTitle: "论文",
+    description: "规划正在写、打算写和有潜力的论文，并把它们联系起来。",
+    emptyTitle: "规划你的论文",
+    emptyDescription: "论文数据会独立保存在 papers 文件夹中。",
+    actionLabel: "新建论文",
+    icon: RiGraduationCapLine,
+    iconFill: RiGraduationCapFill,
+  },
+  {
     id: "notes",
     label: "笔记",
     collectionTitle: "全部笔记",
@@ -156,15 +177,15 @@ const sections: SectionMeta[] = [
     emptyTitle: "添加一条待办",
     emptyDescription: "待办数据会独立保存在 todo 文件夹中。",
     actionLabel: "新建待办",
-    icon: RiTodoLine,
-    iconFill: RiTodoFill,
+    icon: RiCheckboxCircleLine,
+    iconFill: RiCheckboxCircleFill,
   },
   {
     id: "travel",
     label: "旅行",
-    collectionTitle: "旅行计划",
-    description: "规划行程、地点、预订和旅行清单。",
-    emptyTitle: "创建一个旅行计划",
+    collectionTitle: "旅行笔记",
+    description: "记录旅行足迹、地点、评分和行程规划。",
+    emptyTitle: "创建一篇旅行笔记",
     emptyDescription: "所有旅行资料都会收纳在 travel 文件夹中。",
     actionLabel: "新建旅行",
     icon: RiCompass3Line,
@@ -200,7 +221,7 @@ const metaFor = (id: SectionId): SectionMeta =>
 
 /** Tabs that carry a right-hand AI-chat sidebar. Finance already embeds its own
  *  AI capture chat, and settings has no conversation surface, so both opt out. */
-const SIDEBAR_SECTIONS = new Set<SectionId>(["chat", "notes", "todo", "travel"]);
+const SIDEBAR_SECTIONS = new Set<SectionId>(["chat", "notes", "papers", "todo", "travel"]);
 
 const SIDEBAR_MIN_WIDTH = 300;
 const SIDEBAR_MAX_WIDTH = 720;
@@ -247,6 +268,11 @@ type Tab = {
   conversationAssistantId: string | null;
   // notes: the open note's path relative to the notes root (null = none open).
   noteId: string | null;
+  // papers: the selected paper (null = none) and which view is showing.
+  paperId: string | null;
+  papersView: PapersView;
+  // travel: the open travel note's id (null = none open).
+  travelNoteId: string | null;
   // todo: which todos this tab is showing, and how they are laid out.
   todoScope: TodoScope;
   todoLayout: TodoLayout;
@@ -262,6 +288,9 @@ function makeTab(id: number, section: SectionId): Tab {
     conversationId: null,
     conversationAssistantId: null,
     noteId: null,
+    paperId: null,
+    papersView: "graph",
+    travelNoteId: null,
     todoScope: "today",
     todoLayout: "board",
     settingsTab: "storage",
@@ -283,7 +312,7 @@ function previewStorage(): StorageStatus {
     rootPath,
     configPath: `${rootPath}/.nomi/config.json`,
     reusedExistingData: false,
-    features: ["chat", "notes", "todo", "travel", "finance"].map((name) => ({
+    features: ["chat", "notes", "papers", "todo", "travel", "finance"].map((name) => ({
       id: name,
       name,
       path: `${rootPath}/${name}`,
@@ -361,6 +390,7 @@ function makeStyles(theme: Theme, accent: Accent) {
       borderBottomWidth: 1,
       flexDirection: "row",
       height: 40,
+      paddingRight: 10,
       zIndex: 5,
     },
     tbTrafficSpace: {
@@ -1066,8 +1096,10 @@ function App() {
   );
   const mcp = useMcp(activeSection === "settings" && activeTab?.settingsTab === "mcp");
   const notes = useNotes(Boolean(storage) && activeSection === "notes");
+  const papers = usePapers(Boolean(storage) && activeSection === "papers");
   const todos = useTodos(Boolean(storage) && activeSection === "todo");
   const finance = useFinance(Boolean(storage) && activeSection === "finance");
+  const travel = useTravel(Boolean(storage) && activeSection === "travel");
 
   // Patch the currently-active tab's view state.
   const patchActiveTab = (patch: Partial<Tab>) => {
@@ -1083,6 +1115,16 @@ function App() {
       patchActiveTab({ noteId: created.path });
     }
   }
+
+  // ── Papers navigation ──
+  // Prime the selected paper (single-click in the graph) without leaving the view.
+  const selectPaper = (id: string | null) => patchActiveTab({ paperId: id });
+  // Open a paper's detail (list click / graph double-click / just created).
+  const openPaper = (id: string) => patchActiveTab({ paperId: id, papersView: "detail" });
+  const setPapersView = (papersView: PapersView) => patchActiveTab({ papersView });
+
+  // ── Travel navigation ──
+  const selectTravelNote = (id: string | null) => patchActiveTab({ travelNoteId: id });
 
   // ── Todo navigation ──
   const selectTodoScope = (todoScope: TodoScope) => patchActiveTab({ todoScope });
@@ -1251,6 +1293,10 @@ function App() {
       const note = notes.findNode(tab.noteId);
       return note ? note.name : metaFor("notes").label;
     }
+    if (tab.section === "papers") {
+      const paper = papers.findPaper(tab.paperId);
+      return paper ? paper.title : metaFor("papers").label;
+    }
     if (tab.section === "todo") {
       return scopeLabel(tab.todoScope);
     }
@@ -1405,14 +1451,18 @@ function App() {
             onNewAssistant={newAssistant}
             onNewConversation={newConversation}
             onNotePathChanged={reconcileNotePath}
+            onOpenPaper={openPaper}
             onSelectAssistant={selectAssistant}
             onSelectConversation={selectConversation}
             onSelectNote={selectNote}
             onSelectSettingsTab={setSettingsTab}
             onSelectTodoScope={selectTodoScope}
+            onSelectTravelNote={selectTravelNote}
+            papers={papers}
             settingsTab={activeTab?.settingsTab ?? "storage"}
             tab={activeTab}
             todos={todos}
+            travel={travel}
           />
 
           <MainColumn
@@ -1430,46 +1480,74 @@ function App() {
             onNewConversation={newConversation}
             onNewRootNote={newRootNote}
             onNotePathChanged={reconcileNotePath}
+            onOpenPaper={openPaper}
+            onSelectPaper={selectPaper}
             onSelectTodoLayout={selectTodoLayout}
+            onSelectTravelNote={selectTravelNote}
+            onSetPapersView={setPapersView}
+            papers={papers}
             providers={providers}
             settingsTab={activeTab?.settingsTab ?? "storage"}
             storage={storage}
             storageError={storageError}
             tab={activeTab}
             todos={todos}
+            travel={travel}
           />
 
-          {sidebarScope && sidebarOpen ? (
+          {sidebarScope ? (
+            // Clipping wrapper animates its width; the inner panel keeps a fixed
+            // width (pinned to the right) so its content never reflows mid-slide.
             <View
               style={
                 {
-                  width: effectiveSidebarWidth,
-                  borderLeftColor: theme.t.separator,
-                  borderLeftWidth: StyleSheet.hairlineWidth,
+                  width: sidebarOpen ? effectiveSidebarWidth : 0,
+                  overflow: "hidden",
                   position: "relative",
+                  transitionProperty: "width",
+                  transitionDuration: theme.reduceMotion ? "0ms" : "280ms",
+                  transitionTimingFunction: "cubic-bezier(0.32,0.72,0,1)",
                 } as ViewStyle
               }
             >
-              <SidebarResizeHandle
-                color={accent.accent}
-                max={sidebarMaxWidth}
-                onChange={(next) => {
-                  setSidebarWidth(next);
-                  try {
-                    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
-                  } catch {
-                    // ignore persistence failures
-                  }
-                }}
-                width={effectiveSidebarWidth}
-              />
-              <AiChatPanel
-                accent={accentFor(sidebarScope)}
-                key={sidebarScope}
-                onBalance={providers.balance}
-                providers={providers.providers}
-                scope={sidebarScope}
-              />
+              <View
+                style={
+                  {
+                    position: "absolute",
+                    top: 0,
+                    bottom: 0,
+                    right: 0,
+                    width: effectiveSidebarWidth,
+                    borderLeftColor: theme.t.separator,
+                    borderLeftWidth: StyleSheet.hairlineWidth,
+                    opacity: sidebarOpen ? 1 : 0,
+                    transitionProperty: "opacity",
+                    transitionDuration: theme.reduceMotion ? "0ms" : "220ms",
+                    transitionTimingFunction: "ease",
+                  } as ViewStyle
+                }
+              >
+                <SidebarResizeHandle
+                  color={accent.accent}
+                  max={sidebarMaxWidth}
+                  onChange={(next) => {
+                    setSidebarWidth(next);
+                    try {
+                      window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
+                    } catch {
+                      // ignore persistence failures
+                    }
+                  }}
+                  width={effectiveSidebarWidth}
+                />
+                <AiChatPanel
+                  accent={accentFor(sidebarScope)}
+                  key={sidebarScope}
+                  onBalance={providers.balance}
+                  providers={providers.providers}
+                  scope={sidebarScope}
+                />
+              </View>
             </View>
           ) : null}
         </View>
@@ -2025,14 +2103,18 @@ function CollectionColumn({
   onNewAssistant,
   onNewConversation,
   onNotePathChanged,
+  onOpenPaper,
   onSelectAssistant,
   onSelectConversation,
   onSelectNote,
   onSelectSettingsTab,
   onSelectTodoScope,
+  onSelectTravelNote,
+  papers,
   settingsTab,
   tab,
   todos,
+  travel,
 }: {
   accent: Accent;
   activeSection: SectionId;
@@ -2047,14 +2129,18 @@ function CollectionColumn({
   onNewAssistant: () => void;
   onNewConversation: () => void;
   onNotePathChanged: (oldPath: string, newPath: string | null) => void;
+  onOpenPaper: (id: string) => void;
   onSelectAssistant: (id: string | null) => void;
   onSelectConversation: (assistantId: string, id: string) => void;
   onSelectNote: (path: string | null) => void;
   onSelectSettingsTab: (tab: SettingsTab) => void;
   onSelectTodoScope: (scope: TodoScope) => void;
+  onSelectTravelNote: (id: string | null) => void;
+  papers: PapersData;
   settingsTab: SettingsTab;
   tab: Tab | undefined;
   todos: TodosData;
+  travel: TravelData;
 }) {
   const { styles, theme } = useStyles(accent);
   const [searchFocused, setSearchFocused] = useState(false);
@@ -2062,11 +2148,13 @@ function CollectionColumn({
   const isSettings = activeSection === "settings";
   const isChat = activeSection === "chat";
   const isNotes = activeSection === "notes";
+  const isPapers = activeSection === "papers";
   const isTodo = activeSection === "todo";
   const isFinance = activeSection === "finance";
-  // Notes, todo and finance bring their own create + filter controls, so the
-  // generic header button and search box stay out of their way.
-  const ownsControls = isNotes || isTodo || isFinance;
+  const isTravel = activeSection === "travel";
+  // Notes, papers, todo, finance and travel bring their own create + filter
+  // controls, so the generic header button and search box stay out of their way.
+  const ownsControls = isNotes || isPapers || isTodo || isFinance || isTravel;
 
   return (
     <View
@@ -2181,6 +2269,13 @@ function CollectionColumn({
           onSelect={onSelectNote}
           selectedPath={tab?.noteId ?? null}
         />
+      ) : isPapers ? (
+        <PapersCollection
+          accent={accent}
+          onOpenPaper={onOpenPaper}
+          papers={papers}
+          selectedId={tab?.paperId ?? null}
+        />
       ) : isTodo ? (
         <TodoCollection
           accent={accent}
@@ -2190,6 +2285,13 @@ function CollectionColumn({
         />
       ) : isFinance ? (
         <FinanceCollection accent={accent} finance={finance} />
+      ) : isTravel ? (
+        <TravelCollection
+          accent={accent}
+          onSelect={onSelectTravelNote}
+          selectedId={tab?.travelNoteId ?? null}
+          travel={travel}
+        />
       ) : (
         <View style={styles.collectionEmpty}>
           <Text style={styles.collectionEmptyText}>暂无{meta.label}</Text>
@@ -2214,13 +2316,19 @@ function MainColumn({
   onNewConversation,
   onNewRootNote,
   onNotePathChanged,
+  onOpenPaper,
+  onSelectPaper,
   onSelectTodoLayout,
+  onSelectTravelNote,
+  onSetPapersView,
+  papers,
   providers,
   settingsTab,
   storage,
   storageError,
   tab,
   todos,
+  travel,
 }: {
   accent: Accent;
   activeSection: SectionId;
@@ -2240,13 +2348,19 @@ function MainColumn({
   onNewConversation: () => void;
   onNewRootNote: () => void;
   onNotePathChanged: (oldPath: string, newPath: string | null) => void;
+  onOpenPaper: (id: string) => void;
+  onSelectPaper: (id: string | null) => void;
   onSelectTodoLayout: (layout: TodoLayout) => void;
+  onSelectTravelNote: (id: string | null) => void;
+  onSetPapersView: (view: PapersView) => void;
+  papers: PapersData;
   providers: ProvidersController;
   settingsTab: SettingsTab;
   storage: StorageStatus | null;
   storageError: string | null;
   tab: Tab | undefined;
   todos: TodosData;
+  travel: TravelData;
 }) {
   const { styles, theme } = useStyles(accent);
   const isSettings = activeSection === "settings";
@@ -2263,6 +2377,37 @@ function MainColumn({
     return (
       <View style={[styles.mainColumn, glass(12, 120)]}>
         <FinanceMainColumn accent={accent} finance={finance} providers={providers} />
+      </View>
+    );
+  }
+
+  // Travel: a full-height map with its own map / trajectory / planning tabs.
+  if (activeSection === "travel") {
+    return (
+      <View style={[styles.mainColumn, glass(12, 120)]}>
+        <TravelMainColumn
+          accent={accent}
+          onSelect={onSelectTravelNote}
+          selectedId={tab?.travelNoteId ?? null}
+          travel={travel}
+        />
+      </View>
+    );
+  }
+
+  // Papers: a full-height relationship graph with a graph / detail switch.
+  if (activeSection === "papers") {
+    return (
+      <View style={[styles.mainColumn, glass(12, 120)]}>
+        <PapersMainColumn
+          accent={accent}
+          onOpenPaper={onOpenPaper}
+          onSelectPaper={onSelectPaper}
+          onSetView={onSetPapersView}
+          papers={papers}
+          selectedId={tab?.paperId ?? null}
+          view={tab?.papersView ?? "graph"}
+        />
       </View>
     );
   }

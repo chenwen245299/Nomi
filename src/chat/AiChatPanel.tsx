@@ -7,7 +7,18 @@ import {
   RiDeleteBinLine,
   RiSparkling2Line,
 } from "@remixicon/react";
-import { modalShadow, motion, useTheme, type Accent, type SectionId, type Theme } from "../theme";
+import {
+  enterFade,
+  enterRight,
+  glass,
+  modalShadow,
+  motion,
+  useTheme,
+  type Accent,
+  type SectionId,
+  type Theme,
+} from "../theme";
+
 import { EmptyIllustration } from "../illustrations";
 import { ConversationView } from "./Conversation";
 import { ConversationModelPicker } from "./ModelPicker";
@@ -15,6 +26,12 @@ import { useSidebarChat } from "./useSidebarChat";
 import { DEFAULT_ASSISTANT_ID, listMessages } from "./api";
 import type { Conversation } from "./api";
 import type { Provider, ProviderBalance } from "../providers/api";
+
+// Pin a clean system sans stack on the whole panel so mixed Chinese/Latin text
+// always renders in the UI font (never a serif fallback). Descendant Text inherits
+// this; monospace code keeps its own family via higher-specificity CSS.
+const UI_FONT =
+  '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif';
 
 type PressState = { pressed: boolean; hovered?: boolean };
 
@@ -107,21 +124,22 @@ export function AiChatPanel({
         </View>
       </View>
 
-      <View style={styles.modelRow}>
-        <ConversationModelPicker
-          accent={accent}
-          menuTitle="选择模型"
-          modelId={active?.modelId ?? null}
-          onBalance={onBalance}
-          onSelect={(providerId, modelId) => sidebar.setModel(providerId, modelId)}
-          providerId={active?.providerId ?? null}
-          providers={providers}
-        />
-      </View>
-
       <View style={styles.body}>
-        <View style={styles.bodyPad}>
-          {active ? (
+        {/* The model picker genuinely floats above the conversation. */}
+        <View style={styles.modelFloat} pointerEvents="box-none">
+          <ConversationModelPicker
+            accent={accent}
+            menuTitle="选择模型"
+            modelId={active?.modelId ?? null}
+            onBalance={onBalance}
+            onSelect={(providerId, modelId) => sidebar.setModel(providerId, modelId)}
+            providerId={active?.providerId ?? null}
+            providers={providers}
+          />
+        </View>
+
+        {active ? (
+          <View style={styles.bodyPad}>
             <ConversationView
               accent={accent}
               assistantId={DEFAULT_ASSISTANT_ID}
@@ -135,37 +153,39 @@ export function AiChatPanel({
               providers={providers}
               scope={scope}
             />
-          ) : (
-            <View style={styles.empty}>
-              <EmptyIllustration color={accent.accent} section={scope} size={96} />
-              <Text style={styles.emptyTitle}>开始新对话</Text>
-              <Text style={styles.emptyHint}>随时向 AI 提问，与当前页面的工作并排进行。</Text>
-            </View>
-          )}
-        </View>
-
-        {historyOpen ? (
-          <HistoryPanel
-            accent={accent}
-            conversations={sidebar.conversations}
-            activeId={sidebar.activeId}
-            counts={counts}
-            onClose={() => setHistoryOpen(false)}
-            onDelete={(id) => void sidebar.removeConversation(id)}
-            onNew={() => {
-              setHistoryOpen(false);
-              void sidebar.newConversation();
-            }}
-            onSelect={(id) => {
-              sidebar.select(id);
-              setHistoryOpen(false);
-            }}
-            styles={styles}
-            theme={theme}
-          />
-        ) : null}
+          </View>
+        ) : (
+          // Centered in the full panel (independent of the conversation's top inset).
+          <View style={styles.empty}>
+            <EmptyIllustration color={accent.accent} section={scope} size={96} />
+            <Text style={styles.emptyTitle}>开始新对话</Text>
+            <Text style={styles.emptyHint}>随时向 AI 提问，与当前页面的工作并排进行。</Text>
+          </View>
+        )}
       </View>
       {sidebar.error ? <Text style={styles.error}>{sidebar.error}</Text> : null}
+
+      {/* Full-height drawer that slides in from the right, covering the panel. */}
+      {historyOpen ? (
+        <HistoryPanel
+          accent={accent}
+          conversations={sidebar.conversations}
+          activeId={sidebar.activeId}
+          counts={counts}
+          onClose={() => setHistoryOpen(false)}
+          onDelete={(id) => void sidebar.removeConversation(id)}
+          onNew={() => {
+            setHistoryOpen(false);
+            void sidebar.newConversation();
+          }}
+          onSelect={(id) => {
+            sidebar.select(id);
+            setHistoryOpen(false);
+          }}
+          styles={styles}
+          theme={theme}
+        />
+      ) : null}
     </View>
   );
 }
@@ -227,56 +247,71 @@ function HistoryPanel({
   theme: Theme;
 }) {
   return (
-    <View style={styles.historyCard}>
-      <View style={styles.historyHeader}>
-        <View>
-          <Text style={styles.historyTitle}>对话历史</Text>
-          <Text style={styles.historyCount}>{conversations.length} 个历史对话</Text>
+    <View style={styles.historyOverlay}>
+      {/* Left gap doubles as a backdrop — clicking it closes the drawer. */}
+      <Pressable
+        accessibilityLabel="关闭对话历史"
+        accessibilityRole="button"
+        onPress={onClose}
+        style={[styles.historyScrim, enterFade() as ViewStyle]}
+      />
+      <View style={[styles.historyCard, glass(40, 180), enterRight() as ViewStyle]}>
+        <View style={styles.historyHeader}>
+          <View style={{ flex: 1, minWidth: 0 } as ViewStyle}>
+            <Text style={styles.historyTitle}>对话历史</Text>
+            <Text style={styles.historyCount}>{conversations.length} 个历史对话</Text>
+          </View>
+          <Pressable
+            accessibilityLabel="关闭对话历史"
+            accessibilityRole="button"
+            onPress={onClose}
+            style={({ hovered, pressed }: PressState) => [
+              styles.headerBtn,
+              motion,
+              hovered && styles.headerBtnHover,
+              pressed && ({ opacity: 0.85 } as ViewStyle),
+            ]}
+          >
+            <RiCloseLine color={theme.t.textSecondary} size={19} />
+          </Pressable>
         </View>
+
         <Pressable
-          accessibilityLabel="关闭对话历史"
           accessibilityRole="button"
-          onPress={onClose}
+          onPress={onNew}
           style={({ hovered, pressed }: PressState) => [
-            styles.headerBtn,
+            styles.newConvBtn,
             motion,
-            hovered && styles.headerBtnHover,
-            pressed && ({ opacity: 0.85 } as ViewStyle),
+            hovered && styles.newConvBtnHover,
+            pressed && ({ opacity: 0.9 } as ViewStyle),
           ]}
         >
-          <RiCloseLine color={theme.t.textSecondary} size={19} />
+          <RiAddLine color={accent.accentText} size={17} />
+          <Text style={styles.newConvLabel}>新对话</Text>
         </Pressable>
+
+        {conversations.length === 0 ? (
+          <View style={styles.historyEmpty}>
+            <Text style={styles.historyEmptyText}>还没有历史对话{"\n"}点上方「新对话」开始</Text>
+          </View>
+        ) : (
+          <ScrollView contentContainerStyle={styles.historyList} style={{ flex: 1 } as ViewStyle}>
+            {conversations.map((conversation) => (
+              <HistoryRow
+                accent={accent}
+                active={conversation.id === activeId}
+                conversation={conversation}
+                count={counts[conversation.id]}
+                key={conversation.id}
+                onDelete={() => onDelete(conversation.id)}
+                onSelect={() => onSelect(conversation.id)}
+                styles={styles}
+                theme={theme}
+              />
+            ))}
+          </ScrollView>
+        )}
       </View>
-
-      <Pressable
-        accessibilityRole="button"
-        onPress={onNew}
-        style={({ hovered, pressed }: PressState) => [
-          styles.newConvBtn,
-          motion,
-          hovered && styles.newConvBtnHover,
-          pressed && ({ opacity: 0.9 } as ViewStyle),
-        ]}
-      >
-        <RiAddLine color={accent.accentText} size={17} />
-        <Text style={styles.newConvLabel}>新对话</Text>
-      </Pressable>
-
-      <ScrollView contentContainerStyle={styles.historyList} style={{ flex: 1 } as ViewStyle}>
-        {conversations.map((conversation) => (
-          <HistoryRow
-            accent={accent}
-            active={conversation.id === activeId}
-            conversation={conversation}
-            count={counts[conversation.id]}
-            key={conversation.id}
-            onDelete={() => onDelete(conversation.id)}
-            onSelect={() => onSelect(conversation.id)}
-            styles={styles}
-            theme={theme}
-          />
-        ))}
-      </ScrollView>
     </View>
   );
 }
@@ -317,7 +352,10 @@ function HistoryRow({
       ]}
     >
       <View style={{ flex: 1, minWidth: 0 } as ViewStyle}>
-        <Text numberOfLines={1} style={styles.historyRowTitle}>
+        <Text
+          numberOfLines={1}
+          style={[styles.historyRowTitle, active && styles.historyRowActiveTitle]}
+        >
           {conversation.title?.trim() || "新对话"}
         </Text>
         <Text style={styles.historyRowMeta}>{meta}</Text>
@@ -352,12 +390,16 @@ type Styles = ReturnType<typeof makeStyles>;
 
 function makeStyles(theme: Theme, accent: Accent) {
   const t = theme.t;
+  const overlayFill = theme.useSolid ? t.overlaySolid : t.overlaySurface;
   return StyleSheet.create({
     panel: {
       flex: 1,
       minWidth: 0,
       backgroundColor: t.cardSurface,
-    },
+      fontFamily: UI_FONT,
+      position: "relative",
+      overflow: "hidden",
+    } as ViewStyle,
     header: {
       alignItems: "center",
       flexDirection: "row",
@@ -382,18 +424,19 @@ function makeStyles(theme: Theme, accent: Accent) {
       width: 30,
     },
     headerBtnHover: { backgroundColor: t.controlHover },
-    modelRow: {
+    // The model picker genuinely floats above the conversation (no divider, no row).
+    modelFloat: {
       alignItems: "center",
-      flexDirection: "row",
-      justifyContent: "center",
-      paddingVertical: 8,
-      borderBottomColor: t.separator,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-    },
+      left: 0,
+      position: "absolute",
+      right: 0,
+      top: 8,
+      zIndex: 4,
+    } as ViewStyle,
     body: { flex: 1, minHeight: 0, position: "relative" },
     // Mirror the main chat's chatMainContent padding so the composer + messages
-    // get the same breathing room from the panel edges and window bottom.
-    bodyPad: { flex: 1, minHeight: 0, paddingBottom: 12, paddingHorizontal: 10 },
+    // get the same breathing room. Top padding clears the floating model picker.
+    bodyPad: { flex: 1, minHeight: 0, paddingBottom: 12, paddingHorizontal: 10, paddingTop: 46 },
     empty: {
       alignItems: "center",
       flex: 1,
@@ -409,58 +452,76 @@ function makeStyles(theme: Theme, accent: Accent) {
       paddingHorizontal: 12,
       paddingVertical: 6,
     },
-    // ── Conversation history: a floating card that slides over the thread. ──
-    historyCard: {
-      backgroundColor: t.cardSurface,
-      borderColor: t.separator,
-      borderRadius: 16,
-      borderWidth: StyleSheet.hairlineWidth,
-      bottom: 10,
-      boxShadow: modalShadow(t),
-      left: 10,
+    // ── Conversation history: a right-side drawer with a click-to-close left gap. ──
+    historyOverlay: {
+      bottom: 0,
+      left: 0,
       position: "absolute",
-      right: 10,
-      top: 10,
-      zIndex: 5,
+      right: 0,
+      top: 0,
+      zIndex: 20,
+    } as ViewStyle,
+    historyScrim: {
+      backgroundColor: "rgba(20,28,40,0.14)",
+      bottom: 0,
+      left: 0,
+      position: "absolute",
+      right: 0,
+      top: 0,
+    } as ViewStyle,
+    historyCard: {
+      backgroundColor: overlayFill,
+      borderLeftColor: t.separator,
+      borderLeftWidth: StyleSheet.hairlineWidth,
+      bottom: 0,
+      boxShadow: modalShadow(t),
+      left: 46,
+      position: "absolute",
+      right: 0,
+      top: 0,
     } as ViewStyle,
     historyHeader: {
-      alignItems: "flex-start",
+      alignItems: "center",
+      borderBottomColor: t.separator,
+      borderBottomWidth: StyleSheet.hairlineWidth,
       flexDirection: "row",
+      gap: 8,
+      height: 48,
       justifyContent: "space-between",
-      paddingHorizontal: 18,
-      paddingTop: 16,
+      paddingHorizontal: 16,
     },
-    historyTitle: { color: t.textPrimary, fontSize: 16, fontWeight: "700" },
-    historyCount: { color: t.textTertiary, fontSize: 12.5, marginTop: 3 },
+    historyTitle: { color: t.textPrimary, fontSize: 15, fontWeight: "700", letterSpacing: -0.2 },
+    historyCount: { color: t.textTertiary, fontSize: 12, marginTop: 2 },
     newConvBtn: {
       alignItems: "center",
       backgroundColor: accent.selectedFill,
-      borderColor: accent.wash,
-      borderRadius: 12,
-      borderWidth: StyleSheet.hairlineWidth,
+      borderRadius: 11,
       flexDirection: "row",
-      gap: 7,
+      gap: 6,
       justifyContent: "center",
-      marginHorizontal: 16,
-      marginTop: 14,
-      paddingVertical: 13,
+      marginHorizontal: 14,
+      marginTop: 12,
+      paddingVertical: 11,
     },
     newConvBtnHover: { backgroundColor: accent.iconBadge },
-    newConvLabel: { color: accent.accentText, fontSize: 14, fontWeight: "600" },
-    historyList: { gap: 4, paddingHorizontal: 10, paddingTop: 12, paddingBottom: 14 },
+    newConvLabel: { color: accent.accentText, fontSize: 13.5, fontWeight: "600" },
+    historyList: { gap: 2, paddingBottom: 14, paddingHorizontal: 8, paddingTop: 10 },
+    historyEmpty: { alignItems: "center", paddingHorizontal: 20, paddingVertical: 40 },
+    historyEmptyText: { color: t.textTertiary, fontSize: 12.5, textAlign: "center" },
     historyRow: {
       alignItems: "center",
       borderRadius: 10,
       flexDirection: "row",
       gap: 8,
-      minHeight: 52,
+      minHeight: 50,
       paddingHorizontal: 12,
-      paddingVertical: 10,
+      paddingVertical: 9,
     },
     historyRowActive: { backgroundColor: accent.selectedFill },
-    historyRowHover: { backgroundColor: t.controlIdle },
-    historyRowTitle: { color: t.textPrimary, fontSize: 14, fontWeight: "600" },
-    historyRowMeta: { color: t.textTertiary, fontSize: 12, marginTop: 4 },
+    historyRowHover: { backgroundColor: t.controlHover },
+    historyRowTitle: { color: t.textPrimary, fontSize: 13.5, fontWeight: "600" },
+    historyRowActiveTitle: { color: accent.accentText },
+    historyRowMeta: { color: t.textTertiary, fontSize: 11.5, marginTop: 3 },
     historyDelete: {
       alignItems: "center",
       borderRadius: 7,

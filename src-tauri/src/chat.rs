@@ -54,8 +54,20 @@ pub struct Assistant {
     default_provider_id: Option<String>,
     #[serde(default)]
     default_model_id: Option<String>,
+    /// Whether this assistant offers tools (web search / PDF / document export)
+    /// to the model at all. Defaults to true so existing assistants are unchanged.
+    #[serde(default = "default_true")]
+    tools_enabled: bool,
+    /// Which tool ids the assistant may use. `None` = all available tools
+    /// (backward-compatible default); `Some(list)` = only those.
+    #[serde(default)]
+    tool_ids: Option<Vec<String>>,
     created_at: u64,
     updated_at: u64,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,6 +172,7 @@ fn safe_scope(scope: &str) -> Result<&'static str, String> {
     match scope {
         "chat" => Ok("chat"),
         "notes" => Ok("notes"),
+        "papers" => Ok("papers"),
         "todo" => Ok("todo"),
         "travel" => Ok("travel"),
         _ => Err("未知的侧边栏作用域。".into()),
@@ -370,6 +383,7 @@ pub fn list_assistants(app: AppHandle) -> Result<Vec<Assistant>, String> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn create_assistant(
     app: AppHandle,
     name: String,
@@ -377,6 +391,8 @@ pub fn create_assistant(
     emoji: Option<String>,
     default_provider_id: Option<String>,
     default_model_id: Option<String>,
+    tools_enabled: Option<bool>,
+    tool_ids: Option<Vec<String>>,
 ) -> Result<Assistant, String> {
     let root = chat_root(&app, None)?;
     let id = unique_dir_name(&root, &name);
@@ -391,6 +407,8 @@ pub fn create_assistant(
         emoji: normalized_assistant_emoji(emoji.unwrap_or_default()),
         default_provider_id: default_provider_id.filter(|value| !value.is_empty()),
         default_model_id: default_model_id.filter(|value| !value.is_empty()),
+        tools_enabled: tools_enabled.unwrap_or(true),
+        tool_ids,
         created_at: timestamp,
         updated_at: timestamp,
     };
@@ -399,6 +417,7 @@ pub fn create_assistant(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn update_assistant(
     app: AppHandle,
     id: String,
@@ -407,6 +426,8 @@ pub fn update_assistant(
     emoji: Option<String>,
     default_provider_id: Option<String>,
     default_model_id: Option<String>,
+    tools_enabled: Option<bool>,
+    tool_ids: Option<Vec<String>>,
 ) -> Result<Assistant, String> {
     let dir = assistant_dir(&app, None, &id)?;
     let config = dir.join(ASSISTANT_FILE);
@@ -416,10 +437,12 @@ pub fn update_assistant(
     if let Some(emoji) = emoji {
         assistant.emoji = normalized_assistant_emoji(emoji);
     }
-    // Model fields are always sent by the settings form (as null when unset), so
-    // assign them directly rather than only-when-Some.
+    // Model + tool fields are always sent by the settings form (as null when
+    // unset), so assign them directly rather than only-when-Some.
     assistant.default_provider_id = default_provider_id.filter(|s| !s.is_empty());
     assistant.default_model_id = default_model_id.filter(|s| !s.is_empty());
+    assistant.tools_enabled = tools_enabled.unwrap_or(true);
+    assistant.tool_ids = tool_ids;
     assistant.updated_at = now();
     write_json(&config, &assistant)?;
     Ok(assistant)
@@ -536,6 +559,8 @@ fn ensure_default_assistant(app: &AppHandle, scope: Option<&str>) -> Result<Path
             emoji: random_assistant_emoji(),
             default_provider_id: None,
             default_model_id: None,
+            tools_enabled: true,
+            tool_ids: None,
             created_at: timestamp,
             updated_at: timestamp,
         };
@@ -565,12 +590,15 @@ pub fn create_default_conversation(
 /// Configure the system prompt and model inherited by ordinary conversations
 /// created from "全部对话". Null model values inherit the global default.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn set_default_conversation_settings(
     app: AppHandle,
     emoji: String,
     system_prompt: String,
     provider_id: Option<String>,
     model_id: Option<String>,
+    tools_enabled: Option<bool>,
+    tool_ids: Option<Vec<String>>,
 ) -> Result<Assistant, String> {
     let dir = ensure_default_assistant(&app, None)?;
     let config = dir.join(ASSISTANT_FILE);
@@ -584,6 +612,8 @@ pub fn set_default_conversation_settings(
         Some((provider_id, model_id)) => (Some(provider_id), Some(model_id)),
         None => (None, None),
     };
+    assistant.tools_enabled = tools_enabled.unwrap_or(true);
+    assistant.tool_ids = tool_ids;
     assistant.updated_at = now();
     write_json(&config, &assistant)?;
     Ok(assistant)
@@ -1138,6 +1168,18 @@ pub(crate) fn assistant_profile(
     let dir = assistant_dir(app, scope, assistant_id)?;
     let assistant: Assistant = read_json(&dir.join(ASSISTANT_FILE))?;
     Ok((assistant.name, assistant.system_prompt))
+}
+
+/// The assistant's tool preferences: whether tools are offered at all, and the
+/// allow-list of tool ids (`None` = all available tools).
+pub(crate) fn assistant_tool_config(
+    app: &AppHandle,
+    scope: Option<&str>,
+    assistant_id: &str,
+) -> Result<(bool, Option<Vec<String>>), String> {
+    let dir = assistant_dir(app, scope, assistant_id)?;
+    let assistant: Assistant = read_json(&dir.join(ASSISTANT_FILE))?;
+    Ok((assistant.tools_enabled, assistant.tool_ids))
 }
 
 /// Resolve a conversation's model through conversation → assistant scope →

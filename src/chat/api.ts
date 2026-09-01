@@ -10,9 +10,45 @@ export interface Assistant {
   emoji: string;
   defaultProviderId?: string | null;
   defaultModelId?: string | null;
+  /** Whether this assistant offers tools to the model at all. */
+  toolsEnabled?: boolean;
+  /** Allow-list of tool ids; `null`/absent = all available tools. */
+  toolIds?: string[] | null;
   createdAt: number;
   updatedAt: number;
 }
+
+/** The tools the chat model can be given. Kept in sync with `tool_schemas` in
+ *  src-tauri/src/chat_agent.rs. `requires` notes what a tool needs to actually
+ *  run (shown as a hint); the model still only sees enabled tools. */
+export const CHAT_TOOLS: { id: string; name: string; description: string; requires?: string }[] = [
+  {
+    id: "web_search",
+    name: "联网搜索",
+    description: "用 Exa 搜索互联网获取最新信息",
+    requires: "需在设置中配置 Exa Key",
+  },
+  {
+    id: "create_markdown_document",
+    name: "生成文档",
+    description: "把 Markdown 导出为 PDF / PNG 文件",
+  },
+  {
+    id: "get_pdf_fulltext",
+    name: "读取 PDF 文本",
+    description: "提取对话中 PDF 附件的全文",
+    requires: "对话中需有 PDF 附件",
+  },
+  {
+    id: "render_pdf_pages",
+    name: "渲染 PDF 页面",
+    description: "把 PDF 页面渲染成图片以查看图表",
+    requires: "对话中需有 PDF 附件",
+  },
+];
+
+/** All tool ids, in catalog order — the default for a new assistant. */
+export const ALL_TOOL_IDS = CHAT_TOOLS.map((tool) => tool.id);
 
 export interface Conversation {
   id: string;
@@ -248,6 +284,8 @@ export async function createAssistant(
   emoji?: string,
   defaultProviderId?: string | null,
   defaultModelId?: string | null,
+  toolsEnabled: boolean = true,
+  toolIds: string[] | null = null,
 ): Promise<Assistant> {
   if (isTauri()) {
     return invoke<Assistant>("create_assistant", {
@@ -256,6 +294,8 @@ export async function createAssistant(
       emoji,
       defaultProviderId: defaultProviderId ?? null,
       defaultModelId: defaultModelId ?? null,
+      toolsEnabled,
+      toolIds,
     });
   }
   const ts = nowSec();
@@ -266,6 +306,8 @@ export async function createAssistant(
     emoji: emoji?.trim() || randomAssistantEmoji(),
     defaultProviderId: defaultProviderId ?? null,
     defaultModelId: defaultModelId ?? null,
+    toolsEnabled,
+    toolIds,
     createdAt: ts,
     updatedAt: ts,
   };
@@ -281,6 +323,8 @@ export async function updateAssistant(
   emoji?: string,
   defaultProviderId?: string | null,
   defaultModelId?: string | null,
+  toolsEnabled: boolean = true,
+  toolIds: string[] | null = null,
 ): Promise<Assistant> {
   if (isTauri()) {
     return invoke<Assistant>("update_assistant", {
@@ -290,6 +334,8 @@ export async function updateAssistant(
       emoji,
       defaultProviderId: defaultProviderId ?? null,
       defaultModelId: defaultModelId ?? null,
+      toolsEnabled,
+      toolIds,
     });
   }
   const assistant = preview.assistants.find((item) => item.id === id);
@@ -303,6 +349,8 @@ export async function updateAssistant(
   }
   assistant.defaultProviderId = defaultProviderId ?? null;
   assistant.defaultModelId = defaultModelId ?? null;
+  assistant.toolsEnabled = toolsEnabled;
+  assistant.toolIds = toolIds;
   assistant.updatedAt = nowSec();
   return { ...assistant };
 }
@@ -443,6 +491,8 @@ export async function setDefaultConversationSettings(
   systemPrompt: string,
   providerId: string | null,
   modelId: string | null,
+  toolsEnabled: boolean = true,
+  toolIds: string[] | null = null,
 ): Promise<Assistant> {
   if (isTauri()) {
     return invoke<Assistant>("set_default_conversation_settings", {
@@ -450,6 +500,8 @@ export async function setDefaultConversationSettings(
       systemPrompt,
       providerId,
       modelId,
+      toolsEnabled,
+      toolIds,
     });
   }
   const assistant = ensurePreviewDefaultAssistant();
@@ -457,6 +509,8 @@ export async function setDefaultConversationSettings(
   assistant.systemPrompt = systemPrompt;
   assistant.defaultProviderId = providerId;
   assistant.defaultModelId = modelId;
+  assistant.toolsEnabled = toolsEnabled;
+  assistant.toolIds = toolIds;
   assistant.updatedAt = nowSec();
   return { ...assistant };
 }

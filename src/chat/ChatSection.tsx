@@ -13,6 +13,7 @@ import {
 import {
   RiAddLine,
   RiArrowDownSLine,
+  RiCheckLine,
   RiCloseLine,
   RiDeleteBinLine,
   RiEditBoxLine,
@@ -36,7 +37,13 @@ import { findDefaultModel, isChatModel, type Provider } from "../providers/api";
 import { providerIconUrl } from "../providers/icons";
 import { useConversationSending } from "./useConversation";
 import type { ChatData } from "./useChat";
-import { DEFAULT_ASSISTANT_ID, type Assistant, type ConversationSummary } from "./api";
+import {
+  ALL_TOOL_IDS,
+  CHAT_TOOLS,
+  DEFAULT_ASSISTANT_ID,
+  type Assistant,
+  type ConversationSummary,
+} from "./api";
 import { ASSISTANT_EMOJIS, assistantEmoji, badgeForEmoji, randomAssistantEmoji } from "./emoji";
 
 type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
@@ -339,6 +346,72 @@ function makeChatStyles(theme: Theme, accent: Accent) {
       boxShadow: `0 0 0 3px rgba(${accent.rgb},0.25)`,
     },
     actions: { alignItems: "center", flexDirection: "row", gap: 8, marginTop: 14 },
+    toolsHeaderRow: {
+      alignItems: "center",
+      flexDirection: "row",
+      justifyContent: "space-between",
+    },
+    toolsSwitch: {
+      backgroundColor: t.controlBorder,
+      borderRadius: 999,
+      height: 20,
+      justifyContent: "center",
+      marginBottom: 6,
+      padding: 2,
+      width: 36,
+    },
+    toolsSwitchKnob: {
+      backgroundColor: "#FFFFFF",
+      borderRadius: 999,
+      boxShadow: "0 1px 2px rgba(20,28,40,0.25)",
+      height: 16,
+      width: 16,
+    },
+    toolsSelect: {
+      alignItems: "center",
+      backgroundColor: t.cardSurfaceAlt,
+      borderColor: t.separator,
+      borderRadius: 9,
+      borderWidth: 1,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      minHeight: 40,
+      paddingHorizontal: 11,
+    },
+    toolsSelectText: { color: t.textPrimary, flex: 1, fontSize: 13, minWidth: 0 },
+    toolsMenu: {
+      backgroundColor: t.cardSurface,
+      borderColor: t.separator,
+      borderRadius: 11,
+      borderWidth: 1,
+      boxShadow: "0 14px 36px rgba(16,24,36,0.18), 0 2px 8px rgba(16,24,36,0.08)",
+      marginTop: 6,
+      overflow: "hidden",
+      padding: 5,
+      position: "absolute",
+      top: "100%",
+      width: "100%",
+      zIndex: 40,
+    },
+    toolsMenuItem: {
+      alignItems: "center",
+      borderRadius: 8,
+      flexDirection: "row",
+      gap: 10,
+      paddingHorizontal: 9,
+      paddingVertical: 8,
+    },
+    toolsCheckbox: {
+      alignItems: "center",
+      borderColor: t.controlBorder,
+      borderRadius: 6,
+      borderWidth: 1.5,
+      height: 18,
+      justifyContent: "center",
+      width: 18,
+    },
+    toolsItemName: { color: t.textPrimary, fontSize: 12.5, fontWeight: "600" },
+    toolsItemDesc: { color: t.textTertiary, fontSize: 11, marginTop: 1 },
     primaryButton: {
       alignItems: "center",
       backgroundColor: accent.accent,
@@ -1108,6 +1181,16 @@ export function AssistantEditorModal({
   const [modelId, setModelId] = useState<string | null>(
     defaultConversation ? chat.defaultConversationModelId : (assistant?.defaultModelId ?? null),
   );
+  const [toolsEnabled, setToolsEnabled] = useState<boolean>(
+    defaultConversation ? chat.defaultConversationToolsEnabled : (assistant?.toolsEnabled ?? true),
+  );
+  // Which tool ids are checked; `null` from storage means "all tools".
+  const [enabledToolIds, setEnabledToolIds] = useState<string[]>(
+    () =>
+      (defaultConversation ? chat.defaultConversationToolIds : assistant?.toolIds) ?? ALL_TOOL_IDS,
+  );
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const toolsPickerRef = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState<"name" | "prompt" | "model" | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1131,18 +1214,44 @@ export function AssistantEditorModal({
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [emojiOpen]);
 
+  useEffect(() => {
+    if (!toolsOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!toolsPickerRef.current?.contains(event.target as Node)) setToolsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [toolsOpen]);
+
+  // A stable signature of the tool choice, for the dirty check. `null` toolIds
+  // (from storage) means "all tools", so normalise both sides to the full list.
+  const toolSig = (enabled: boolean, ids: string[] | null | undefined) =>
+    `${enabled}|${[...(ids ?? ALL_TOOL_IDS)].sort().join(",")}`;
+  const currentToolSig = toolSig(toolsEnabled, enabledToolIds);
+  const toggleTool = (id: string) =>
+    setEnabledToolIds((prev) =>
+      prev.includes(id)
+        ? prev.filter((t) => t !== id)
+        : ALL_TOOL_IDS.filter((t) => prev.includes(t) || t === id),
+    );
+  // Persist `null` when every tool is on (future-proof: new tools auto-enable).
+  const toolIdsToSave = enabledToolIds.length === CHAT_TOOLS.length ? null : enabledToolIds;
+
   const enabledProviders = providers.filter((provider) => provider.enabled);
   const dirty = defaultConversation
     ? emoji !== chat.defaultConversationEmoji ||
       prompt !== chat.defaultConversationSystemPrompt ||
       (providerId ?? null) !== (chat.defaultConversationProviderId ?? null) ||
-      (modelId ?? null) !== (chat.defaultConversationModelId ?? null)
+      (modelId ?? null) !== (chat.defaultConversationModelId ?? null) ||
+      currentToolSig !==
+        toolSig(chat.defaultConversationToolsEnabled, chat.defaultConversationToolIds)
     : assistant
       ? name !== assistant.name ||
         emoji !== assistantEmoji(assistant.emoji, assistant.id) ||
         prompt !== assistant.systemPrompt ||
         (providerId ?? null) !== (assistant.defaultProviderId ?? null) ||
-        (modelId ?? null) !== (assistant.defaultModelId ?? null)
+        (modelId ?? null) !== (assistant.defaultModelId ?? null) ||
+        currentToolSig !== toolSig(assistant.toolsEnabled ?? true, assistant.toolIds)
       : Boolean(name.trim() || prompt || emoji || providerId || modelId);
 
   async function save() {
@@ -1150,13 +1259,37 @@ export function AssistantEditorModal({
     setError(null);
     try {
       if (defaultConversation) {
-        await chat.saveDefaultConversationSettings(emoji, prompt, providerId, modelId);
+        await chat.saveDefaultConversationSettings(
+          emoji,
+          prompt,
+          providerId,
+          modelId,
+          toolsEnabled,
+          toolIdsToSave,
+        );
         onClose();
       } else if (assistant) {
-        await chat.saveAssistant(assistant.id, name, prompt, emoji, providerId, modelId);
+        await chat.saveAssistant(
+          assistant.id,
+          name,
+          prompt,
+          emoji,
+          providerId,
+          modelId,
+          toolsEnabled,
+          toolIdsToSave,
+        );
         onClose();
       } else {
-        const id = await chat.createAssistant(name, prompt, emoji, providerId, modelId);
+        const id = await chat.createAssistant(
+          name,
+          prompt,
+          emoji,
+          providerId,
+          modelId,
+          toolsEnabled,
+          toolIdsToSave,
+        );
         if (!id) throw new Error("无法创建助手");
         onCreated(id);
         onClose();
@@ -1436,6 +1569,95 @@ export function AssistantEditorModal({
                   }}
                 />
               </div>
+
+              {/* Tools: whether this assistant offers tools, and which ones. */}
+              <div ref={toolsPickerRef} style={{ width: "100%" }}>
+                <View style={[styles.toolsHeaderRow, { marginTop: 14 } as ViewStyle]}>
+                  <Text style={styles.fieldLabel}>工具</Text>
+                  <Pressable
+                    accessibilityLabel={toolsEnabled ? "关闭工具" : "启用工具"}
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: toolsEnabled }}
+                    onPress={() => setToolsEnabled((value) => !value)}
+                    style={[styles.toolsSwitch, toolsEnabled && { backgroundColor: accent.accent }]}
+                  >
+                    <View
+                      style={[
+                        styles.toolsSwitchKnob,
+                        toolsEnabled && { transform: [{ translateX: 16 }] },
+                      ]}
+                    />
+                  </Pressable>
+                </View>
+                <div style={{ position: "relative", width: "100%" }}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: !toolsEnabled, expanded: toolsOpen }}
+                    disabled={!toolsEnabled}
+                    onPress={() => setToolsOpen((open) => !open)}
+                    style={({ hovered }: PressState) => [
+                      styles.toolsSelect,
+                      motion,
+                      !toolsEnabled && ({ opacity: 0.5 } as ViewStyle),
+                      hovered && toolsEnabled && ({ borderColor: accent.accent } as ViewStyle),
+                      toolsOpen && {
+                        borderColor: accent.accent,
+                        boxShadow: `0 0 0 3px rgba(${accent.rgb},0.16)`,
+                      },
+                    ]}
+                  >
+                    <Text style={styles.toolsSelectText} numberOfLines={1}>
+                      {!toolsEnabled
+                        ? "已关闭 — 不向模型提供工具"
+                        : enabledToolIds.length === 0
+                          ? "未选择工具"
+                          : enabledToolIds.length === CHAT_TOOLS.length
+                            ? "全部工具"
+                            : `已选 ${enabledToolIds.length} / ${CHAT_TOOLS.length} 项工具`}
+                    </Text>
+                    <RiArrowDownSLine color={theme.t.textTertiary} size={17} />
+                  </Pressable>
+                  {toolsOpen && toolsEnabled ? (
+                    <View style={styles.toolsMenu}>
+                      {CHAT_TOOLS.map((tool) => {
+                        const checked = enabledToolIds.includes(tool.id);
+                        return (
+                          <Pressable
+                            accessibilityRole="checkbox"
+                            accessibilityState={{ checked }}
+                            key={tool.id}
+                            onPress={() => toggleTool(tool.id)}
+                            style={({ hovered }: PressState) => [
+                              styles.toolsMenuItem,
+                              hovered && ({ backgroundColor: theme.t.controlHover } as ViewStyle),
+                            ]}
+                          >
+                            <View
+                              style={[
+                                styles.toolsCheckbox,
+                                checked && {
+                                  backgroundColor: accent.accent,
+                                  borderColor: accent.accent,
+                                },
+                              ]}
+                            >
+                              {checked ? <RiCheckLine color={theme.t.onAccent} size={13} /> : null}
+                            </View>
+                            <View style={{ flex: 1, minWidth: 0 }}>
+                              <Text style={styles.toolsItemName}>{tool.name}</Text>
+                              <Text style={styles.toolsItemDesc} numberOfLines={1}>
+                                {tool.description}
+                                {tool.requires ? ` · ${tool.requires}` : ""}
+                              </Text>
+                            </View>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  ) : null}
+                </div>
+              </div>
+
               <View style={styles.actions}>
                 <Pressable
                   accessibilityRole="button"

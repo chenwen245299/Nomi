@@ -22,6 +22,14 @@ export default defineConfig(async () => ({
     dedupe: ["react", "react-dom", "react-native-web"],
   },
 
+  // maplibre-gl ships a web worker that Vite's dep pre-bundler mangles (it looks
+  // for a non-existent maplibre-gl-worker.mjs and the map canvas never inits).
+  // Excluding it — and pmtiles, which maplibre loads as a protocol — keeps their
+  // worker/module resolution intact.
+  optimizeDeps: {
+    exclude: ["maplibre-gl", "pmtiles"],
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

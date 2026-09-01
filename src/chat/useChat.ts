@@ -34,6 +34,8 @@ export interface ChatData {
   defaultConversationModelId: string | null;
   defaultConversationSystemPrompt: string;
   defaultConversationEmoji: string;
+  defaultConversationToolsEnabled: boolean;
+  defaultConversationToolIds: string[] | null;
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
@@ -47,6 +49,8 @@ export interface ChatData {
     emoji: string,
     defaultProviderId: string | null,
     defaultModelId: string | null,
+    toolsEnabled: boolean,
+    toolIds: string[] | null,
   ) => Promise<string | null>;
   saveAssistant: (
     id: string,
@@ -55,12 +59,16 @@ export interface ChatData {
     emoji: string,
     defaultProviderId: string | null,
     defaultModelId: string | null,
+    toolsEnabled: boolean,
+    toolIds: string[] | null,
   ) => Promise<void>;
   saveDefaultConversationSettings: (
     emoji: string,
     systemPrompt: string,
     providerId: string | null,
     modelId: string | null,
+    toolsEnabled: boolean,
+    toolIds: string[] | null,
   ) => Promise<void>;
   removeAssistant: (id: string) => Promise<void>;
   createConversation: (
@@ -104,6 +112,10 @@ export function useChat(active: boolean): ChatData {
   const [defaultConversationModelId, setDefaultConversationModelId] = useState<string | null>(null);
   const [defaultConversationSystemPrompt, setDefaultConversationSystemPrompt] = useState("");
   const [defaultConversationEmoji, setDefaultConversationEmoji] = useState("");
+  const [defaultConversationToolsEnabled, setDefaultConversationToolsEnabled] = useState(true);
+  const [defaultConversationToolIds, setDefaultConversationToolIds] = useState<string[] | null>(
+    null,
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const loadedRef = useRef(false);
@@ -123,6 +135,8 @@ export function useChat(active: boolean): ChatData {
       setDefaultConversationModelId(defaultAssistant?.defaultModelId ?? null);
       setDefaultConversationSystemPrompt(defaultAssistant?.systemPrompt ?? "");
       setDefaultConversationEmoji(assistantEmoji(defaultAssistant?.emoji, DEFAULT_ASSISTANT_ID));
+      setDefaultConversationToolsEnabled(defaultAssistant?.toolsEnabled ?? true);
+      setDefaultConversationToolIds(defaultAssistant?.toolIds ?? null);
       // The implicit default assistant is never shown in the switcher; its
       // conversations still surface in the flat list under "默认助手".
       setAssistants(rawAssistants.filter((a) => a.id !== DEFAULT_ASSISTANT_ID));
@@ -224,6 +238,8 @@ export function useChat(active: boolean): ChatData {
       emoji: string,
       defaultProviderId: string | null,
       defaultModelId: string | null,
+      toolsEnabled: boolean,
+      toolIds: string[] | null,
     ) => {
       try {
         const created = await createAssistant(
@@ -232,6 +248,8 @@ export function useChat(active: boolean): ChatData {
           emoji,
           defaultProviderId,
           defaultModelId,
+          toolsEnabled,
+          toolIds,
         );
         await refresh();
         return created.id;
@@ -251,6 +269,8 @@ export function useChat(active: boolean): ChatData {
       emoji: string,
       defaultProviderId: string | null,
       defaultModelId: string | null,
+      toolsEnabled: boolean,
+      toolIds: string[] | null,
     ) => {
       try {
         await updateAssistant(
@@ -260,6 +280,8 @@ export function useChat(active: boolean): ChatData {
           emoji,
           defaultProviderId,
           defaultModelId,
+          toolsEnabled,
+          toolIds,
         );
         await refresh();
       } catch (err) {
@@ -289,6 +311,8 @@ export function useChat(active: boolean): ChatData {
       systemPrompt: string,
       providerId: string | null,
       modelId: string | null,
+      toolsEnabled: boolean,
+      toolIds: string[] | null,
     ) => {
       try {
         const saved = await setDefaultConversationSettings(
@@ -296,11 +320,15 @@ export function useChat(active: boolean): ChatData {
           systemPrompt,
           providerId,
           modelId,
+          toolsEnabled,
+          toolIds,
         );
         setDefaultConversationEmoji(assistantEmoji(saved.emoji, DEFAULT_ASSISTANT_ID));
         setDefaultConversationProviderId(saved.defaultProviderId ?? null);
         setDefaultConversationModelId(saved.defaultModelId ?? null);
         setDefaultConversationSystemPrompt(saved.systemPrompt ?? "");
+        setDefaultConversationToolsEnabled(saved.toolsEnabled ?? true);
+        setDefaultConversationToolIds(saved.toolIds ?? null);
       } catch (err) {
         setError(String(err));
         throw err;
@@ -403,6 +431,8 @@ export function useChat(active: boolean): ChatData {
       defaultConversationModelId,
       defaultConversationSystemPrompt,
       defaultConversationEmoji,
+      defaultConversationToolsEnabled,
+      defaultConversationToolIds,
       loading,
       error,
       refresh,
@@ -428,6 +458,8 @@ export function useChat(active: boolean): ChatData {
       defaultConversationModelId,
       defaultConversationSystemPrompt,
       defaultConversationEmoji,
+      defaultConversationToolsEnabled,
+      defaultConversationToolIds,
       loading,
       error,
       refresh,

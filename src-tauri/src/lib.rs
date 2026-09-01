@@ -5,10 +5,12 @@ mod finance;
 mod llm;
 mod mcp;
 mod notes;
+mod papers;
 mod pdf;
 mod providers;
 mod storage;
 mod todos;
+mod travel;
 
 use chat::{
     add_context_marker, create_assistant, create_conversation, create_default_conversation,
@@ -36,6 +38,11 @@ use notes::{
     notes_tree, read_note, read_note_assets, rename_folder, rename_note, save_note,
     save_note_image,
 };
+use papers::{
+    PapersState, papers_add_edge, papers_create_paper, papers_delete_edge, papers_delete_paper,
+    papers_load_graph, papers_move_paper, papers_read_assets, papers_read_body, papers_reveal,
+    papers_save_body, papers_save_image, papers_update_edge, papers_update_paper,
+};
 use providers::{
     create_provider, delete_provider, fetch_provider_models, list_providers, provider_balance,
     provider_has_key, set_default_model, set_provider_enabled, set_provider_key, test_provider,
@@ -45,6 +52,14 @@ use storage::{get_storage_status, set_storage_root};
 use todos::{
     clear_done_todos, create_todo, delete_todo, reorder_todos, todo_reveal_path, todos_list,
     update_todo,
+};
+use travel::{
+    travel_create_note, travel_create_plan, travel_delete_map, travel_delete_note,
+    travel_delete_plan, travel_download_map, travel_get_settings, travel_import_map,
+    travel_list_maps, travel_list_notes, travel_list_plans, travel_map_read_range,
+    travel_read_note, travel_read_note_assets, travel_reveal, travel_reveal_maps, travel_save_note,
+    travel_save_note_image, travel_save_plan, travel_set_settings, travel_update_map,
+    travel_update_note,
 };
 
 /// CLI flag that runs the MCP stdio server instead of the GUI.
@@ -65,6 +80,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(ChatCancels::default())
         .manage(RenderJobs::default())
+        .manage(PapersState::default())
         .invoke_handler(tauri::generate_handler![
             get_storage_status,
             set_storage_root,
@@ -128,6 +144,19 @@ pub fn run() {
             save_note_image,
             read_note_assets,
             note_reveal_path,
+            papers_load_graph,
+            papers_create_paper,
+            papers_update_paper,
+            papers_move_paper,
+            papers_delete_paper,
+            papers_read_body,
+            papers_save_body,
+            papers_add_edge,
+            papers_update_edge,
+            papers_delete_edge,
+            papers_save_image,
+            papers_read_assets,
+            papers_reveal,
             todos_list,
             create_todo,
             update_todo,
@@ -149,7 +178,29 @@ pub fn run() {
             finance_delete_record,
             finance_find_duplicates,
             finance_read_receipt,
-            finance_reveal_path
+            finance_reveal_path,
+            travel_list_notes,
+            travel_create_note,
+            travel_read_note,
+            travel_save_note,
+            travel_update_note,
+            travel_delete_note,
+            travel_save_note_image,
+            travel_read_note_assets,
+            travel_reveal,
+            travel_list_plans,
+            travel_create_plan,
+            travel_save_plan,
+            travel_delete_plan,
+            travel_get_settings,
+            travel_set_settings,
+            travel_list_maps,
+            travel_import_map,
+            travel_download_map,
+            travel_update_map,
+            travel_delete_map,
+            travel_map_read_range,
+            travel_reveal_maps
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nomi");

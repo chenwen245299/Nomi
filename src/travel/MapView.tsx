@@ -1,0 +1,389 @@
+import { useEffect, useRef } from "react";
+import {
+  AttributionControl,
+  GeoJSONSource,
+  LngLatBounds,
+  Map as MapLibreMap,
+  Marker,
+  NavigationControl,
+  type MapMouseEvent,
+} from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
+import Supercluster from "supercluster";
+import { buildStyle } from "./mapStyle";
+import type { ViewBox } from "./geocode";
+import type { RegionCollection } from "./adminBoundaries";
+
+/** The GeoJSON payload type `GeoJSONSource.setData` accepts (avoids needing the
+ *  global GeoJSON namespace, which isn't hoisted in this workspace). */
+type GeoData = Parameters<GeoJSONSource["setData"]>[0];
+
+// ── MapLibre wrapper ──────────────────────────────────────────────────────────
+// A plain DOM host (works inside react-native-web) that MapLibre owns. Basemap,
+// pins, the trajectory line and camera moves are driven by props; clicks and
+// viewport changes come back through callbacks.
+
+export interface MapMarker {
+  id: string;
+  lat: number;
+  lng: number;
+  /** Pin fill. Defaults to the travel accent. */
+  color?: string;
+  /** 0–5; a filled dot count is drawn under selected pins in the preview, not here. */
+  rating?: number;
+  /** Small glyph inside the pin (e.g. a day number for plan stops). */
+  badge?: string;
+}
+
+export interface MapHandle {
+  flyTo: (lat: number, lng: number, zoom?: number) => void;
+  fit: (markers: { lat: number; lng: number }[]) => void;
+  getViewBox: () => ViewBox | null;
+  getCenter: () => { lat: number; lng: number };
+}
+
+export interface MapViewProps {
+  basemap: string;
+  markers: MapMarker[];
+  /** Ordered [lng, lat] points for the trajectory line, or null to hide it. */
+  routeLine?: [number, number][] | null;
+  /** Filled "lit-up" administrative regions (trajectory view), or null to hide. */
+  regions?: RegionCollection | null;
+  selectedId?: string | null;
+  /** A transient pin for "picking" a location (the crosshair result). */
+  pick?: { lat: number; lng: number } | null;
+  /** Merge nearby pins into a numbered cluster when zoomed out. */
+  cluster?: boolean;
+  onMarkerClick?: (id: string) => void;
+  onMapClick?: (lat: number, lng: number) => void;
+  onViewBoxChange?: (viewBox: ViewBox) => void;
+  onReady?: (handle: MapHandle) => void;
+  accentRgb?: string;
+  /** Initial camera (defaults to a China-wide view). */
+  initial?: { lat: number; lng: number; zoom: number };
+}
+
+const ROUTE_SOURCE = "nomi-route";
+const ROUTE_LAYER = "nomi-route-line";
+const REGION_SOURCE = "nomi-regions";
+const REGION_FILL = "nomi-regions-fill";
+const REGION_LINE = "nomi-regions-line";
+const TRAVEL_ACCENT = "#1FA089";
+
+function makePinElement(marker: MapMarker, selected: boolean, accent: string): HTMLDivElement {
+  const color = marker.color || accent;
+  const el = document.createElement("div");
+  el.className = "nomi-map-pin";
+  el.style.cssText = [
+    "position:relative",
+    "width:26px",
+    "height:34px",
+    "cursor:pointer",
+    `transform:translateY(0) scale(${selected ? 1.18 : 1})`,
+    "transform-origin:50% 100%",
+    "transition:transform 160ms cubic-bezier(0.32,0.72,0,1)",
+  ].join(";");
+  // Teardrop body + inner dot / badge, drawn as inline SVG so it stays crisp.
+  const badge = marker.badge
+    ? `<text x="13" y="15.5" text-anchor="middle" font-size="11" font-weight="700" fill="#fff" font-family="inherit">${marker.badge}</text>`
+    : `<circle cx="13" cy="13" r="4.5" fill="#fff"/>`;
+  el.innerHTML = `
+    <svg width="26" height="34" viewBox="0 0 26 34" fill="none" xmlns="http://www.w3.org/2000/svg"
+         style="filter:drop-shadow(0 3px 5px rgba(16,24,36,0.28))">
+      <path d="M13 0C5.82 0 0 5.82 0 13c0 8.4 11.1 19.6 12.2 20.6a1.1 1.1 0 0 0 1.6 0C14.9 32.6 26 21.4 26 13 26 5.82 20.18 0 13 0Z"
+            fill="${color}"/>
+      ${selected ? `<path d="M13 0C5.82 0 0 5.82 0 13c0 8.4 11.1 19.6 12.2 20.6a1.1 1.1 0 0 0 1.6 0C14.9 32.6 26 21.4 26 13 26 5.82 20.18 0 13 0Z" fill="none" stroke="#fff" stroke-width="2"/>` : ""}
+      ${badge}
+    </svg>`;
+  return el;
+}
+
+export function MapView({
+  basemap,
+  markers,
+  routeLine,
+  regions,
+  selectedId,
+  pick,
+  cluster = false,
+  onMarkerClick,
+  onMapClick,
+  onViewBoxChange,
+  onReady,
+  accentRgb,
+  initial,
+}: MapViewProps) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<MapLibreMap | null>(null);
+  const markersRef = useRef<Map<string, Marker>>(new Map());
+  const pickRef = useRef<Marker | null>(null);
+  const readyRef = useRef(false);
+  const accent = accentRgb ? `rgb(${accentRgb})` : TRAVEL_ACCENT;
+  // Latest callbacks + overlay inputs in a ref, so the once-created map always
+  // reads current values (and the style-swap effect can re-apply the route
+  // without listing routeLine as a dependency, which would rebuild the style).
+  const latest = useRef({ onMarkerClick, onMapClick, onViewBoxChange, routeLine, regions, accent });
+  useEffect(() => {
+    latest.current = { onMarkerClick, onMapClick, onViewBoxChange, routeLine, regions, accent };
+  });
+
+  // Create the map once.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const map = new MapLibreMap({
+      container: host,
+      style: buildStyle(basemap),
+      center: [initial?.lng ?? 105, initial?.lat ?? 35],
+      zoom: initial?.zoom ?? 3.1,
+      attributionControl: false,
+      dragRotate: false,
+      pitchWithRotate: false,
+    });
+    mapRef.current = map;
+    const markerStore = markersRef.current;
+    map.addControl(new AttributionControl({ compact: true }), "bottom-right");
+    map.addControl(new NavigationControl({ showCompass: false }), "bottom-right");
+    map.touchZoomRotate.disableRotation();
+
+    map.on("click", (event: MapMouseEvent) => {
+      latest.current.onMapClick?.(event.lngLat.lat, event.lngLat.lng);
+    });
+    const emitViewBox = () => {
+      const b = map.getBounds();
+      latest.current.onViewBoxChange?.([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+    };
+    map.on("moveend", emitViewBox);
+    map.on("load", () => {
+      readyRef.current = true;
+      applyRegions(map, latest.current.regions ?? null);
+      applyRoute(map, latest.current.routeLine ?? null, latest.current.accent);
+      emitViewBox();
+    });
+
+    const handle: MapHandle = {
+      flyTo: (lat, lng, zoom) =>
+        map.flyTo({ center: [lng, lat], zoom: zoom ?? Math.max(map.getZoom(), 11), speed: 1.4 }),
+      fit: (points) => {
+        if (points.length === 0) return;
+        if (points.length === 1) {
+          map.flyTo({ center: [points[0].lng, points[0].lat], zoom: 11, speed: 1.4 });
+          return;
+        }
+        const bounds = new LngLatBounds();
+        points.forEach((p) => bounds.extend([p.lng, p.lat]));
+        map.fitBounds(bounds, { padding: 96, maxZoom: 13, duration: 700 });
+      },
+      getViewBox: () => {
+        const b = map.getBounds();
+        return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+      },
+      getCenter: () => {
+        const c = map.getCenter();
+        return { lat: c.lat, lng: c.lng };
+      },
+    };
+    onReady?.(handle);
+
+    return () => {
+      markerStore.forEach((m) => m.remove());
+      markerStore.clear();
+      pickRef.current?.remove();
+      pickRef.current = null;
+      map.remove();
+      mapRef.current = null;
+      readyRef.current = false;
+    };
+    // Create-once: subsequent prop changes are handled by the effects below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Swap the basemap style when it changes (re-applies overlays on style.load).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !readyRef.current) return;
+    map.setStyle(buildStyle(basemap));
+    map.once("styledata", () => {
+      applyRegions(map, latest.current.regions ?? null);
+      applyRoute(map, latest.current.routeLine ?? null, latest.current.accent);
+    });
+  }, [basemap]);
+
+  // Reconcile pins against the markers prop — with optional clustering. When
+  // `cluster` is on, a supercluster index groups nearby points at the current
+  // zoom (recomputed on every move), so zooming out merges pins into a numbered
+  // cluster and zooming in / clicking a cluster splits them apart again.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const live = markersRef.current;
+
+    const index = cluster
+      ? new Supercluster<{ markerId: string }>({ radius: 56, maxZoom: 16 })
+      : null;
+    index?.load(
+      markers.map((m) => ({
+        type: "Feature",
+        properties: { markerId: m.id },
+        geometry: { type: "Point", coordinates: [m.lng, m.lat] },
+      })),
+    );
+    const byId = new Map(markers.map((m) => [m.id, m]));
+
+    const render = () => {
+      type Desired = { key: string; lng: number; lat: number; el: HTMLElement };
+      const desired: Desired[] = [];
+      if (index) {
+        const b = map.getBounds();
+        const zoom = Math.round(map.getZoom());
+        for (const feature of index.getClusters(
+          [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()],
+          zoom,
+        )) {
+          const [lng, lat] = feature.geometry.coordinates;
+          const props = feature.properties;
+          if ("cluster" in props && props.cluster) {
+            const count = props.point_count;
+            const el = makePinElement({ id: "c", lat, lng, badge: String(count) }, false, accent);
+            const clusterId = props.cluster_id;
+            el.addEventListener("click", (event) => {
+              event.stopPropagation();
+              const expansion = Math.min(index.getClusterExpansionZoom(clusterId), 18);
+              map.easeTo({ center: [lng, lat], zoom: expansion });
+            });
+            desired.push({ key: `c:${clusterId}`, lng, lat, el });
+          } else {
+            const marker = byId.get(props.markerId);
+            if (!marker) continue;
+            const el = makePinElement(marker, marker.id === selectedId, accent);
+            el.addEventListener("click", (event) => {
+              event.stopPropagation();
+              latest.current.onMarkerClick?.(marker.id);
+            });
+            desired.push({ key: marker.id, lng, lat, el });
+          }
+        }
+      } else {
+        for (const marker of markers) {
+          const el = makePinElement(marker, marker.id === selectedId, accent);
+          el.addEventListener("click", (event) => {
+            event.stopPropagation();
+            latest.current.onMarkerClick?.(marker.id);
+          });
+          desired.push({ key: marker.id, lng: marker.lng, lat: marker.lat, el });
+        }
+      }
+
+      const keys = new Set(desired.map((d) => d.key));
+      for (const [key, marker] of live) {
+        if (!keys.has(key)) {
+          marker.remove();
+          live.delete(key);
+        }
+      }
+      for (const item of desired) {
+        live.get(item.key)?.remove();
+        live.set(
+          item.key,
+          new Marker({ element: item.el, anchor: "bottom" })
+            .setLngLat([item.lng, item.lat])
+            .addTo(map),
+        );
+      }
+    };
+
+    render();
+    if (index) {
+      map.on("moveend", render);
+      return () => {
+        map.off("moveend", render);
+      };
+    }
+    return undefined;
+  }, [markers, selectedId, accent, cluster]);
+
+  // The transient "pick" pin.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!pick) {
+      pickRef.current?.remove();
+      pickRef.current = null;
+      return;
+    }
+    if (!pickRef.current) {
+      const el = makePinElement({ id: "pick", lat: pick.lat, lng: pick.lng }, true, "#C2507A");
+      pickRef.current = new Marker({ element: el, anchor: "bottom" });
+    }
+    pickRef.current.setLngLat([pick.lng, pick.lat]).addTo(map);
+  }, [pick]);
+
+  // Keep the trajectory line in sync on live updates (the `latest` ref covers
+  // re-applying it after a style swap).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map && readyRef.current) applyRoute(map, routeLine ?? null, accent);
+  }, [routeLine, accent]);
+
+  // Keep the lit-up regions in sync on live updates.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map && readyRef.current) applyRegions(map, regions ?? null);
+  }, [regions]);
+
+  return <div ref={hostRef} style={{ position: "absolute", inset: 0 }} />;
+}
+
+/** Add / update / remove the "lit-up" region fill + outline. Warm orange so it
+ *  reads as "visited" and stays distinct from the teal accent. */
+function applyRegions(map: MapLibreMap, regions: RegionCollection | null): void {
+  const data = (regions ?? { type: "FeatureCollection", features: [] }) as unknown as GeoData;
+  const source = map.getSource(REGION_SOURCE) as GeoJSONSource | undefined;
+  if (source) {
+    source.setData(data);
+    return;
+  }
+  if (!regions || regions.features.length === 0) return;
+  map.addSource(REGION_SOURCE, { type: "geojson", data });
+  map.addLayer({
+    id: REGION_FILL,
+    type: "fill",
+    source: REGION_SOURCE,
+    paint: { "fill-color": "#F2994A", "fill-opacity": 0.38 },
+  });
+  map.addLayer({
+    id: REGION_LINE,
+    type: "line",
+    source: REGION_SOURCE,
+    layout: { "line-join": "round" },
+    paint: { "line-color": "#DE7B2C", "line-width": 1.3, "line-opacity": 0.9 },
+  });
+}
+
+/** Add / update / remove the trajectory line source + layer. */
+function applyRoute(map: MapLibreMap, line: [number, number][] | null, accent: string): void {
+  const data: GeoData = {
+    type: "Feature",
+    properties: {},
+    geometry: { type: "LineString", coordinates: line ?? [] },
+  };
+  const source = map.getSource(ROUTE_SOURCE) as GeoJSONSource | undefined;
+  if (source) {
+    source.setData(data);
+    return;
+  }
+  if (!line || line.length < 2) return;
+  map.addSource(ROUTE_SOURCE, { type: "geojson", data });
+  map.addLayer({
+    id: ROUTE_LAYER,
+    type: "line",
+    source: ROUTE_SOURCE,
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": accent,
+      "line-width": 3,
+      "line-opacity": 0.85,
+      "line-dasharray": [1.4, 1.4],
+    },
+  });
+}

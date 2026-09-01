@@ -749,6 +749,7 @@ async fn run_variant(
         .unwrap_or(source_index);
     let history = messages[..context_end].to_vec();
     let pdfs = collect_pdfs(&conv_dir, &history);
+    let (tools_enabled, tool_ids) = chat::assistant_tool_config(app, scope, assistant_id)?;
     let oa_messages = build_oa_messages(
         &system_prompt,
         &history,
@@ -763,6 +764,8 @@ async fn run_variant(
         oa_messages,
         pdfs,
         exa_key,
+        tools_enabled,
+        tool_ids,
         reasoning_effort,
         &conv_dir,
         render_jobs,
@@ -876,6 +879,7 @@ async fn run_chat(
 
     // 2. Which PDFs exist in this conversation (for the tools), and OpenAI messages.
     let pdfs = collect_pdfs(&conv_dir, &messages);
+    let (tools_enabled, tool_ids) = chat::assistant_tool_config(app, scope, assistant_id)?;
     let oa_messages = build_oa_messages(
         &system_prompt,
         &messages,
@@ -891,6 +895,8 @@ async fn run_chat(
         oa_messages,
         pdfs,
         exa_key,
+        tools_enabled,
+        tool_ids,
         reasoning_effort,
         &conv_dir,
         render_jobs,
@@ -914,6 +920,8 @@ async fn generate_assistant(
     mut oa_messages: Vec<Value>,
     pdfs: Vec<(String, PathBuf)>,
     exa_key: Option<String>,
+    tools_enabled: bool,
+    tool_ids: Option<Vec<String>>,
     reasoning_effort: Option<&str>,
     conv_dir: &Path,
     render_jobs: &RenderJobs,
@@ -923,9 +931,11 @@ async fn generate_assistant(
     let has_pdfs = !pdfs.is_empty();
     let has_web_search = exa_key.is_some();
     // `create_markdown_document` is always available, so any tools-capable model
-    // gets the tool array (not just chats with a PDF or web search configured).
-    let expose_tools = target.supports_tools;
-    let tools = expose_tools.then(|| tool_schemas(has_pdfs, has_web_search));
+    // gets the tool array — unless the assistant turned tools off, or narrowed
+    // them via its `tool_ids` allow-list.
+    let expose_tools = target.supports_tools && tools_enabled;
+    let tools =
+        expose_tools.then(|| filtered_tool_schemas(has_pdfs, has_web_search, tool_ids.as_deref()));
     let mut assistant = ChatMessage {
         id: new_id("msg"),
         role: "assistant".into(),
@@ -1174,6 +1184,27 @@ fn user_message_json(
 }
 
 // ── Tools ───────────────────────────────────────────────────────────────────────
+
+/// `tool_schemas` restricted to an assistant's allow-list of tool ids.
+/// `None` keeps every available tool (the backward-compatible default).
+fn filtered_tool_schemas(
+    has_pdfs: bool,
+    has_web_search: bool,
+    allowed: Option<&[String]>,
+) -> Vec<Value> {
+    let all = tool_schemas(has_pdfs, has_web_search);
+    match allowed {
+        None => all,
+        Some(list) => all
+            .into_iter()
+            .filter(|tool| {
+                tool["function"]["name"]
+                    .as_str()
+                    .is_some_and(|name| list.iter().any(|id| id == name))
+            })
+            .collect(),
+    }
+}
 
 fn tool_schemas(has_pdfs: bool, has_web_search: bool) -> Vec<Value> {
     let mut tools = Vec::new();

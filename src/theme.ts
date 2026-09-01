@@ -13,7 +13,7 @@ import type { ViewStyle } from "react-native";
 //
 // Nomi ships light-mode only — there is no dark palette.
 
-export type FeatureId = "chat" | "notes" | "todo" | "travel" | "finance";
+export type FeatureId = "chat" | "notes" | "papers" | "todo" | "travel" | "finance";
 export type SectionId = FeatureId | "settings";
 
 /** Shared shell header height so the rail, collection and content dividers align. */
@@ -158,6 +158,14 @@ const ACCENTS: Record<SectionId, Accent> = {
     wash: "rgba(224,149,43,0.07)",
     rgb: "224,149,43",
   },
+  papers: {
+    accent: "#4C5FB0",
+    accentText: "#3A4A90",
+    selectedFill: "rgba(76,95,176,0.14)",
+    iconBadge: "rgba(76,95,176,0.12)",
+    wash: "rgba(76,95,176,0.07)",
+    rgb: "76,95,176",
+  },
   todo: {
     accent: "#7059D6",
     accentText: "#54409F",
@@ -274,6 +282,14 @@ const ANIM = StyleSheet.create({
     animationDuration: "160ms",
     animationTimingFunction: "ease",
   } as unknown as ViewStyle,
+  enterRight: {
+    animationKeyframes: {
+      "0%": { opacity: 0, transform: [{ translateX: 28 }] },
+      "100%": { opacity: 1, transform: [{ translateX: 0 }] },
+    },
+    animationDuration: "240ms",
+    animationTimingFunction: "cubic-bezier(0.32,0.72,0,1)",
+  } as unknown as ViewStyle,
   shimmer: {
     animationKeyframes: {
       "0%": { transform: [{ translateX: -48 }] },
@@ -298,6 +314,11 @@ export function enterModal(): ViewStyle | undefined {
 /** Backdrop fade for scrims. */
 export function enterFade(): ViewStyle | undefined {
   return reduceMotion ? undefined : ANIM.enterFade;
+}
+
+/** Slide-in-from-right entrance for right-edge drawers. */
+export function enterRight(): ViewStyle | undefined {
+  return reduceMotion ? undefined : ANIM.enterRight;
 }
 
 /** Looping specular sweep for the download progress bar. */

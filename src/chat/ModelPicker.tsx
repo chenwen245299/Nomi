@@ -255,6 +255,10 @@ export function ConversationModelPicker({
   const styles = useMemo(() => makeStyles(theme, accent), [theme, accent]);
   const triggerRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
+  // `entered` drives the open/close transition; the menu stays mounted while
+  // `open` is true and only unmounts after the exit animation finishes.
+  const [entered, setEntered] = useState(false);
+  const closeTimer = useRef<number | undefined>(undefined);
   const [position, setPosition] = useState<MenuPosition | null>(null);
   const [balances, setBalances] = useState<Record<string, LoadState>>({});
   const [selectError, setSelectError] = useState("");
@@ -283,15 +287,39 @@ export function ConversationModelPicker({
   const updatePosition = useCallback(() => {
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const width = Math.min(270, window.innerWidth - 24);
+    // Match the dropdown width to the trigger button so they line up flush.
+    const width = Math.min(rect.width, window.innerWidth - 24);
     const top = rect.bottom + 6;
     setPosition({
-      left: Math.max(12, Math.min(rect.right - width, window.innerWidth - width - 12)),
+      left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)),
       maxHeight: Math.max(180, window.innerHeight - top - 12),
       top,
       width,
     });
   }, []);
+
+  const requestOpen = useCallback(() => {
+    window.clearTimeout(closeTimer.current);
+    requestAnimationFrame(updatePosition);
+    setOpen(true);
+    // Re-trigger the enter animation even if a close was mid-flight (still mounted).
+    requestAnimationFrame(() => setEntered(true));
+  }, [updatePosition]);
+
+  const requestClose = useCallback(() => {
+    window.clearTimeout(closeTimer.current);
+    setEntered(false);
+    closeTimer.current = window.setTimeout(() => setOpen(false), 190);
+  }, []);
+
+  // Flip `entered` on the frame after mount so the enter transition plays.
+  useEffect(() => {
+    if (!open) return;
+    const id = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(id);
+  }, [open]);
+
+  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
 
   const loadBalance = useCallback(
     async (provider: Provider) => {
@@ -330,7 +358,7 @@ export function ConversationModelPicker({
     setSelectError("");
     try {
       await onSelect(provider.id, model.id);
-      setOpen(false);
+      requestClose();
     } catch (error) {
       setSelectError(String(error));
     }
@@ -341,7 +369,7 @@ export function ConversationModelPicker({
     setSelectError("");
     try {
       await inheritOption.onSelect();
-      setOpen(false);
+      requestClose();
     } catch (error) {
       setSelectError(String(error));
     }
@@ -354,12 +382,7 @@ export function ConversationModelPicker({
           accessibilityLabel={accessibilityLabel}
           accessibilityRole="button"
           accessibilityState={{ expanded: open }}
-          onPress={() => {
-            setOpen((current) => {
-              if (!current) requestAnimationFrame(updatePosition);
-              return !current;
-            });
-          }}
+          onPress={() => (open ? requestClose() : requestOpen())}
           style={({ hovered, pressed }: PressState) => [
             styles.trigger,
             motion,
@@ -404,7 +427,7 @@ export function ConversationModelPicker({
       {open && position
         ? createPortal(
             <div
-              onMouseDown={() => setOpen(false)}
+              onMouseDown={() => requestClose()}
               style={{ inset: 0, position: "fixed", zIndex: 90 }}
             >
               <View style={styles.overlay} />
@@ -419,6 +442,13 @@ export function ConversationModelPicker({
                   top: position.top,
                   width: position.width,
                   zIndex: 91,
+                  transformOrigin: "top center",
+                  opacity: entered ? 1 : 0,
+                  transform: entered ? "translateY(0) scale(1)" : "translateY(-6px) scale(0.97)",
+                  transition: theme.reduceMotion
+                    ? "none"
+                    : "opacity 150ms ease, transform 200ms cubic-bezier(0.32,0.72,0,1)",
+                  willChange: "opacity, transform",
                 }}
               >
                 <View
@@ -485,12 +515,36 @@ export function ConversationModelPicker({
                       groups.map(({ provider, models }) => {
                         const balanceState = balances[provider.id];
                         const supportsBalance = provider.supportsBalance ?? false;
+                        // Peak / off-peak applies provider-wide — surface it on the
+                        // group header too, not just the selected-model button.
+                        const providerPeriod =
+                          models
+                            .map((model) => currentPricingPeriod(model))
+                            .find((period) => period != null) ?? null;
                         return (
                           <View key={provider.id} style={styles.providerGroup}>
                             <View style={styles.providerHeader}>
                               <Text numberOfLines={1} style={styles.providerName}>
                                 {provider.name || "未命名服务商"}
                               </Text>
+                              {providerPeriod ? (
+                                <View
+                                  style={[
+                                    styles.periodPill,
+                                    { marginLeft: 6 } as ViewStyle,
+                                    providerPeriod === "peak" && styles.periodPillPeak,
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.periodText,
+                                      providerPeriod === "peak" && styles.periodTextPeak,
+                                    ]}
+                                  >
+                                    {periodLabel(providerPeriod)}
+                                  </Text>
+                                </View>
+                              ) : null}
                               {supportsBalance ? (
                                 <>
                                   <Pressable
