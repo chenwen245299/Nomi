@@ -234,7 +234,7 @@ export function RecordDialog({
                     style={styles.duplicateWarningDetail}
                   >
                     {[
-                      match.date,
+                      [match.date, match.time].filter(Boolean).join(" "),
                       match.merchant || match.category,
                       `${match.currency} ${match.amount.toFixed(2)}`,
                     ]
@@ -443,6 +443,16 @@ function RecordFields({
             style={nativeInput}
             type="date"
             value={draft.date}
+          />
+        </View>
+        <View style={styles.field}>
+          <Text style={styles.label}>时间（可留空）</Text>
+          <input
+            aria-label="时间"
+            onChange={(event) => onChange({ time: event.target.value })}
+            style={nativeInput}
+            type="time"
+            value={draft.time ?? ""}
           />
         </View>
         <View style={styles.field}>

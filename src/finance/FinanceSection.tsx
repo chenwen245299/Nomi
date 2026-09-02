@@ -92,6 +92,7 @@ function useReceiptUrl(path: string | null | undefined): string | null {
 function toDraft(record: ExpenseRecord): ExpenseDraft {
   return {
     date: record.date,
+    time: record.time ?? "",
     amount: record.amount,
     direction: record.direction,
     currency: record.currency,
@@ -105,6 +106,7 @@ function toDraft(record: ExpenseRecord): ExpenseDraft {
 function blankDraft(currency: string): ExpenseDraft {
   return {
     date: todayKey(),
+    time: "",
     amount: 0,
     direction: "expense",
     currency,
@@ -702,7 +704,7 @@ function RecordRow({
 }) {
   const meta = categoryStyle(record.category);
   const income = record.direction === "income";
-  const detail = [record.category, record.method].filter(Boolean).join(" · ");
+  const detail = [record.time, record.category, record.method].filter(Boolean).join(" · ");
   return (
     <Pressable
       accessibilityLabel={`编辑 ${record.merchant || record.category}`}

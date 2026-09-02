@@ -16,6 +16,9 @@ export interface Todo {
   quadrant: Quadrant;
   /** `YYYY-MM-DD` in the user's local calendar, or null for "someday". */
   dueDate: string | null;
+  /** `HH:MM` (24-hour) start / end time on the due date, or null when unset. */
+  startTime: string | null;
+  endTime: string | null;
   done: boolean;
   /** Epoch seconds, or null while unfinished. */
   completedAt: number | null;
@@ -35,6 +38,8 @@ export interface TodoPatch {
   notes?: string;
   quadrant?: Quadrant;
   dueDate?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
   done?: boolean;
 }
 
@@ -84,6 +89,8 @@ export async function createTodo(
     notes: "",
     quadrant,
     dueDate: dueDate || null,
+    startTime: null,
+    endTime: null,
     done: false,
     completedAt: null,
     createdAt: timestamp,
@@ -118,6 +125,12 @@ export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
   }
   if (patch.dueDate !== undefined) {
     todo.dueDate = patch.dueDate || null;
+  }
+  if (patch.startTime !== undefined) {
+    todo.startTime = patch.startTime || null;
+  }
+  if (patch.endTime !== undefined) {
+    todo.endTime = patch.endTime || null;
   }
   if (patch.done !== undefined) {
     todo.done = patch.done;

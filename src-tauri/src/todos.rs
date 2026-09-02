@@ -38,6 +38,12 @@ pub struct Todo {
     /// `YYYY-MM-DD` in the user's local calendar, or `None` for "someday".
     #[serde(default)]
     due_date: Option<String>,
+    /// Optional start / end clock time (`HH:MM`, 24-hour) on the due date — a time
+    /// block for the task. `None` means unset.
+    #[serde(default)]
+    start_time: Option<String>,
+    #[serde(default)]
+    end_time: Option<String>,
     #[serde(default)]
     done: bool,
     #[serde(default)]
@@ -67,6 +73,10 @@ pub struct TodoPatch {
     quadrant: Option<u8>,
     #[serde(default, deserialize_with = "some_option")]
     due_date: Option<Option<String>>,
+    #[serde(default, deserialize_with = "some_option")]
+    start_time: Option<Option<String>>,
+    #[serde(default, deserialize_with = "some_option")]
+    end_time: Option<Option<String>>,
     done: Option<bool>,
 }
 
@@ -176,6 +186,32 @@ fn check_due_date(date: Option<String>) -> Result<Option<String>, String> {
     Ok(Some(date))
 }
 
+/// Accept a plain `HH:MM` 24-hour clock time (or empty → `None`), so the stored
+/// file stays as unambiguous as the date.
+fn check_time(time: Option<String>) -> Result<Option<String>, String> {
+    let Some(time) = time else {
+        return Ok(None);
+    };
+    let time = time.trim().to_string();
+    if time.is_empty() {
+        return Ok(None);
+    }
+    let bytes = time.as_bytes();
+    let shaped = bytes.len() == 5
+        && bytes[2] == b':'
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[3].is_ascii_digit()
+        && bytes[4].is_ascii_digit();
+    let valid = shaped
+        && time[0..2].parse::<u8>().map(|h| h < 24).unwrap_or(false)
+        && time[3..5].parse::<u8>().map(|m| m < 60).unwrap_or(false);
+    if !valid {
+        return Err("时间格式必须是 HH:MM。".into());
+    }
+    Ok(Some(time))
+}
+
 /// Sort key for the UI: unfinished first, then the manual order, then creation
 /// time as a stable tie-break for items that have never been reordered.
 fn sorted(mut todos: Vec<Todo>) -> Vec<Todo> {
@@ -227,6 +263,8 @@ pub fn create_todo(
         notes: String::new(),
         quadrant,
         due_date,
+        start_time: None,
+        end_time: None,
         done: false,
         completed_at: None,
         created_at: timestamp,
@@ -259,6 +297,12 @@ pub fn update_todo(app: AppHandle, id: String, patch: TodoPatch) -> Result<Todo,
     }
     if let Some(due_date) = patch.due_date {
         todos[index].due_date = check_due_date(due_date)?;
+    }
+    if let Some(start_time) = patch.start_time {
+        todos[index].start_time = check_time(start_time)?;
+    }
+    if let Some(end_time) = patch.end_time {
+        todos[index].end_time = check_time(end_time)?;
     }
     if let Some(done) = patch.done {
         todos[index].done = done;
@@ -340,6 +384,8 @@ mod tests {
             notes: String::new(),
             quadrant,
             due_date: None,
+            start_time: None,
+            end_time: None,
             done,
             completed_at: None,
             created_at: 1,
@@ -378,6 +424,23 @@ mod tests {
         assert!(check_quadrant(0).is_err());
         assert!(check_quadrant(5).is_err());
         assert_eq!(check_quadrant(4).unwrap(), 4);
+    }
+
+    #[test]
+    fn validates_times() {
+        assert_eq!(
+            check_time(Some("09:30".into())).unwrap(),
+            Some("09:30".into())
+        );
+        assert_eq!(
+            check_time(Some("23:59".into())).unwrap(),
+            Some("23:59".into())
+        );
+        assert_eq!(check_time(Some("  ".into())).unwrap(), None);
+        assert_eq!(check_time(None).unwrap(), None);
+        assert!(check_time(Some("24:00".into())).is_err());
+        assert!(check_time(Some("9:30".into())).is_err());
+        assert!(check_time(Some("09:60".into())).is_err());
     }
 
     #[test]

@@ -106,6 +106,26 @@ function borderPoint(
   return { x: cx + dx * s, y: cy + dy * s };
 }
 
+/**
+ * Quadratic-bezier control point for the edge between two card centres, offset
+ * perpendicular to the line by a length-proportional amount. A consistent side
+ * means edges leaving the same node in similar directions fan apart, and an
+ * A→B edge bows opposite to its B→A twin.
+ */
+function controlPoint(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  k: number,
+): { x: number; y: number } {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = Math.hypot(dx, dy) || 1;
+  const bow = Math.min(64 * k, len * 0.15);
+  return { x: (ax + bx) / 2 + (-dy / len) * bow, y: (ay + by) / 2 + (dx / len) * bow };
+}
+
 function fitTransform(papers: Paper[], w: number, h: number): Transform {
   if (w === 0 || h === 0) return { x: 0, y: 0, k: 1 };
   if (papers.length === 0) return { x: w / 2, y: h / 2, k: 1 };
@@ -383,7 +403,12 @@ export function GraphCanvas(props: GraphCanvasProps) {
         const ay = tf.y + tf.k * a.y;
         const bx = tf.x + tf.k * b.x;
         const by = tf.y + tf.k * b.y;
-        const d = distToSegment(sx, sy, ax, ay, bx, by);
+        // Match the drawn curve: approximate it by its two control sub-segments.
+        const ctrl = controlPoint(ax, ay, bx, by, tf.k);
+        const d = Math.min(
+          distToSegment(sx, sy, ax, ay, ctrl.x, ctrl.y),
+          distToSegment(sx, sy, ctrl.x, ctrl.y, bx, by),
+        );
         if (d < 16 && (!best || d < best.d)) best = { id: edge.id, d };
       }
       if (best) {
@@ -444,12 +469,17 @@ export function GraphCanvas(props: GraphCanvasProps) {
         const acy = transform.y + k * a.y;
         const bcx = transform.x + k * b.x;
         const bcy = transform.y + k * b.y;
+        // Bow the edge sideways so edges sharing a node fan apart instead of
+        // stacking on the same straight line; reversed edges bow the other way.
+        const ctrl = controlPoint(acx, acy, bcx, bcy, k);
         const aHalf = half(edge.from);
         const bHalf = half(edge.to);
-        const start = borderPoint(acx, acy, aHalf.hw, aHalf.hh, bcx, bcy);
-        const end = borderPoint(bcx, bcy, bHalf.hw, bHalf.hh, acx, acy);
+        // Trim to each card's border along the curve's tangent (toward the
+        // control point), so the arrowhead meets the card at the right angle.
+        const start = borderPoint(acx, acy, aHalf.hw, aHalf.hh, ctrl.x, ctrl.y);
+        const end = borderPoint(bcx, bcy, bHalf.hw, bHalf.hh, ctrl.x, ctrl.y);
         const active = selectedId === edge.from || selectedId === edge.to;
-        return { edge, start, end, active };
+        return { edge, start, end, ctrl, active };
       })
       .filter((v): v is NonNullable<typeof v> => v !== null);
   }, [edges, paperById, transform, selectedId, nodeSizes]);
@@ -464,7 +494,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
     };
   }, [linkCursor, linkFrom, paperById, transform]);
 
-  const arrowSize = Math.max(6, 8 * transform.k);
+  const arrowSize = Math.max(10, 13 * transform.k);
   const isEmpty = papers.length === 0;
 
   return (
@@ -500,24 +530,24 @@ export function GraphCanvas(props: GraphCanvasProps) {
         height={size.h}
         style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
       >
-        {rendered.map(({ edge, start, end, active }) => {
+        {rendered.map(({ edge, start, end, ctrl, active }) => {
           const color = active ? accent.accent : t.separatorStrong;
-          const mx = (start.x + end.x) / 2;
-          const my = (start.y + end.y) / 2;
-          const angle = Math.atan2(end.y - start.y, end.x - start.x);
+          // Curve midpoint (bezier at t=0.5) for the label chip.
+          const mx = 0.25 * start.x + 0.5 * ctrl.x + 0.25 * end.x;
+          const my = 0.25 * start.y + 0.5 * ctrl.y + 0.25 * end.y;
+          // Arrowhead follows the tangent at the end (from the control point).
+          const angle = Math.atan2(end.y - ctrl.y, end.x - ctrl.x);
           const ax1 = end.x - arrowSize * Math.cos(angle - Math.PI / 7);
           const ay1 = end.y - arrowSize * Math.sin(angle - Math.PI / 7);
           const ax2 = end.x - arrowSize * Math.cos(angle + Math.PI / 7);
           const ay2 = end.y - arrowSize * Math.sin(angle + Math.PI / 7);
           return (
             <g key={edge.id}>
-              <line
-                x1={start.x}
-                y1={start.y}
-                x2={end.x}
-                y2={end.y}
+              <path
+                d={`M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`}
+                fill="none"
                 stroke={color}
-                strokeWidth={active ? 2 : 1.5}
+                strokeWidth={active ? 3.5 : 2.5}
                 strokeLinecap="round"
               />
               <polygon points={`${end.x},${end.y} ${ax1},${ay1} ${ax2},${ay2}`} fill={color} />
@@ -555,7 +585,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
             x2={linkCursor.x}
             y2={linkCursor.y}
             stroke={accent.accent}
-            strokeWidth={2}
+            strokeWidth={3}
             strokeDasharray="5 4"
             strokeLinecap="round"
           />

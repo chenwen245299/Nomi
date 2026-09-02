@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AttributionControl,
   GeoJSONSource,
@@ -9,6 +9,7 @@ import {
   type MapMouseEvent,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { RiErrorWarningLine, RiRefreshLine } from "@remixicon/react";
 import Supercluster from "supercluster";
 import { buildStyle } from "./mapStyle";
 import type { ViewBox } from "./geocode";
@@ -119,6 +120,35 @@ export function MapView({
   const pickRef = useRef<Marker | null>(null);
   const readyRef = useRef(false);
   const accent = accentRgb ? `rgb(${accentRgb})` : TRAVEL_ACCENT;
+
+  // A blank ("white") map is almost always the basemap failing to load — the
+  // online OpenFreeMap CDN being unreachable (offline / blocked / slow), or a bad
+  // offline archive. Track load status so we can show guidance instead of a void.
+  const [mapStatus, setMapStatus] = useState<"loading" | "ready" | "error">("loading");
+  const statusRef = useRef<"loading" | "ready" | "error">("loading");
+  const errorCountRef = useRef(0);
+  const loadTimerRef = useRef<number | undefined>(undefined);
+  const setStatus = useCallback((next: "loading" | "ready" | "error") => {
+    if (statusRef.current === next) return;
+    statusRef.current = next;
+    setMapStatus(next);
+  }, []);
+  // (Re)start the "still loading?" watchdog: no successful tiles within the window
+  // means the basemap source is unreachable.
+  const armLoadTimeout = useCallback(() => {
+    window.clearTimeout(loadTimerRef.current);
+    errorCountRef.current = 0;
+    setStatus("loading");
+    loadTimerRef.current = window.setTimeout(() => {
+      if (statusRef.current === "loading") setStatus("error");
+    }, 12000);
+  }, [setStatus]);
+  const retryMap = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    armLoadTimeout();
+    map.setStyle(buildStyle(basemap));
+  }, [armLoadTimeout, basemap]);
   // Latest callbacks + overlay inputs in a ref, so the once-created map always
   // reads current values (and the style-swap effect can re-apply the route
   // without listing routeLine as a dependency, which would rebuild the style).
@@ -156,10 +186,26 @@ export function MapView({
     map.on("moveend", emitViewBox);
     map.on("load", () => {
       readyRef.current = true;
+      window.clearTimeout(loadTimerRef.current);
+      setStatus("ready");
       applyRegions(map, latest.current.regions ?? null);
       applyRoute(map, latest.current.routeLine ?? null, latest.current.accent);
       emitViewBox();
     });
+    // Any tiles that actually arrive mean the source works — clear the failure
+    // state (also recovers automatically when a flaky network comes back).
+    map.on("sourcedata", (event) => {
+      if (event.isSourceLoaded) {
+        errorCountRef.current = 0;
+        setStatus("ready");
+      }
+    });
+    // Style/tile fetch failures pile up quickly when the basemap is unreachable.
+    map.on("error", () => {
+      errorCountRef.current += 1;
+      if (errorCountRef.current >= 6) setStatus("error");
+    });
+    armLoadTimeout();
 
     const handle: MapHandle = {
       flyTo: (lat, lng, zoom) =>
@@ -186,6 +232,7 @@ export function MapView({
     onReady?.(handle);
 
     return () => {
+      window.clearTimeout(loadTimerRef.current);
       markerStore.forEach((m) => m.remove());
       markerStore.clear();
       pickRef.current?.remove();
@@ -202,12 +249,13 @@ export function MapView({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !readyRef.current) return;
+    armLoadTimeout();
     map.setStyle(buildStyle(basemap));
     map.once("styledata", () => {
       applyRegions(map, latest.current.regions ?? null);
       applyRoute(map, latest.current.routeLine ?? null, latest.current.accent);
     });
-  }, [basemap]);
+  }, [basemap, armLoadTimeout]);
 
   // Reconcile pins against the markers prop — with optional clustering. When
   // `cluster` is on, a supercluster index groups nearby points at the current
@@ -331,7 +379,93 @@ export function MapView({
     if (map && readyRef.current) applyRegions(map, regions ?? null);
   }, [regions]);
 
-  return <div ref={hostRef} style={{ position: "absolute", inset: 0 }} />;
+  return (
+    <div style={{ position: "absolute", inset: 0 }}>
+      <div ref={hostRef} style={{ position: "absolute", inset: 0 }} />
+      {mapStatus !== "ready" ? (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            pointerEvents: "none",
+          }}
+        >
+          {mapStatus === "loading" ? (
+            <div
+              style={{
+                alignItems: "center",
+                background: "rgba(255,255,255,0.9)",
+                border: "1px solid rgba(16,24,36,0.08)",
+                borderRadius: 999,
+                boxShadow: "0 4px 16px rgba(16,24,36,0.10)",
+                color: "#6b7280",
+                display: "flex",
+                fontSize: 12.5,
+                fontWeight: 500,
+                gap: 8,
+                padding: "8px 16px",
+              }}
+            >
+              地图加载中…
+            </div>
+          ) : (
+            <div
+              style={{
+                alignItems: "center",
+                background: "rgba(255,255,255,0.96)",
+                border: "1px solid rgba(16,24,36,0.10)",
+                borderRadius: 14,
+                boxShadow: "0 10px 30px rgba(16,24,36,0.16)",
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                maxWidth: 300,
+                padding: "18px 20px",
+                pointerEvents: "auto",
+                textAlign: "center",
+              }}
+            >
+              <RiErrorWarningLine color="#B24D4D" size={22} />
+              <div style={{ color: "#1f2734", fontSize: 13.5, fontWeight: 600 }}>
+                {basemap === "online" ? "在线地图加载失败" : "离线地图加载失败"}
+              </div>
+              <div style={{ color: "#6b7280", fontSize: 12, lineHeight: 1.5 }}>
+                {basemap === "online"
+                  ? "无法连接在线地图服务，请检查网络连接；若网络受限，可点右上角「在线地图」下载离线地图后使用。"
+                  : "地图文件可能损坏或不完整，请在「离线地图」中重新下载。"}
+              </div>
+              <button
+                onClick={retryMap}
+                style={{
+                  alignItems: "center",
+                  background: accent,
+                  border: "none",
+                  borderRadius: 8,
+                  color: "#fff",
+                  cursor: "pointer",
+                  display: "flex",
+                  fontFamily: "inherit",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  gap: 6,
+                  marginTop: 4,
+                  padding: "7px 14px",
+                }}
+                type="button"
+              >
+                <RiRefreshLine color="#fff" size={14} />
+                重试
+              </button>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /** Add / update / remove the "lit-up" region fill + outline. Warm orange so it

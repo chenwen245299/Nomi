@@ -62,6 +62,18 @@ async function confirmConversationDelete(title: string): Promise<boolean> {
   return typeof window !== "undefined" ? window.confirm(message) : true;
 }
 
+async function confirmConversationDeleteMany(count: number): Promise<boolean> {
+  const message = `确定删除选中的 ${count} 个对话吗？这些对话文件夹及其中的附件会被永久删除。`;
+  try {
+    if (isTauriRuntime()) {
+      return await tauriConfirm(message, { title: "删除对话", kind: "warning" });
+    }
+  } catch {
+    // Fall through to the browser dialog in local preview mode.
+  }
+  return typeof window !== "undefined" ? window.confirm(message) : true;
+}
+
 function formatConversationActivity(seconds: number, now = new Date()): string {
   const date = new Date(seconds * 1000);
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -197,6 +209,22 @@ function makeChatStyles(theme: Theme, accent: Accent) {
     },
     convRowHover: { backgroundColor: t.controlHover },
     convRowActive: { backgroundColor: accent.selectedFill },
+    convRowSelected: {
+      backgroundColor: accent.selectedFill,
+      boxShadow: `inset 0 0 0 1px rgba(${accent.rgb},0.35)`,
+    },
+    convCheck: {
+      alignItems: "center",
+      borderColor: t.separatorStrong,
+      borderRadius: 6,
+      borderWidth: 1.5,
+      flexShrink: 0,
+      height: 16,
+      justifyContent: "center",
+      marginRight: 1,
+      width: 16,
+    },
+    convCheckOn: { backgroundColor: accent.accent, borderColor: accent.accent },
     convActivitySlot: {
       alignItems: "center",
       flexShrink: 0,
@@ -345,7 +373,6 @@ function makeChatStyles(theme: Theme, accent: Accent) {
       borderColor: accent.accent,
       boxShadow: `0 0 0 3px rgba(${accent.rgb},0.25)`,
     },
-    actions: { alignItems: "center", flexDirection: "row", gap: 8, marginTop: 14 },
     toolsHeaderRow: {
       alignItems: "center",
       flexDirection: "row",
@@ -367,32 +394,30 @@ function makeChatStyles(theme: Theme, accent: Accent) {
       height: 16,
       width: 16,
     },
-    toolsSelect: {
-      alignItems: "center",
+    // Inline tool picker: a bordered card with a select-all header and a list that
+    // scrolls internally (capped height) so long tool lists stay contained.
+    toolsPanel: {
       backgroundColor: t.cardSurfaceAlt,
       borderColor: t.separator,
-      borderRadius: 9,
+      borderRadius: 10,
       borderWidth: 1,
-      flexDirection: "row",
-      justifyContent: "space-between",
-      minHeight: 40,
-      paddingHorizontal: 11,
-    },
-    toolsSelectText: { color: t.textPrimary, flex: 1, fontSize: 13, minWidth: 0 },
-    toolsMenu: {
-      backgroundColor: t.cardSurface,
-      borderColor: t.separator,
-      borderRadius: 11,
-      borderWidth: 1,
-      boxShadow: "0 14px 36px rgba(16,24,36,0.18), 0 2px 8px rgba(16,24,36,0.08)",
       marginTop: 6,
       overflow: "hidden",
-      padding: 5,
-      position: "absolute",
-      top: "100%",
-      width: "100%",
-      zIndex: 40,
     },
+    toolsPanelHeader: {
+      alignItems: "center",
+      borderBottomColor: t.separator,
+      borderBottomWidth: 1,
+      flexDirection: "row",
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+    },
+    toolsCount: { color: t.textSecondary, fontSize: 11.5, fontWeight: "600" },
+    toolsSelectAll: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+    toolsSelectAllText: { color: accent.accentText, fontSize: 11.5, fontWeight: "700" },
+    toolsList: { maxHeight: 216 },
+    toolsListContent: { gap: 2, padding: 5 },
+    toolsDisabledHint: { color: t.textTertiary, fontSize: 11.5, marginTop: 6 },
     toolsMenuItem: {
       alignItems: "center",
       borderRadius: 8,
@@ -463,7 +488,22 @@ function makeChatStyles(theme: Theme, accent: Accent) {
       width: 28,
     },
     assistantModalBody: { padding: 16 },
-    assistantModalError: { color: t.errorText, fontSize: 11.5, marginTop: 10 },
+    assistantModalFooter: {
+      alignItems: "center",
+      backgroundColor: t.cardSurface,
+      borderTopColor: t.separator,
+      borderTopWidth: 1,
+      flexDirection: "row",
+      gap: 8,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+    },
+    assistantModalError: {
+      color: t.errorText,
+      flexShrink: 1,
+      fontSize: 11.5,
+      textAlign: "right",
+    },
     // ── Welcome / empty main states ──
     welcome: { alignItems: "center", flexGrow: 1, justifyContent: "center" },
     welcomeArt: { alignItems: "center", marginBottom: 20 },
@@ -762,6 +802,12 @@ export function ChatCollection({
     x: number;
     y: number;
   } | null>(null);
+  // Multi-select: ⌘/Ctrl-click toggles a row, Shift-click extends a range from the
+  // last-clicked anchor. Keyed by `${assistantId}/${id}`. A plain click clears it.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const anchorRef = useRef<string | null>(null);
+
+  const keyOf = (c: ConversationSummary) => `${c.assistantId}/${c.id}`;
 
   const all = chat.conversationsFor(assistantId);
   const q = query.trim().toLowerCase();
@@ -781,19 +827,78 @@ export function ChatCollection({
   }, [chat.assistants]);
 
   useEffect(() => {
-    if (!menu) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenu(null);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (menu) setMenu(null);
+      else if (selected.size) {
+        setSelected(new Set());
+        anchorRef.current = null;
+      }
     };
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [menu]);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [menu, selected]);
 
-  async function requestDelete(conversation: ConversationSummary) {
-    const confirmed = await confirmConversationDelete(conversation.title || "新对话");
+  const activate = (conversation: ConversationSummary, mods: { meta: boolean; shift: boolean }) => {
+    const key = keyOf(conversation);
+    if (mods.meta) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      });
+      anchorRef.current = key;
+      return;
+    }
+    if (mods.shift && anchorRef.current) {
+      const keys = filtered.map(keyOf);
+      const a = keys.indexOf(anchorRef.current);
+      const b = keys.indexOf(key);
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a <= b ? [a, b] : [b, a];
+        setSelected((prev) => {
+          const next = new Set(prev);
+          for (let i = lo; i <= hi; i += 1) next.add(keys[i]);
+          return next;
+        });
+        return;
+      }
+    }
+    setSelected(new Set());
+    anchorRef.current = key;
+    onSelectConversation(conversation.assistantId, conversation.id);
+  };
+
+  async function requestDelete(targets: ConversationSummary[]) {
+    if (targets.length === 0) return;
+    const confirmed =
+      targets.length === 1
+        ? await confirmConversationDelete(targets[0].title || "新对话")
+        : await confirmConversationDeleteMany(targets.length);
     if (!confirmed) return;
-    await onDeleteConversation(conversation.assistantId, conversation.id);
+    // Sequential: each delete removes a folder + reindexes; parallel risks a race.
+    for (const target of targets) {
+      await onDeleteConversation(target.assistantId, target.id);
+    }
+    setSelected(new Set());
+    anchorRef.current = null;
   }
+
+  // Only the currently-visible selected rows count: a row hidden by the search
+  // filter (or a stale key left over from another assistant) is inert, so a batch
+  // delete can never silently catch something off-screen.
+  const visibleSelected = filtered.filter((c) => selected.has(keyOf(c)));
+
+  // The right-clicked row's delete target(s): the whole visible selection when the
+  // row is part of a multi-selection, otherwise just that row.
+  const menuKey = menu ? keyOf(menu.conversation) : null;
+  const menuIsBatch = !!menuKey && selected.has(menuKey) && visibleSelected.length > 1;
+  const menuTargets: ConversationSummary[] = menu
+    ? menuIsBatch
+      ? visibleSelected
+      : [menu.conversation]
+    : [];
 
   if (filtered.length === 0) {
     return (
@@ -819,10 +924,18 @@ export function ChatCollection({
             conversation={conversation}
             emoji={emojiByAssistant.get(conversation.assistantId)}
             key={`${conversation.assistantId}/${conversation.id}`}
+            onActivate={(mods) => activate(conversation, mods)}
             onContextMenu={(x, y) => {
+              const key = keyOf(conversation);
+              // Right-clicking outside the current selection collapses it to this row.
+              if (!selected.has(key)) {
+                setSelected(new Set());
+                anchorRef.current = key;
+              }
               setMenu({ conversation, x, y });
             }}
-            onPress={() => onSelectConversation(conversation.assistantId, conversation.id)}
+            selected={selected.has(keyOf(conversation))}
+            selectionActive={visibleSelected.length > 0}
             showAssistant={assistantId === null}
           />
         ))}
@@ -830,12 +943,13 @@ export function ChatCollection({
       {menu ? (
         <ConversationContextMenu
           accent={accent}
+          count={menuTargets.length}
           menu={menu}
           onClose={() => setMenu(null)}
           onDelete={() => {
-            const target = menu.conversation;
+            const targets = menuTargets;
             setMenu(null);
-            void requestDelete(target);
+            void requestDelete(targets);
           }}
           onReveal={() => {
             const target = menu.conversation;
@@ -852,6 +966,7 @@ export function ChatCollection({
 
 function ConversationContextMenu({
   accent,
+  count,
   menu,
   onClose,
   onDelete,
@@ -860,6 +975,7 @@ function ConversationContextMenu({
   theme,
 }: {
   accent: Accent;
+  count: number;
   menu: { conversation: ConversationSummary; x: number; y: number };
   onClose: () => void;
   onDelete: () => void;
@@ -867,6 +983,7 @@ function ConversationContextMenu({
   styles: ReturnType<typeof makeChatStyles>;
   theme: Theme;
 }) {
+  const batch = count > 1;
   const left = Math.max(8, Math.min(menu.x, window.innerWidth - 200));
   const top = Math.max(8, Math.min(menu.y, window.innerHeight - 104));
   return createPortal(
@@ -879,28 +996,33 @@ function ConversationContextMenu({
       style={{ inset: 0, position: "fixed", zIndex: 2000 }}
     >
       <div
-        aria-label={`对话菜单：${menu.conversation.title || "新对话"}`}
+        aria-label={batch ? `批量对话菜单：${count} 个对话` : `对话菜单：${menu.conversation.title || "新对话"}`}
         onClick={(event) => event.stopPropagation()}
         role="menu"
         style={{ left, position: "fixed", top }}
       >
         <View style={styles.convContextMenu}>
+          {/* Revealing in Finder only makes sense for a single conversation folder. */}
+          {batch ? null : (
+            <>
+              <Pressable
+                accessibilityLabel="在访达中查看对话"
+                accessibilityRole="button"
+                onPress={onReveal}
+                style={({ hovered, pressed }: PressState) => [
+                  styles.convContextMenuItem,
+                  motion,
+                  (hovered || pressed) && styles.convContextMenuItemHover,
+                ]}
+              >
+                <RiFolderOpenLine color={accent.accentText} size={15} />
+                <Text style={styles.convContextMenuText}>在访达中查看</Text>
+              </Pressable>
+              <View style={styles.convContextMenuDivider} />
+            </>
+          )}
           <Pressable
-            accessibilityLabel="在访达中查看对话"
-            accessibilityRole="button"
-            onPress={onReveal}
-            style={({ hovered, pressed }: PressState) => [
-              styles.convContextMenuItem,
-              motion,
-              (hovered || pressed) && styles.convContextMenuItemHover,
-            ]}
-          >
-            <RiFolderOpenLine color={accent.accentText} size={15} />
-            <Text style={styles.convContextMenuText}>在访达中查看</Text>
-          </Pressable>
-          <View style={styles.convContextMenuDivider} />
-          <Pressable
-            accessibilityLabel="从菜单删除对话"
+            accessibilityLabel={batch ? `删除选中的 ${count} 个对话` : "从菜单删除对话"}
             accessibilityRole="button"
             onPress={onDelete}
             style={({ hovered, pressed }: PressState) => [
@@ -910,7 +1032,9 @@ function ConversationContextMenu({
             ]}
           >
             <RiDeleteBinLine color={theme.t.errorText} size={15} />
-            <Text style={styles.convContextMenuDanger}>删除对话</Text>
+            <Text style={styles.convContextMenuDanger}>
+              {batch ? `删除选中的 ${count} 个对话` : "删除对话"}
+            </Text>
           </Pressable>
         </View>
       </div>
@@ -924,23 +1048,30 @@ function ConversationRow({
   active,
   conversation,
   emoji,
+  onActivate,
   onContextMenu,
-  onPress,
+  selected,
+  selectionActive,
   showAssistant,
 }: {
   accent: Accent;
   active: boolean;
   conversation: ConversationSummary;
   emoji?: string;
+  onActivate: (mods: { meta: boolean; shift: boolean }) => void;
   onContextMenu: (x: number, y: number) => void;
-  onPress: () => void;
+  selected: boolean;
+  selectionActive: boolean;
   showAssistant: boolean;
 }) {
-  const { styles } = useChatStyles(accent);
+  const { styles, theme } = useChatStyles(accent);
   const generating = useConversationSending(conversation.assistantId, conversation.id);
   const assistantBadge = badgeForEmoji(emoji, conversation.assistantId);
   const activityTime = conversation.lastMessageAt ?? conversation.createdAt;
   const activityLabel = formatConversationActivity(activityTime);
+  // Modifier keys of the click that becomes Pressable's onPress. Captured on the
+  // wrapping div's pointerdown, which fires before the press resolves.
+  const modRef = useRef<{ meta: boolean; shift: boolean }>({ meta: false, shift: false });
   return (
     <div
       data-conversation-row
@@ -948,22 +1079,34 @@ function ConversationRow({
         event.preventDefault();
         onContextMenu(event.clientX, event.clientY);
       }}
+      onPointerDownCapture={(event) => {
+        modRef.current = {
+          meta: event.metaKey || event.ctrlKey,
+          shift: event.shiftKey,
+        };
+      }}
       style={{ display: "flex", flexDirection: "column" }}
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityState={{ selected: active }}
-        onPress={onPress}
+        accessibilityState={{ selected: active || selected }}
+        onPress={() => onActivate(modRef.current)}
         style={({ hovered, pressed }: PressState) => [
           styles.convRow,
           motion,
-          hovered && !active && styles.convRowHover,
-          active && styles.convRowActive,
+          hovered && !active && !selected && styles.convRowHover,
+          (active || selected) && styles.convRowActive,
+          selected && styles.convRowSelected,
           pressed && ({ opacity: 0.9 } as ViewStyle),
         ]}
       >
         <View style={styles.convBody}>
           <View style={styles.convTitleRow}>
+            {selectionActive ? (
+              <View style={[styles.convCheck, selected && styles.convCheckOn]}>
+                {selected ? <RiCheckLine color={theme.t.onAccent} size={11} /> : null}
+              </View>
+            ) : null}
             {showAssistant && conversation.assistantId !== DEFAULT_ASSISTANT_ID ? (
               <View
                 style={[styles.convAssistantBadge, { backgroundColor: assistantBadge.background }]}
@@ -1189,8 +1332,6 @@ export function AssistantEditorModal({
     () =>
       (defaultConversation ? chat.defaultConversationToolIds : assistant?.toolIds) ?? ALL_TOOL_IDS,
   );
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const toolsPickerRef = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState<"name" | "prompt" | "model" | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1214,15 +1355,6 @@ export function AssistantEditorModal({
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [emojiOpen]);
 
-  useEffect(() => {
-    if (!toolsOpen) return;
-    const closeOutside = (event: PointerEvent) => {
-      if (!toolsPickerRef.current?.contains(event.target as Node)) setToolsOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOutside);
-    return () => document.removeEventListener("pointerdown", closeOutside);
-  }, [toolsOpen]);
-
   // A stable signature of the tool choice, for the dirty check. `null` toolIds
   // (from storage) means "all tools", so normalise both sides to the full list.
   const toolSig = (enabled: boolean, ids: string[] | null | undefined) =>
@@ -1234,6 +1366,8 @@ export function AssistantEditorModal({
         ? prev.filter((t) => t !== id)
         : ALL_TOOL_IDS.filter((t) => prev.includes(t) || t === id),
     );
+  const allToolsSelected = enabledToolIds.length === CHAT_TOOLS.length;
+  const toggleAllTools = () => setEnabledToolIds(allToolsSelected ? [] : [...ALL_TOOL_IDS]);
   // Persist `null` when every tool is on (future-proof: new tools auto-enable).
   const toolIdsToSave = enabledToolIds.length === CHAT_TOOLS.length ? null : enabledToolIds;
 
@@ -1372,7 +1506,7 @@ export function AssistantEditorModal({
               <RiCloseLine color={theme.t.textSecondary} size={17} />
             </Pressable>
           </View>
-          <div style={{ maxHeight: "calc(100vh - 114px)", overflowY: "auto" }}>
+          <div style={{ maxHeight: "calc(100vh - 174px)", overflowY: "auto" }}>
             <View style={styles.assistantModalBody}>
               {!defaultConversation ? (
                 <>
@@ -1570,129 +1704,136 @@ export function AssistantEditorModal({
                 />
               </div>
 
-              {/* Tools: whether this assistant offers tools, and which ones. */}
-              <div ref={toolsPickerRef} style={{ width: "100%" }}>
-                <View style={[styles.toolsHeaderRow, { marginTop: 14 } as ViewStyle]}>
-                  <Text style={styles.fieldLabel}>工具</Text>
-                  <Pressable
-                    accessibilityLabel={toolsEnabled ? "关闭工具" : "启用工具"}
-                    accessibilityRole="switch"
-                    accessibilityState={{ checked: toolsEnabled }}
-                    onPress={() => setToolsEnabled((value) => !value)}
-                    style={[styles.toolsSwitch, toolsEnabled && { backgroundColor: accent.accent }]}
-                  >
-                    <View
-                      style={[
-                        styles.toolsSwitchKnob,
-                        toolsEnabled && { transform: [{ translateX: 16 }] },
-                      ]}
-                    />
-                  </Pressable>
-                </View>
-                <div style={{ position: "relative", width: "100%" }}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityState={{ disabled: !toolsEnabled, expanded: toolsOpen }}
-                    disabled={!toolsEnabled}
-                    onPress={() => setToolsOpen((open) => !open)}
-                    style={({ hovered }: PressState) => [
-                      styles.toolsSelect,
-                      motion,
-                      !toolsEnabled && ({ opacity: 0.5 } as ViewStyle),
-                      hovered && toolsEnabled && ({ borderColor: accent.accent } as ViewStyle),
-                      toolsOpen && {
-                        borderColor: accent.accent,
-                        boxShadow: `0 0 0 3px rgba(${accent.rgb},0.16)`,
-                      },
+              {/* Tools: whether this assistant offers tools, and which ones. The
+                  list is inline with its own scroll + a select-all toggle, so many
+                  tools never push the (sticky) save button out of reach. */}
+              <View style={[styles.toolsHeaderRow, { marginTop: 14 } as ViewStyle]}>
+                <Text style={styles.fieldLabel}>工具</Text>
+                <Pressable
+                  accessibilityLabel={toolsEnabled ? "关闭工具" : "启用工具"}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: toolsEnabled }}
+                  onPress={() => setToolsEnabled((value) => !value)}
+                  style={[styles.toolsSwitch, toolsEnabled && { backgroundColor: accent.accent }]}
+                >
+                  <View
+                    style={[
+                      styles.toolsSwitchKnob,
+                      toolsEnabled && { transform: [{ translateX: 16 }] },
                     ]}
-                  >
-                    <Text style={styles.toolsSelectText} numberOfLines={1}>
-                      {!toolsEnabled
-                        ? "已关闭 — 不向模型提供工具"
-                        : enabledToolIds.length === 0
-                          ? "未选择工具"
-                          : enabledToolIds.length === CHAT_TOOLS.length
-                            ? "全部工具"
-                            : `已选 ${enabledToolIds.length} / ${CHAT_TOOLS.length} 项工具`}
+                  />
+                </Pressable>
+              </View>
+              {toolsEnabled ? (
+                <View style={styles.toolsPanel}>
+                  <View style={styles.toolsPanelHeader}>
+                    <Text style={styles.toolsCount}>
+                      {enabledToolIds.length === 0
+                        ? "未选择工具"
+                        : allToolsSelected
+                          ? `全部工具 · ${CHAT_TOOLS.length}`
+                          : `已选 ${enabledToolIds.length} / ${CHAT_TOOLS.length}`}
                     </Text>
-                    <RiArrowDownSLine color={theme.t.textTertiary} size={17} />
-                  </Pressable>
-                  {toolsOpen && toolsEnabled ? (
-                    <View style={styles.toolsMenu}>
-                      {CHAT_TOOLS.map((tool) => {
-                        const checked = enabledToolIds.includes(tool.id);
-                        return (
-                          <Pressable
-                            accessibilityRole="checkbox"
-                            accessibilityState={{ checked }}
-                            key={tool.id}
-                            onPress={() => toggleTool(tool.id)}
-                            style={({ hovered }: PressState) => [
-                              styles.toolsMenuItem,
-                              hovered && ({ backgroundColor: theme.t.controlHover } as ViewStyle),
+                    <View style={{ flex: 1 }} />
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={toggleAllTools}
+                      style={({ hovered }: PressState) => [
+                        styles.toolsSelectAll,
+                        motion,
+                        hovered && ({ backgroundColor: `rgba(${accent.rgb},0.12)` } as ViewStyle),
+                      ]}
+                    >
+                      <Text style={styles.toolsSelectAllText}>
+                        {allToolsSelected ? "取消全选" : "全选"}
+                      </Text>
+                    </Pressable>
+                  </View>
+                  <ScrollView
+                    style={styles.toolsList}
+                    contentContainerStyle={styles.toolsListContent}
+                  >
+                    {CHAT_TOOLS.map((tool) => {
+                      const checked = enabledToolIds.includes(tool.id);
+                      return (
+                        <Pressable
+                          accessibilityRole="checkbox"
+                          accessibilityState={{ checked }}
+                          key={tool.id}
+                          onPress={() => toggleTool(tool.id)}
+                          style={({ hovered }: PressState) => [
+                            styles.toolsMenuItem,
+                            hovered && ({ backgroundColor: theme.t.controlHover } as ViewStyle),
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.toolsCheckbox,
+                              checked && {
+                                backgroundColor: accent.accent,
+                                borderColor: accent.accent,
+                              },
                             ]}
                           >
-                            <View
-                              style={[
-                                styles.toolsCheckbox,
-                                checked && {
-                                  backgroundColor: accent.accent,
-                                  borderColor: accent.accent,
-                                },
-                              ]}
-                            >
-                              {checked ? <RiCheckLine color={theme.t.onAccent} size={13} /> : null}
-                            </View>
-                            <View style={{ flex: 1, minWidth: 0 }}>
-                              <Text style={styles.toolsItemName}>{tool.name}</Text>
-                              <Text style={styles.toolsItemDesc} numberOfLines={1}>
-                                {tool.description}
-                                {tool.requires ? ` · ${tool.requires}` : ""}
-                              </Text>
-                            </View>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  ) : null}
-                </div>
-              </div>
-
-              <View style={styles.actions}>
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={saveDisabled}
-                  onPress={() => void save()}
-                  style={({ pressed, hovered }: PressState) => [
-                    styles.primaryButton,
-                    motion,
-                    hovered && !saveDisabled && ({ filter: "brightness(1.06)" } as ViewStyle),
-                    pressed && styles.primaryPressed,
-                    saveDisabled && ({ opacity: 0.5 } as ViewStyle),
-                  ]}
-                >
-                  <Text style={styles.primaryButtonText}>{saving ? "保存中…" : "保存"}</Text>
-                </Pressable>
-                {assistant ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={saving}
-                    onPress={() => void remove()}
-                    style={({ pressed, hovered }: PressState) => [
-                      styles.dangerButton,
-                      motion,
-                      hovered && styles.dangerButtonHover,
-                      pressed && ({ opacity: 0.7 } as ViewStyle),
-                    ]}
-                  >
-                    <RiDeleteBinLine color={theme.t.errorText} size={15} />
-                    <Text style={styles.dangerButtonText}>删除助手</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-              {error ? <Text style={styles.assistantModalError}>{error}</Text> : null}
+                            {checked ? <RiCheckLine color={theme.t.onAccent} size={13} /> : null}
+                          </View>
+                          <View style={{ flex: 1, minWidth: 0 }}>
+                            <Text style={styles.toolsItemName}>{tool.name}</Text>
+                            <Text style={styles.toolsItemDesc} numberOfLines={1}>
+                              {tool.description}
+                              {tool.requires ? ` · ${tool.requires}` : ""}
+                            </Text>
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              ) : (
+                <Text style={styles.toolsDisabledHint}>已关闭 — 不向模型提供工具</Text>
+              )}
             </View>
           </div>
+          {/* Sticky footer: the save button stays reachable no matter how long the
+              body (e.g. a large tool list) gets. */}
+          <View style={styles.assistantModalFooter}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={saveDisabled}
+              onPress={() => void save()}
+              style={({ pressed, hovered }: PressState) => [
+                styles.primaryButton,
+                motion,
+                hovered && !saveDisabled && ({ filter: "brightness(1.06)" } as ViewStyle),
+                pressed && styles.primaryPressed,
+                saveDisabled && ({ opacity: 0.5 } as ViewStyle),
+              ]}
+            >
+              <Text style={styles.primaryButtonText}>{saving ? "保存中…" : "保存"}</Text>
+            </Pressable>
+            {assistant ? (
+              <Pressable
+                accessibilityRole="button"
+                disabled={saving}
+                onPress={() => void remove()}
+                style={({ pressed, hovered }: PressState) => [
+                  styles.dangerButton,
+                  motion,
+                  hovered && styles.dangerButtonHover,
+                  pressed && ({ opacity: 0.7 } as ViewStyle),
+                ]}
+              >
+                <RiDeleteBinLine color={theme.t.errorText} size={15} />
+                <Text style={styles.dangerButtonText}>删除助手</Text>
+              </Pressable>
+            ) : null}
+            <View style={{ flex: 1, minWidth: 8 }} />
+            {error ? (
+              <Text numberOfLines={2} style={styles.assistantModalError}>
+                {error}
+              </Text>
+            ) : null}
+          </View>
         </View>
       </div>
     </div>,

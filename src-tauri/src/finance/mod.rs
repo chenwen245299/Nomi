@@ -43,6 +43,12 @@ pub struct ExpenseRecord {
     /// `YYYY-MM-DD`, in the user's local calendar. Decides which month file the
     /// record lives in.
     date: String,
+    /// Wall-clock time of the transaction as `HH:MM` (24-hour), or "" when it is
+    /// unknown. It tells apart same-day, same-amount purchases at one merchant so
+    /// they are not mistaken for a single entry. An empty time is treated as
+    /// "unknown" and never conflicts during duplicate detection.
+    #[serde(default)]
+    time: String,
     /// Always positive; `direction` carries the sign.
     amount: f64,
     /// "expense" | "income".
@@ -68,6 +74,9 @@ pub struct ExpenseRecord {
 #[serde(rename_all = "camelCase")]
 pub struct ExpenseDraft {
     date: String,
+    /// `HH:MM` (24-hour) or "" when unknown. See [`ExpenseRecord::time`].
+    #[serde(default)]
+    time: String,
     amount: f64,
     direction: String,
     currency: String,
@@ -84,6 +93,7 @@ pub struct DuplicateMatch {
     draft_index: usize,
     record_id: String,
     date: String,
+    time: String,
     amount: f64,
     direction: String,
     currency: String,
@@ -163,6 +173,7 @@ pub struct FinanceStatus {
 #[serde(rename_all = "camelCase")]
 pub struct RecordPatch {
     date: Option<String>,
+    time: Option<String>,
     amount: Option<f64>,
     direction: Option<String>,
     currency: Option<String>,
@@ -176,6 +187,9 @@ impl RecordPatch {
     fn apply(&self, record: &mut ExpenseRecord) -> Result<(), String> {
         if let Some(date) = &self.date {
             record.date = clean_date(date)?;
+        }
+        if let Some(time) = &self.time {
+            record.time = clean_time(time);
         }
         if let Some(amount) = self.amount {
             record.amount = clean_amount(amount)?;
@@ -222,6 +236,28 @@ fn clean_date(date: &str) -> Result<String, String> {
     Ok(date.to_string())
 }
 
+/// Normalise a wall-clock time to `HH:MM` (24-hour), or "" when it is absent or
+/// unparseable. The ledger treats an empty time as "unknown", which never
+/// conflicts with anything during duplicate detection.
+fn clean_time(time: &str) -> String {
+    let trimmed = time.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    // Accept "H:MM", "HH:MM" and "HH:MM:SS" (seconds dropped); reject the rest.
+    let mut parts = trimmed.split(':');
+    let (Some(hour), Some(minute)) = (parts.next(), parts.next()) else {
+        return String::new();
+    };
+    let (Ok(hour), Ok(minute)) = (hour.trim().parse::<u32>(), minute.trim().parse::<u32>()) else {
+        return String::new();
+    };
+    if hour > 23 || minute > 59 {
+        return String::new();
+    }
+    format!("{hour:02}:{minute:02}")
+}
+
 fn clean_amount(amount: f64) -> Result<f64, String> {
     if !amount.is_finite() || amount <= 0.0 {
         return Err("金额必须是大于 0 的数字。".into());
@@ -250,6 +286,7 @@ fn record_from_draft(
     Ok(ExpenseRecord {
         id: new_id("exp"),
         date: clean_date(&draft.date)?,
+        time: clean_time(&draft.time),
         amount: clean_amount(draft.amount)?,
         direction: clean_direction(&draft.direction),
         currency: {
@@ -601,6 +638,14 @@ fn merchant_key(value: &str) -> String {
         .collect()
 }
 
+/// Two known times on the same otherwise-identical transaction mean two different
+/// purchases (e.g. coffee bought morning and afternoon). An unknown time on either
+/// side carries no information, so it never rules a match out — the confirm-again
+/// gate still protects against a genuine double-entry.
+fn times_conflict(left: &str, right: &str) -> bool {
+    !left.is_empty() && !right.is_empty() && left != right
+}
+
 fn looks_like_same_transaction(record: &ExpenseRecord, draft: &ExpenseDraft) -> bool {
     let merchant = merchant_key(&draft.merchant);
     let currency = if draft.currency.trim().is_empty() {
@@ -611,6 +656,7 @@ fn looks_like_same_transaction(record: &ExpenseRecord, draft: &ExpenseDraft) -> 
     !merchant.is_empty()
         && merchant == merchant_key(&record.merchant)
         && record.date == draft.date.trim()
+        && !times_conflict(&record.time, &clean_time(&draft.time))
         && (record.amount - draft.amount).abs() < 0.005
         && record.direction == clean_direction(&draft.direction)
         && record.currency.eq_ignore_ascii_case(currency)
@@ -635,6 +681,7 @@ fn find_duplicate_records(
                     draft_index,
                     record_id: record.id.clone(),
                     date: record.date.clone(),
+                    time: record.time.clone(),
                     amount: record.amount,
                     direction: record.direction.clone(),
                     currency: record.currency.clone(),
@@ -652,6 +699,7 @@ mod tests {
     fn draft() -> ExpenseDraft {
         ExpenseDraft {
             date: "2026-08-28".into(),
+            time: String::new(),
             amount: 68.499,
             direction: "支出".into(),
             currency: String::new(),
@@ -715,5 +763,41 @@ mod tests {
         assert!(
             find_duplicate_records(&[existing.clone()], &[repeated], Some(&existing.id)).is_empty()
         );
+    }
+
+    #[test]
+    fn clean_time_normalises_or_blanks() {
+        assert_eq!(clean_time("9:30"), "09:30");
+        assert_eq!(clean_time(" 09:30:45 "), "09:30");
+        assert_eq!(clean_time("23:59"), "23:59");
+        assert_eq!(clean_time(""), "");
+        assert_eq!(clean_time("24:00"), "");
+        assert_eq!(clean_time("上午九点"), "");
+    }
+
+    #[test]
+    fn different_known_times_are_not_the_same_transaction() {
+        // Same merchant, day and amount, but two distinct times → two purchases.
+        let mut morning = record_from_draft(&draft(), None, "manual").unwrap();
+        morning.time = "09:00".into();
+
+        let mut afternoon = draft();
+        afternoon.amount = 68.5;
+        afternoon.time = "15:00".into();
+        assert!(find_duplicate_records(&[morning.clone()], &[afternoon], None).is_empty());
+
+        // A missing time on either side still flags — the confirm gate decides.
+        let mut untimed = draft();
+        untimed.amount = 68.5;
+        assert_eq!(
+            find_duplicate_records(&[morning.clone()], &[untimed], None).len(),
+            1
+        );
+
+        // The very same time is, of course, still a match.
+        let mut same = draft();
+        same.amount = 68.5;
+        same.time = "09:00".into();
+        assert_eq!(find_duplicate_records(&[morning], &[same], None).len(), 1);
     }
 }

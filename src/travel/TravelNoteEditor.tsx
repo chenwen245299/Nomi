@@ -464,12 +464,13 @@ export function TravelNoteEditor({
           ) : (
             <MarkdownEditor
               accentRgb={accent.rgb}
+              className="nomi-editor--compact"
               mode="wysiwyg"
               onBlur={() => void flushBody()}
               onChange={onBodyChange}
               onImageUpload={onImageUpload}
               onSave={() => void flushBody()}
-              placeholder="记录这段旅程——见闻、路线、花费、推荐…（⌘V 可直接粘贴图片）"
+              placeholder="记录这段旅程…（⌘V 可粘贴图片）"
               toolbar={TRAVEL_TOOLBAR}
               toolbarHost={toolbarHost}
               value={body.content}
@@ -592,11 +593,11 @@ function makeStyles(theme: Theme, accent: Accent) {
       borderRadius: 999,
       borderWidth: 1,
       flexDirection: "row",
-      height: 28,
+      height: 26,
       justifyContent: "center",
-      paddingHorizontal: 12,
+      paddingHorizontal: 11,
     },
-    chipText: { fontSize: 12, fontWeight: "600" },
+    chipText: { fontSize: 11.5, fontWeight: "600" },
     locationRow: { alignItems: "center", flexDirection: "row", gap: 8 },
     locationButton: {
       alignItems: "center",

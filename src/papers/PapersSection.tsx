@@ -882,22 +882,27 @@ function makeStyles(theme: Theme, accent: Accent) {
       borderColor: `rgba(${accent.rgb},0.28)`,
     },
     cardTitle: { color: t.textPrimary, fontSize: 13, fontWeight: "600", lineHeight: 18 },
+    // Single line (no wrap): a long venue + tags used to wrap to a second row for
+    // some cards, so their highlight boxes came out taller than others. The venue
+    // badge keeps its size; the tags truncate.
     cardBadgeRow: {
       alignItems: "center",
       flexDirection: "row",
-      flexWrap: "wrap",
+      flexWrap: "nowrap",
       gap: 6,
       marginTop: 3,
+      overflow: "hidden",
     },
     venueBadge: {
       backgroundColor: `rgba(${accent.rgb},0.10)`,
       borderRadius: 6,
-      maxWidth: "100%",
+      flexShrink: 0,
+      maxWidth: "60%",
       paddingHorizontal: 7,
       paddingVertical: 2,
     },
     venueBadgeText: { color: accent.accentText, fontSize: 11, fontWeight: "600" },
-    cardTags: { fontSize: 11 },
+    cardTags: { flexShrink: 1, fontSize: 11, minWidth: 0 },
     // Main column
     mainInner: { flex: 1, minHeight: 0 },
     mainHeader: {

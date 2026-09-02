@@ -29,9 +29,10 @@ import {
   RiListCheck2,
   RiPencilLine,
   RiSearch2Line,
+  RiTimeLine,
 } from "@remixicon/react";
 import { motion, SHELL_HEADER_HEIGHT, useTheme, type Accent, type Theme } from "../theme";
-import { revealTodoData, type Quadrant, type Todo } from "./api";
+import { revealTodoData, type Quadrant, type Todo, type TodoPatch } from "./api";
 import { dueLabel, shiftKey, todayKey, weekendKey } from "./dates";
 import {
   OVERDUE_COLOR,
@@ -1466,6 +1467,7 @@ function TodoRow({
         )}
 
         {todo.dueDate ? <DueChip styles={styles} today={today} todo={todo} /> : null}
+        {todo.startTime ? <TimeChip styles={styles} todo={todo} /> : null}
 
         {showQuadrant ? (
           <View
@@ -1560,6 +1562,18 @@ function DueChip({ styles, today, todo }: { styles: TodoStyles; today: string; t
   );
 }
 
+/** A small clock chip showing the task's time block on its due date. */
+function TimeChip({ styles, todo }: { styles: TodoStyles; todo: Todo }) {
+  const theme = useTheme();
+  const label = todo.endTime ? `${todo.startTime}–${todo.endTime}` : todo.startTime;
+  return (
+    <View style={[styles.chip, { backgroundColor: theme.t.controlIdle } as ViewStyle]}>
+      <RiTimeLine color={theme.t.textSecondary} size={10} />
+      <Text style={[styles.chipText, { color: theme.t.textSecondary } as ViewStyle]}>{label}</Text>
+    </View>
+  );
+}
+
 function InlineAdd({
   accent,
   dueDate,
@@ -1618,6 +1632,7 @@ function InlineAdd({
 type MenuRow =
   | { kind: "divider"; key: string }
   | { kind: "heading"; key: string; label: string }
+  | { kind: "custom"; key: string; render: () => React.ReactNode }
   | {
       kind: "item";
       key: string;
@@ -1628,6 +1643,89 @@ type MenuRow =
       selected?: boolean;
       run: () => void;
     };
+
+/** Two `HH:MM` inputs (start → end) for a task's time block. Keeps local state
+ *  (the menu holds a snapshot todo) and patches on every change. */
+function TimeRangeEditor({
+  accent,
+  onPatch,
+  theme,
+  todo,
+}: {
+  accent: Accent;
+  onPatch: (patch: TodoPatch) => void;
+  theme: Theme;
+  todo: Todo;
+}) {
+  const { t } = theme;
+  const [start, setStart] = useState(todo.startTime ?? "");
+  const [end, setEnd] = useState(todo.endTime ?? "");
+  const inputStyle: React.CSSProperties = {
+    background: t.cardSurfaceAlt,
+    border: `1px solid ${t.separator}`,
+    borderRadius: 7,
+    color: t.textPrimary,
+    fontFamily: "inherit",
+    fontSize: 12.5,
+    outline: "none",
+    padding: "5px 7px",
+  };
+  return (
+    <div style={{ alignItems: "center", display: "flex", gap: 6, padding: "2px 10px 6px" }}>
+      <input
+        aria-label="开始时间"
+        onChange={(event) => {
+          setStart(event.target.value);
+          onPatch({ startTime: event.target.value || null });
+        }}
+        style={inputStyle}
+        type="time"
+        value={start}
+      />
+      <span style={{ color: t.textTertiary, fontSize: 12 }}>→</span>
+      <input
+        aria-label="结束时间"
+        onChange={(event) => {
+          setEnd(event.target.value);
+          onPatch({ endTime: event.target.value || null });
+        }}
+        style={inputStyle}
+        type="time"
+        value={end}
+      />
+      {start || end ? (
+        <button
+          aria-label="清除时间"
+          onClick={() => {
+            setStart("");
+            setEnd("");
+            onPatch({ startTime: null, endTime: null });
+          }}
+          onMouseEnter={(event) => {
+            event.currentTarget.style.background = `rgba(${accent.rgb},0.12)`;
+          }}
+          onMouseLeave={(event) => {
+            event.currentTarget.style.background = "transparent";
+          }}
+          style={{
+            alignItems: "center",
+            background: "transparent",
+            border: "none",
+            borderRadius: 6,
+            cursor: "pointer",
+            display: "flex",
+            height: 24,
+            justifyContent: "center",
+            width: 24,
+          }}
+          type="button"
+        >
+          <RiCloseLine color={t.textTertiary} size={14} />
+        </button>
+      ) : null}
+    </div>
+  );
+}
 
 function TodoContextMenu({
   accent,
@@ -1736,6 +1834,20 @@ function TodoContextMenu({
       selected: todo.dueDate === null,
       run: setDue(null),
     },
+    { kind: "divider", key: "d-time" },
+    { kind: "heading", key: "h-time", label: "时间段（当天）" },
+    {
+      kind: "custom",
+      key: "time-range",
+      render: () => (
+        <TimeRangeEditor
+          accent={accent}
+          onPatch={(patch) => void todos.patchTodo(todo.id, patch)}
+          theme={theme}
+          todo={todo}
+        />
+      ),
+    },
     { kind: "divider", key: "d3" },
     {
       kind: "item",
@@ -1814,6 +1926,9 @@ function TodoContextMenu({
                 {row.label}
               </div>
             );
+          }
+          if (row.kind === "custom") {
+            return <div key={row.key}>{row.render()}</div>;
           }
           return (
             <button

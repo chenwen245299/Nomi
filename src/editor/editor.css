@@ -229,8 +229,12 @@
   white-space: nowrap;
 }
 
-/* Vditor's floating block popover trails the cursor and overlaps the text. The
-   hosted toolbar covers every command, so hide the in-content popovers entirely. */
+/* Vditor's floating block popover (a little box that trails the cursor with a
+   trash / block controls) overlaps the text, and the hosted toolbar already
+   covers every command. In vditor 3.11 that block + selection popover is
+   `.vditor-panel--none` (older builds used `.vditor-wysiwyg__popover`); the
+   link / image edit popover is `.vditor-panel--arrow` and is kept. */
+.nomi-editor .vditor-panel--none,
 .nomi-editor .vditor-wysiwyg__popover,
 .nomi-editor .vditor-ir__popover {
   display: none !important;
@@ -260,6 +264,32 @@
 .nomi-editor .vditor-ir,
 .nomi-editor .vditor-sv {
   background: transparent;
+}
+/* The base theme paints the editable surface itself with --panel-background-color
+   (and re-paints it on focus with --textarea-background-color), which shows up as
+   a hard white block over the host panel. Keep it transparent so the writing area
+   blends into whatever surface hosts the editor. */
+.nomi-editor .vditor-wysiwyg pre.vditor-reset,
+.nomi-editor .vditor-wysiwyg pre.vditor-reset:focus,
+.nomi-editor .vditor-ir pre.vditor-reset,
+.nomi-editor .vditor-ir pre.vditor-reset:focus {
+  background: transparent;
+}
+
+/* ── Compact variant ─────────────────────────────────────────────────────────
+   For editors docked in a narrow side panel (e.g. the travel-note detail), where
+   the full-page notes typography reads oversized. Smaller body text, tighter
+   rhythm, less lead-in padding, and a softer placeholder. */
+.nomi-editor--compact .vditor-reset {
+  font-size: 13.5px;
+  line-height: 1.72;
+  /* Vditor writes horizontal padding inline; !important keeps the compact inset. */
+  padding: 14px 18px 72px !important;
+}
+.nomi-editor--compact .vditor-wysiwyg pre.vditor-reset:empty::before {
+  color: rgba(120, 130, 146, 0.5);
+  font-size: 13.5px;
+  font-weight: 400;
 }
 .nomi-editor .vditor-reset a {
   color: rgb(var(--nomi-editor-accent));

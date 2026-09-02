@@ -11,6 +11,9 @@ export interface ExpenseRecord {
   id: string;
   /** `YYYY-MM-DD` in the user's local calendar. */
   date: string;
+  /** `HH:MM` (24-hour) transaction time, or "" when unknown. Distinguishes
+   *  same-day, same-amount purchases at one merchant. */
+  time: string;
   /** Always positive — `direction` carries the sign. */
   amount: number;
   direction: "expense" | "income";
@@ -30,6 +33,8 @@ export interface ExpenseRecord {
 /** What the model proposed, before anyone agreed to it. */
 export interface ExpenseDraft {
   date: string;
+  /** `HH:MM` (24-hour) or "" when unknown. */
+  time: string;
   amount: number;
   direction: "expense" | "income";
   currency: string;
@@ -43,6 +48,7 @@ export interface DuplicateMatch {
   draftIndex: number;
   recordId: string;
   date: string;
+  time: string;
   amount: number;
   direction: "expense" | "income";
   currency: string;
@@ -83,6 +89,7 @@ export interface FinanceStatus {
 /** Partial edit of a record — only the keys present are changed. */
 export interface RecordPatch {
   date?: string;
+  time?: string;
   amount?: number;
   direction?: "expense" | "income";
   currency?: string;
@@ -94,6 +101,16 @@ export interface RecordPatch {
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const nowSec = () => Math.floor(Date.now() / 1000);
+
+/** Normalise a wall-clock time to `HH:MM`, or "" when absent/unparseable. */
+export function normalizeTime(value: string | null | undefined): string {
+  const match = (value ?? "").trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return "";
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return "";
+  return `${String(hour).padStart(2, "0")}:${match[2]}`;
+}
 
 // ── Browser-preview in-memory store ──────────────────────────────────────────
 const PREVIEW_CATEGORIES = [
@@ -182,15 +199,20 @@ export async function findDuplicateRecords(
       .normalize("NFKC")
       .toLocaleLowerCase()
       .replace(/[^\p{L}\p{N}]/gu, "");
+  // Two known times on an otherwise-identical transaction mean two purchases; an
+  // unknown time on either side never rules a match out (mirrors the Rust logic).
+  const timesConflict = (a: string, b: string) => a !== "" && b !== "" && a !== b;
   return drafts.flatMap((draft, draftIndex) => {
     const merchant = merchantKey(draft.merchant);
     if (!merchant) {
       return [];
     }
+    const draftTime = normalizeTime(draft.time);
     const record = preview.records.find(
       (candidate) =>
         candidate.id !== excludeRecordId &&
         candidate.date === draft.date.trim() &&
+        !timesConflict(candidate.time ?? "", draftTime) &&
         Math.abs(candidate.amount - draft.amount) < 0.005 &&
         candidate.direction === draft.direction &&
         candidate.currency.toLocaleLowerCase() === draft.currency.trim().toLocaleLowerCase() &&
@@ -202,6 +224,7 @@ export async function findDuplicateRecords(
             draftIndex,
             recordId: record.id,
             date: record.date,
+            time: record.time ?? "",
             amount: record.amount,
             direction: record.direction,
             currency: record.currency,
@@ -306,6 +329,7 @@ export async function captureInput(
     drafts: [
       {
         date: today,
+        time: "09:12",
         amount: 68.5,
         direction: "expense",
         currency: "CNY",
