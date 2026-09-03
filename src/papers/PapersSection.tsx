@@ -613,7 +613,9 @@ export function PapersMainColumn({
               onCreateAt={handleCreateAt}
               onMoveLocal={papers.moveLocal}
               onCommitMove={(id, x, y) => void papers.commitMove(id, x, y)}
-              onAddEdge={(from, to) => void papers.addEdge(from, to)}
+              onAddEdge={(from, to, fromSide, toSide) =>
+                void papers.addEdge(from, to, "", fromSide, toSide)
+              }
               onRenameEdge={openEdgeRename}
               onDeleteEdge={(id) => void papers.deleteEdge(id)}
               onDeletePaper={handleDeletePaper}

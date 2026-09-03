@@ -78,6 +78,11 @@ pub struct PaperEdge {
     pub to: String,
     #[serde(default)]
     pub label: String,
+    /// Optional manual docking sides. Missing values keep legacy edges automatic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_side: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_side: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -335,7 +340,19 @@ fn clean_label(label: &str) -> String {
     label.trim().chars().take(40).collect()
 }
 
-fn add_edge(app: &AppHandle, from: &str, to: &str, label: &str) -> Result<PaperEdge, String> {
+fn clean_edge_side(side: Option<&str>) -> Option<String> {
+    side.filter(|value| matches!(*value, "top" | "right" | "bottom" | "left"))
+        .map(str::to_string)
+}
+
+fn add_edge(
+    app: &AppHandle,
+    from: &str,
+    to: &str,
+    label: &str,
+    from_side: Option<&str>,
+    to_side: Option<&str>,
+) -> Result<PaperEdge, String> {
     if from == to {
         return Err("不能连接到论文自身。".into());
     }
@@ -357,6 +374,8 @@ fn add_edge(app: &AppHandle, from: &str, to: &str, label: &str) -> Result<PaperE
         from: from.to_string(),
         to: to.to_string(),
         label: clean_label(label),
+        from_side: clean_edge_side(from_side),
+        to_side: clean_edge_side(to_side),
     };
     graph.edges.push(edge.clone());
     save_graph(app, &graph)?;
@@ -603,9 +622,18 @@ pub fn papers_add_edge(
     from: String,
     to: String,
     label: String,
+    from_side: Option<String>,
+    to_side: Option<String>,
 ) -> Result<PaperEdge, String> {
     let _guard = state.0.lock().map_err(|_| "论文数据被占用。".to_string())?;
-    add_edge(&app, &from, &to, &label)
+    add_edge(
+        &app,
+        &from,
+        &to,
+        &label,
+        from_side.as_deref(),
+        to_side.as_deref(),
+    )
 }
 
 #[tauri::command]

@@ -24,12 +24,17 @@ export interface Paper {
   updatedAt: number;
 }
 
+export type PaperEdgeSide = "top" | "right" | "bottom" | "left";
+
 /** A directed relationship between two papers (from → to). */
 export interface PaperEdge {
   id: string;
   from: string;
   to: string;
   label: string;
+  /** Optional manual docking sides. Older edges omit these and route automatically. */
+  fromSide?: PaperEdgeSide;
+  toSide?: PaperEdgeSide;
 }
 
 export interface PapersGraph {
@@ -211,14 +216,28 @@ export async function saveBody(id: string, content: string): Promise<void> {
 
 // ── Edges ─────────────────────────────────────────────────────────────────────
 
-export async function addEdge(from: string, to: string, label = ""): Promise<PaperEdge> {
-  if (isTauri()) return invoke<PaperEdge>("papers_add_edge", { from, to, label });
+export async function addEdge(
+  from: string,
+  to: string,
+  label = "",
+  fromSide?: PaperEdgeSide,
+  toSide?: PaperEdgeSide,
+): Promise<PaperEdge> {
+  if (isTauri()) {
+    return invoke<PaperEdge>("papers_add_edge", {
+      from,
+      to,
+      label,
+      fromSide: fromSide ?? null,
+      toSide: toSide ?? null,
+    });
+  }
   if (from === to) throw new Error("不能连接到论文自身。");
   const existing = preview.edges.find(
     (e) => (e.from === from && e.to === to) || (e.from === to && e.to === from),
   );
   if (existing) return { ...existing };
-  const edge: PaperEdge = { id: previewId("edge-"), from, to, label };
+  const edge: PaperEdge = { id: previewId("edge-"), from, to, label, fromSide, toSide };
   preview.edges.push(edge);
   return { ...edge };
 }

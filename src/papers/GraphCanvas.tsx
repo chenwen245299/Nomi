@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import {
   RiAddLine,
@@ -10,21 +10,55 @@ import {
   RiZoomOutLine,
 } from "@remixicon/react";
 import { useTheme, type Accent } from "../theme";
-import type { Paper, PaperEdge } from "./api";
+import type { Paper, PaperEdge, PaperEdgeSide } from "./api";
 import { STATUS_META, STATUS_ORDER, statusMeta, type PaperStatus } from "./constants";
-import { orthoPath, pathMidpoint, routeEdges, type Point } from "./edgeRouting";
+import { orthoPath, pathMidpoint, routeEdges, type Point, type RouteSide } from "./edgeRouting";
 
 // A free-form relationship graph for papers. Nodes are draggable cards coloured by
 // status; edges are directed links routed as obstacle-avoiding orthogonal polylines
 // (see ./edgeRouting), so a link never disappears under a card it passes. Pan by
 // dragging the canvas, zoom with the wheel, and connect two papers by dragging
-// from a node's ▸ handle onto another node. Everything is hand-drawn (DOM nodes +
+// from any of a node's four side handles onto another node. Everything is hand-drawn (DOM nodes +
 // one SVG edge overlay) so it themes exactly like the rest of the app.
 
 const NODE_W = 190;
 const NODE_H = 78; // nominal, until a card reports its measured height
 const MIN_K = 0.3;
 const MAX_K = 2.4;
+const CONNECT_SIDES: PaperEdgeSide[] = ["top", "right", "bottom", "left"];
+const CONNECT_SIDE_LABEL: Record<PaperEdgeSide, string> = {
+  top: "上侧",
+  right: "右侧",
+  bottom: "下侧",
+  left: "左侧",
+};
+const CONNECT_HANDLE_POSITION: Record<PaperEdgeSide, CSSProperties> = {
+  top: { left: "50%", marginLeft: -11, top: -11 },
+  right: { marginTop: -11, right: -11, top: "50%" },
+  bottom: { bottom: -11, left: "50%", marginLeft: -11 },
+  left: { left: -11, marginTop: -11, top: "50%" },
+};
+const ROUTE_SIDE: Record<PaperEdgeSide, RouteSide> = {
+  top: "t",
+  right: "r",
+  bottom: "b",
+  left: "l",
+};
+
+function isPaperEdgeSide(value: string | null | undefined): value is PaperEdgeSide {
+  return value === "top" || value === "right" || value === "bottom" || value === "left";
+}
+
+function nearestNodeSide(node: Element, clientX: number, clientY: number): PaperEdgeSide {
+  const rect = node.getBoundingClientRect();
+  const distances: Record<PaperEdgeSide, number> = {
+    top: Math.abs(clientY - rect.top),
+    right: Math.abs(clientX - rect.right),
+    bottom: Math.abs(clientY - rect.bottom),
+    left: Math.abs(clientX - rect.left),
+  };
+  return CONNECT_SIDES.reduce((best, side) => (distances[side] < distances[best] ? side : best));
+}
 
 interface Transform {
   x: number;
@@ -47,6 +81,7 @@ interface DragSession {
   nodeStartY?: number;
   panStart?: Transform;
   fromId?: string;
+  fromSide?: PaperEdgeSide;
 }
 
 type MenuState =
@@ -64,7 +99,7 @@ export interface GraphCanvasProps {
   onCreateAt: (x: number, y: number) => void;
   onMoveLocal: (id: string, x: number, y: number) => void;
   onCommitMove: (id: string, x: number, y: number) => void;
-  onAddEdge: (from: string, to: string) => void;
+  onAddEdge: (from: string, to: string, fromSide: PaperEdgeSide, toSide: PaperEdgeSide) => void;
   onRenameEdge: (id: string) => void;
   onDeleteEdge: (id: string) => void;
   onDeletePaper: (id: string) => void;
@@ -132,7 +167,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
   // Manual double-click detection: pointer capture on the viewport retargets the
   // native dblclick to the viewport (not the node), so we time clicks ourselves.
   const lastClickRef = useRef<{ id: string; t: number } | null>(null);
-  const [linkFrom, setLinkFrom] = useState<string | null>(null);
+  const [linkFrom, setLinkFrom] = useState<{ id: string; side: PaperEdgeSide } | null>(null);
   // Real (unscaled) node sizes — card height varies, so edges use the measured
   // size to land the arrowhead just outside each card instead of under it.
   const [nodeSizes, setNodeSizes] = useState<Map<string, { w: number; h: number }>>(new Map());
@@ -227,14 +262,15 @@ export function GraphCanvas(props: GraphCanvasProps) {
     // Floating controls (＋ / zoom / fit / legend) handle their own clicks — don't
     // capture the pointer for them, or the capture steals their click event.
     if (target.closest("button, [data-graph-ui]")) return;
-    const handleEl = target.closest("[data-connect-handle]");
+    const handleEl = target.closest<HTMLElement>("[data-connect-handle]");
     const nodeEl = target.closest("[data-paper-id]") as HTMLElement | null;
     const nodeId = nodeEl?.getAttribute("data-paper-id") ?? undefined;
+    const fromSide = handleEl?.dataset.connectSide;
 
     setMenu(null);
     el.setPointerCapture(event.pointerId);
 
-    if (handleEl && nodeId) {
+    if (handleEl && nodeId && isPaperEdgeSide(fromSide)) {
       dragRef.current = {
         mode: "link",
         pointerId: event.pointerId,
@@ -244,8 +280,9 @@ export function GraphCanvas(props: GraphCanvasProps) {
         lastY: sy,
         moved: false,
         fromId: nodeId,
+        fromSide,
       };
-      setLinkFrom(nodeId);
+      setLinkFrom({ id: nodeId, side: fromSide });
       setLinkCursor({ x: sx, y: sy });
       return;
     }
@@ -330,12 +367,20 @@ export function GraphCanvas(props: GraphCanvasProps) {
         const wy = (drag.nodeStartY ?? 0) + (drag.lastY - drag.startY) / tf.k;
         p.onCommitMove(drag.nodeId, wx, wy);
       }
-    } else if (drag.mode === "link" && drag.fromId) {
-      const hit = document
-        .elementFromPoint(event.clientX, event.clientY)
-        ?.closest("[data-paper-id]");
+    } else if (drag.mode === "link" && drag.fromId && drag.fromSide) {
+      const hitElement = document.elementFromPoint(event.clientX, event.clientY);
+      const hit = hitElement?.closest("[data-paper-id]");
       const toId = hit?.getAttribute("data-paper-id") ?? null;
-      if (toId && toId !== drag.fromId) p.onAddEdge(drag.fromId, toId);
+      const hitSide =
+        hitElement?.closest<HTMLElement>("[data-connect-handle]")?.dataset.connectSide;
+      const toSide = isPaperEdgeSide(hitSide)
+        ? hitSide
+        : hit
+          ? nearestNodeSide(hit, event.clientX, event.clientY)
+          : null;
+      if (toId && toId !== drag.fromId && toSide) {
+        p.onAddEdge(drag.fromId, toId, drag.fromSide, toSide);
+      }
       setLinkFrom(null);
       setLinkCursor(null);
     } else if (drag.mode === "pan" && !drag.moved) {
@@ -421,7 +466,13 @@ export function GraphCanvas(props: GraphCanvasProps) {
     });
     return routeEdges(
       boxes,
-      edges.map((e) => ({ id: e.id, from: e.from, to: e.to })),
+      edges.map((e) => ({
+        id: e.id,
+        from: e.from,
+        to: e.to,
+        fromSide: e.fromSide ? ROUTE_SIDE[e.fromSide] : undefined,
+        toSide: e.toSide ? ROUTE_SIDE[e.toSide] : undefined,
+      })),
     );
   }, [papers, edges, nodeSizes]);
 
@@ -448,13 +499,20 @@ export function GraphCanvas(props: GraphCanvasProps) {
 
   const linkSource = useMemo(() => {
     if (!linkCursor || !linkFrom) return null;
-    const from = paperById.get(linkFrom);
+    const from = paperById.get(linkFrom.id);
     if (!from) return null;
+    const nodeSize = nodeSizes.get(linkFrom.id) ?? { w: NODE_W, h: NODE_H };
+    let x = from.x;
+    let y = from.y;
+    if (linkFrom.side === "top") y -= nodeSize.h / 2;
+    else if (linkFrom.side === "right") x += nodeSize.w / 2;
+    else if (linkFrom.side === "bottom") y += nodeSize.h / 2;
+    else x -= nodeSize.w / 2;
     return {
-      x: transform.x + transform.k * from.x,
-      y: transform.y + transform.k * from.y,
+      x: transform.x + transform.k * x,
+      y: transform.y + transform.k * y,
     };
-  }, [linkCursor, linkFrom, paperById, transform]);
+  }, [linkCursor, linkFrom, nodeSizes, paperById, transform]);
 
   const arrowSize = Math.max(10, 13 * transform.k);
   const cornerRadius = Math.max(4, 10 * transform.k);
@@ -667,30 +725,33 @@ export function GraphCanvas(props: GraphCanvasProps) {
                   </div>
                 ) : null}
 
-                {/* Drag-to-connect handle. */}
-                <div
-                  data-connect-handle
-                  className="nomi-connect-handle"
-                  title="拖拽到另一篇论文以建立关系"
-                  style={{
-                    position: "absolute",
-                    right: -11,
-                    top: "50%",
-                    marginTop: -11,
-                    width: 22,
-                    height: 22,
-                    borderRadius: 11,
-                    background: accent.accent,
-                    border: `2px solid ${t.cardSurface}`,
-                    boxShadow: "0 2px 6px rgba(16,24,36,0.22)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "crosshair",
-                  }}
-                >
-                  <RiAddLine color="#fff" size={14} />
-                </div>
+                {/* Drag-to-connect handles on every side. The chosen source and
+                    target sides are persisted so the route stays where placed. */}
+                {CONNECT_SIDES.map((side) => (
+                  <div
+                    key={side}
+                    data-connect-handle
+                    data-connect-side={side}
+                    className="nomi-connect-handle"
+                    title={`从${CONNECT_SIDE_LABEL[side]}拖拽到另一篇论文以建立关系`}
+                    style={{
+                      position: "absolute",
+                      ...CONNECT_HANDLE_POSITION[side],
+                      width: 22,
+                      height: 22,
+                      borderRadius: 11,
+                      background: accent.accent,
+                      border: `2px solid ${t.cardSurface}`,
+                      boxShadow: "0 2px 6px rgba(16,24,36,0.22)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "crosshair",
+                    }}
+                  >
+                    <RiAddLine color="#fff" size={14} />
+                  </div>
+                ))}
               </div>
             </div>
           );
@@ -719,7 +780,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
           </div>
           <div style={{ color: t.textSecondary, fontSize: 13, lineHeight: 1.6, maxWidth: 340 }}>
             新建一篇论文，标记它是「有潜力 / 打算写 / 正在写 / 已完成」，
-            再从卡片右侧的圆点拖拽，把有关联的论文连起来。
+            再从卡片任意一侧的连接点拖拽，把有关联的论文连起来。
           </div>
           <button
             type="button"

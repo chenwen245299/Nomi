@@ -283,6 +283,12 @@
      keep note content on the same 24px alignment line as the title header. */
   padding: 42px 24px 120px !important;
 }
+.nomi-editor--notes .vditor-reset {
+  padding-top: 24px !important;
+}
+.nomi-editor--notes .vditor-reset > :first-child {
+  margin-top: 0;
+}
 .nomi-editor .vditor-content,
 .nomi-editor .vditor-wysiwyg,
 .nomi-editor .vditor-ir,

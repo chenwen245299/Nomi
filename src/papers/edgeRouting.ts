@@ -29,6 +29,8 @@ export interface RouteLink {
   id: string;
   from: string;
   to: string;
+  fromSide?: RouteSide;
+  toSide?: RouteSide;
 }
 
 export interface RoutedEdge {
@@ -71,7 +73,7 @@ const MAX_POPS = 60000;
 const EPS = 0.5;
 const MERGE = 0.75;
 
-type Side = "l" | "r" | "t" | "b";
+export type RouteSide = "l" | "r" | "t" | "b";
 
 /**
  * A card as the router sees it: an impassable core, and a clearance ring that
@@ -97,12 +99,12 @@ interface Endpoint {
   axis: 0 | 1;
 }
 
-function sidesFor(dx: number, dy: number): [Side, Side] {
+function sidesFor(dx: number, dy: number): [RouteSide, RouteSide] {
   if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? ["r", "l"] : ["l", "r"];
   return dy >= 0 ? ["b", "t"] : ["t", "b"];
 }
 
-function endpointFor(node: RouteNode, side: Side, off: number): Endpoint {
+function endpointFor(node: RouteNode, side: RouteSide, off: number): Endpoint {
   const hw = node.w / 2;
   const hh = node.h / 2;
   switch (side) {
@@ -262,8 +264,8 @@ export function routeEdges(nodes: RouteNode[], links: RouteLink[]): Map<string, 
     link: RouteLink;
     a: RouteNode;
     b: RouteNode;
-    sideA: Side;
-    sideB: Side;
+    sideA: RouteSide;
+    sideB: RouteSide;
     offA: number;
     offB: number;
   }
@@ -274,10 +276,12 @@ export function routeEdges(nodes: RouteNode[], links: RouteLink[]): Map<string, 
     const a = byId.get(link.from);
     const b = byId.get(link.to);
     if (!a || !b || a.id === b.id) continue;
-    const [sideA, sideB] = sidesFor(b.cx - a.cx, b.cy - a.cy);
+    const [autoSideA, autoSideB] = sidesFor(b.cx - a.cx, b.cy - a.cy);
+    const sideA = link.fromSide ?? autoSideA;
+    const sideB = link.toSide ?? autoSideB;
     const p: Pending = { link, a, b, sideA, sideB, offA: 0, offB: 0 };
     pending.push(p);
-    const push = (nodeId: string, side: Side, end: "a" | "b", key: number) => {
+    const push = (nodeId: string, side: RouteSide, end: "a" | "b", key: number) => {
       const k = `${nodeId}:${side}`;
       const list = slots.get(k);
       if (list) list.push({ pend: p, end, key });
@@ -290,7 +294,7 @@ export function routeEdges(nodes: RouteNode[], links: RouteLink[]): Map<string, 
 
   for (const [key, list] of slots) {
     const nodeId = key.slice(0, key.lastIndexOf(":"));
-    const side = key.slice(key.lastIndexOf(":") + 1) as Side;
+    const side = key.slice(key.lastIndexOf(":") + 1) as RouteSide;
     const node = byId.get(nodeId);
     if (!node) continue;
     const sideLen = side === "l" || side === "r" ? node.h : node.w;
@@ -312,9 +316,9 @@ export function routeEdges(nodes: RouteNode[], links: RouteLink[]): Map<string, 
     const delta =
       (horiz ? p.b.cy + p.offB : p.b.cx + p.offB) - (horiz ? p.a.cy + p.offA : p.a.cx + p.offA);
     if (Math.abs(delta) < 0.01 || Math.abs(delta) > SNAP) continue;
-    const lone = (node: RouteNode, side: Side) =>
+    const lone = (node: RouteNode, side: RouteSide) =>
       (slots.get(`${node.id}:${side}`)?.length ?? 2) === 1;
-    const room = (node: RouteNode, side: Side) =>
+    const room = (node: RouteNode, side: RouteSide) =>
       (side === "l" || side === "r" ? node.h : node.w) / 2 - 10;
     if (lone(p.b, p.sideB) && Math.abs(p.offB - delta) <= room(p.b, p.sideB)) p.offB -= delta;
     else if (lone(p.a, p.sideA) && Math.abs(p.offA + delta) <= room(p.a, p.sideA)) p.offA += delta;

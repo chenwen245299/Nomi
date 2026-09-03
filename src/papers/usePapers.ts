@@ -11,6 +11,7 @@ import {
   updatePaper as apiUpdatePaper,
   type Paper,
   type PaperEdge,
+  type PaperEdgeSide,
   type PaperInput,
 } from "./api";
 
@@ -35,7 +36,13 @@ export interface PapersData {
   commitMove: (id: string, x: number, y: number) => Promise<void>;
   deletePaper: (id: string) => Promise<void>;
   saveBody: (id: string, content: string) => Promise<void>;
-  addEdge: (from: string, to: string, label?: string) => Promise<PaperEdge | null>;
+  addEdge: (
+    from: string,
+    to: string,
+    label?: string,
+    fromSide?: PaperEdgeSide,
+    toSide?: PaperEdgeSide,
+  ) => Promise<PaperEdge | null>;
   updateEdge: (id: string, label: string) => Promise<void>;
   deleteEdge: (id: string) => Promise<void>;
   dismissError: () => void;
@@ -144,9 +151,15 @@ export function usePapers(enabled: boolean): PapersData {
   }, []);
 
   const addEdge = useCallback(
-    async (from: string, to: string, label = "") => {
+    async (
+      from: string,
+      to: string,
+      label = "",
+      fromSide?: PaperEdgeSide,
+      toSide?: PaperEdgeSide,
+    ) => {
       try {
-        const edge = await apiAddEdge(from, to, label);
+        const edge = await apiAddEdge(from, to, label, fromSide, toSide);
         setEdges((prev) => (prev.some((e) => e.id === edge.id) ? prev : [...prev, edge]));
         return edge;
       } catch (err) {

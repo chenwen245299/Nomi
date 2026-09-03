@@ -1599,6 +1599,7 @@ function NoteEditor({
       <View style={styles.editorHost}>
         <MarkdownEditor
           accentRgb={accent.rgb}
+          className="nomi-editor--notes"
           mode="wysiwyg"
           onBlur={() => void flush()}
           onChange={onChange}
