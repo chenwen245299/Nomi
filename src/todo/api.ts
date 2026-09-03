@@ -14,8 +14,13 @@ export interface Todo {
   title: string;
   notes: string;
   quadrant: Quadrant;
-  /** `YYYY-MM-DD` in the user's local calendar, or null for "someday". */
+  /** `YYYY-MM-DD` in the user's local calendar, or null for "someday". With
+   *  `endDate` set this is the first day of a multi-day span. */
   dueDate: string | null;
+  /** Last day of a task spanning several days, or null for a single day. The
+   *  backend guarantees it is never earlier than `dueDate` and never set on its
+   *  own, so null always means "ends the day it starts". */
+  endDate: string | null;
   /** `HH:MM` (24-hour) start / end time on the due date, or null when unset. */
   startTime: string | null;
   endTime: string | null;
@@ -38,6 +43,7 @@ export interface TodoPatch {
   notes?: string;
   quadrant?: Quadrant;
   dueDate?: string | null;
+  endDate?: string | null;
   startTime?: string | null;
   endTime?: string | null;
   done?: boolean;
@@ -45,6 +51,22 @@ export interface TodoPatch {
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const nowSec = () => Math.floor(Date.now() / 1000);
+
+/** Mirrors the backend's `normalize_span`, so the browser preview stores the
+ *  same shapes: an end never outlives its start, never stands alone, and a
+ *  one-day span is null rather than a repeat of the start. */
+function spanOf(
+  dueDate: string | null,
+  endDate: string | null,
+): { dueDate: string | null; endDate: string | null } {
+  if (dueDate === null) {
+    return { dueDate: null, endDate: null };
+  }
+  if (endDate === null || endDate === dueDate) {
+    return { dueDate, endDate: null };
+  }
+  return endDate < dueDate ? { dueDate: endDate, endDate: dueDate } : { dueDate, endDate };
+}
 
 // ── Browser-preview in-memory store ──────────────────────────────────────────
 const preview: { todos: Todo[]; seq: number } = { todos: [], seq: 1 };
@@ -74,9 +96,10 @@ export async function createTodo(
   title: string,
   quadrant: Quadrant,
   dueDate: string | null,
+  endDate: string | null = null,
 ): Promise<Todo> {
   if (isTauri()) {
-    return invoke<Todo>("create_todo", { title, quadrant, dueDate });
+    return invoke<Todo>("create_todo", { title, quadrant, dueDate, endDate });
   }
   const trimmed = title.trim().slice(0, 200);
   if (!trimmed) {
@@ -88,7 +111,7 @@ export async function createTodo(
     title: trimmed,
     notes: "",
     quadrant,
-    dueDate: dueDate || null,
+    ...spanOf(dueDate || null, endDate || null),
     startTime: null,
     endTime: null,
     done: false,
@@ -123,8 +146,13 @@ export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
     todo.order = previewNextOrder(patch.quadrant);
     todo.quadrant = patch.quadrant;
   }
-  if (patch.dueDate !== undefined) {
-    todo.dueDate = patch.dueDate || null;
+  if (patch.dueDate !== undefined || patch.endDate !== undefined) {
+    const next = spanOf(
+      patch.dueDate !== undefined ? patch.dueDate || null : todo.dueDate,
+      patch.endDate !== undefined ? patch.endDate || null : todo.endDate,
+    );
+    todo.dueDate = next.dueDate;
+    todo.endDate = next.endDate;
   }
   if (patch.startTime !== undefined) {
     todo.startTime = patch.startTime || null;

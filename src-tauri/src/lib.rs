@@ -11,6 +11,7 @@ mod providers;
 mod storage;
 mod todos;
 mod travel;
+mod windowing;
 
 use chat::{
     add_context_marker, create_assistant, create_conversation, create_default_conversation,
@@ -61,6 +62,7 @@ use travel::{
     travel_save_note_image, travel_save_plan, travel_set_settings, travel_update_map,
     travel_update_note,
 };
+use windowing::{PendingTabs, open_tab_window, take_tab_payload};
 
 /// CLI flag that runs the MCP stdio server instead of the GUI.
 pub const MCP_STDIO_FLAG: &str = mcp::STDIO_FLAG;
@@ -81,6 +83,7 @@ pub fn run() {
         .manage(ChatCancels::default())
         .manage(RenderJobs::default())
         .manage(PapersState::default())
+        .manage(PendingTabs::default())
         .invoke_handler(tauri::generate_handler![
             get_storage_status,
             set_storage_root,
@@ -200,7 +203,9 @@ pub fn run() {
             travel_update_map,
             travel_delete_map,
             travel_map_read_range,
-            travel_reveal_maps
+            travel_reveal_maps,
+            open_tab_window,
+            take_tab_payload
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nomi");

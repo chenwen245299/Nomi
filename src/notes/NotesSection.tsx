@@ -60,6 +60,42 @@ async function confirmDelete(message: string): Promise<boolean> {
 
 const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
 
+// Which folders are open in the tree. Kept per machine rather than in the data
+// folder: it is a view preference, not part of the notes themselves. Without it
+// every visit to 笔记 — a tab switch is enough to unmount the tree — came back
+// fully collapsed and lost where you were.
+const EXPANDED_FOLDERS_KEY = "nomi.notes.expandedFolders";
+
+function readExpandedFolders(): Set<string> {
+  try {
+    const stored: unknown = JSON.parse(window.localStorage.getItem(EXPANDED_FOLDERS_KEY) ?? "null");
+    if (Array.isArray(stored)) {
+      return new Set(stored.filter((path): path is string => typeof path === "string"));
+    }
+  } catch {
+    // Unreadable or unavailable storage (private mode) — start collapsed.
+  }
+  return new Set();
+}
+
+function writeExpandedFolders(paths: Set<string>): void {
+  try {
+    window.localStorage.setItem(EXPANDED_FOLDERS_KEY, JSON.stringify([...paths]));
+  } catch {
+    // Storage unavailable — the tree still works, it just won't remember.
+  }
+}
+
+/** Drops `path` and everything nested under it — used when a folder is deleted,
+ *  so removed folders don't pile up in storage forever. */
+function forgetExpanded(paths: Set<string>, path: string): Set<string> {
+  const next = new Set<string>();
+  for (const kept of paths) {
+    if (kept !== path && !kept.startsWith(`${path}/`)) next.add(kept);
+  }
+  return next.size === paths.size ? paths : next;
+}
+
 // Keep Vditor's native commands (selection handling, undo stack and uploads),
 // but expose them through one Obsidian-style overflow menu. The three hidden
 // view controls are driven by our clearer four-mode switcher in the note header.
@@ -297,7 +333,10 @@ function makeNotesStyles(theme: Theme, accent: Accent) {
       paddingHorizontal: 8,
       width: "100%",
     },
-    breadcrumb: { color: t.textTertiary, fontSize: 11.5, marginTop: 2 },
+    breadcrumb: { color: t.textTertiary, fontSize: 11.5 },
+    // Aligned with the header's own gutter so the path lines up with the title
+    // above it and with the editor's first line below it.
+    breadcrumbBar: { paddingHorizontal: 24, paddingTop: 10 },
     headerActions: { alignItems: "center", flexDirection: "row", gap: 2 },
     headerIconButton: {
       alignItems: "center",
@@ -378,7 +417,7 @@ export function NotesCollection({
 }) {
   const theme = useTheme();
   const styles = useMemo(() => makeNotesStyles(theme, accent), [theme, accent]);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(readExpandedFolders);
   const [editing, setEditing] = useState<string | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [query, setQuery] = useState("");
@@ -423,6 +462,10 @@ export function NotesCollection({
       window.clearTimeout(timer);
     };
   }, [allNotes, query]);
+
+  useEffect(() => {
+    writeExpandedFolders(expanded);
+  }, [expanded]);
 
   const toggle = useCallback((path: string) => {
     setExpanded((prev) => {
@@ -511,6 +554,9 @@ export function NotesCollection({
       }
       await notes.deleteNode(node);
       onNotePathChanged(node.path, null);
+      if (node.kind === "folder") {
+        setExpanded((prev) => forgetExpanded(prev, node.path));
+      }
     },
     [notes, onNotePathChanged],
   );
@@ -1160,7 +1206,6 @@ export function NotesMainColumn({
             onCommit={commitTitle}
             styles={styles}
           />
-          {breadcrumb ? <Text style={styles.breadcrumb}>{breadcrumb}</Text> : null}
         </View>
         {notePath ? (
           <View style={styles.headerActions}>
@@ -1181,6 +1226,16 @@ export function NotesMainColumn({
           </View>
         ) : null}
       </View>
+
+      {/* The folder path sits below the header rule, not inside it: stacked
+          under the title it had to share a fixed 48px band with, which left both
+          lines cramped. Down here it reads as the first line of the note's own
+          column and the header carries the title alone. */}
+      {breadcrumb ? (
+        <View style={styles.breadcrumbBar}>
+          <Text style={styles.breadcrumb}>{breadcrumb}</Text>
+        </View>
+      ) : null}
 
       {notePath ? (
         <NoteEditor

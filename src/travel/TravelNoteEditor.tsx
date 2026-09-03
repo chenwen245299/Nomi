@@ -26,7 +26,7 @@ import {
   uploadNoteImages,
 } from "./assetBridge";
 import { LocationPicker } from "./LocationPicker";
-import { StarRating } from "./ratings";
+import { StarRating } from "../ratings";
 
 type PressState = { pressed: boolean; hovered?: boolean };
 

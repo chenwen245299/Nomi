@@ -32,7 +32,7 @@ import {
   type Theme,
 } from "../theme";
 import { revealPaper, type Paper } from "./api";
-import { STATUS_META, STATUS_ORDER, type PaperStatus } from "./constants";
+import { RATED_STATUSES, STATUS_META, STATUS_ORDER, type PaperStatus } from "./constants";
 import { GraphCanvas } from "./GraphCanvas";
 import { PaperEditor } from "./PaperEditor";
 import type { PapersData } from "./usePapers";
@@ -57,9 +57,12 @@ const NEW_PAPER = (x: number, y: number) => ({
   status: "idea" as PaperStatus,
   venue: "",
   tags: [] as string[],
+  rating: 0,
   x,
   y,
 });
+
+import { StarsInline } from "../ratings";
 
 // ── Collection: papers grouped by status ────────────────────────────────────
 export function PapersCollection({
@@ -120,7 +123,14 @@ export function PapersCollection({
     };
     for (const paper of filtered) by[paper.status]?.push(paper);
     for (const status of STATUS_ORDER) {
-      by[status].sort((a, b) => b.updatedAt - a.updatedAt);
+      // 打算写 / 有潜力 rank by importance first — that is what the stars are for.
+      // Unrated (0) therefore sinks below every rated one, and recency breaks ties
+      // exactly as it does everywhere else.
+      by[status].sort((a, b) =>
+        RATED_STATUSES.has(status) && b.rating !== a.rating
+          ? b.rating - a.rating
+          : b.updatedAt - a.updatedAt,
+      );
     }
     return by;
   }, [filtered]);
@@ -425,6 +435,7 @@ function PaperListCard({
   onPress: () => void;
 }) {
   const theme = useTheme();
+  const showStars = RATED_STATUSES.has(paper.status) && paper.rating > 0;
   return (
     <div
       onContextMenu={(event) => {
@@ -444,11 +455,14 @@ function PaperListCard({
           active && styles.cardActive,
         ]}
       >
-        <Text numberOfLines={2} style={styles.cardTitle}>
+        <Text ellipsizeMode="tail" numberOfLines={1} style={styles.cardTitle}>
           {paper.title}
         </Text>
-        {paper.venue || paper.tags.length > 0 ? (
+        {showStars || paper.venue || paper.tags.length > 0 ? (
           <View style={styles.cardBadgeRow}>
+            {/* Stars lead the row so they line up down the column and the group
+                can be read as a ranking at a glance. */}
+            {showStars ? <StarsInline rating={paper.rating} size={10} /> : null}
             {paper.venue ? (
               <View style={styles.venueBadge}>
                 <Text numberOfLines={1} style={styles.venueBadgeText}>
@@ -509,6 +523,7 @@ export function PapersMainColumn({
         status,
         venue: paper.venue,
         tags: paper.tags,
+        rating: paper.rating,
         x: paper.x,
         y: paper.y,
       });
@@ -549,7 +564,13 @@ export function PapersMainColumn({
     <View style={styles.mainInner}>
       {view === "detail" && selected ? (
         // Detail owns the single header (editable title + actions + view switch).
+        // Keyed by id so switching papers remounts the editor. Its title / venue
+        // / tags / status live in useState seeded from the prop and nothing syncs
+        // them on a prop change, so a reused instance kept the previous paper's
+        // values and the next save wrote them onto the paper now on screen —
+        // renaming it. PaperBody was already keyed for the same reason.
         <PaperEditor
+          key={selected.id}
           accent={accent}
           headerAccessory={viewSwitch}
           onDelete={handleDeletePaper}
@@ -875,13 +896,26 @@ function makeStyles(theme: Theme, accent: Accent) {
       marginBottom: 2,
       paddingHorizontal: 11,
       paddingVertical: 9,
+      // Explicit, because `accessibilityRole="button"` makes react-native-web
+      // render this as a real <button>, and a button sizes itself shrink-to-fit
+      // instead of stretching like a <div>. Without it every card was as wide as
+      // its own title — short ones ended up half-width, long ones overflowed the
+      // column — so the selected/hover highlight never lined up between rows.
+      width: "100%",
     },
     cardHover: { backgroundColor: t.controlHover },
     cardActive: {
       backgroundColor: accent.selectedFill,
       borderColor: `rgba(${accent.rgb},0.28)`,
     },
-    cardTitle: { color: t.textPrimary, fontSize: 13, fontWeight: "600", lineHeight: 18 },
+    cardTitle: {
+      color: t.textPrimary,
+      fontSize: 13,
+      fontWeight: "600",
+      lineHeight: 18,
+      minWidth: 0,
+      width: "100%",
+    },
     // Single line (no wrap): a long venue + tags used to wrap to a second row for
     // some cards, so their highlight boxes came out taller than others. The venue
     // badge keeps its size; the tags truncate.

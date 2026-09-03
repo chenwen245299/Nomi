@@ -163,7 +163,7 @@ function MarkdownView({ content, color }: { content: string; color: string }) {
   return (
     <div
       className="nomi-md"
-      style={{ color, fontSize: 15, lineHeight: 1.65, wordBreak: "break-word" }}
+      style={{ color, lineHeight: 1.65, wordBreak: "break-word" }}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );

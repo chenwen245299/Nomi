@@ -57,6 +57,10 @@ pub struct Paper {
     pub venue: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Importance, 1–5 stars. 0 means unrated — which is what every paper
+    /// written before this field existed deserializes to.
+    #[serde(default)]
+    pub rating: u8,
     #[serde(default)]
     pub x: f64,
     #[serde(default)]
@@ -99,6 +103,8 @@ pub struct PaperInput {
     pub venue: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub rating: u8,
     #[serde(default)]
     pub x: f64,
     #[serde(default)]
@@ -206,6 +212,12 @@ fn clean_title(title: &str) -> String {
     }
 }
 
+/// Ratings arrive from the front end, so clamp rather than trust: anything above
+/// five collapses to five, and 0 stays 0 (unrated).
+fn clean_rating(rating: u8) -> u8 {
+    rating.min(5)
+}
+
 fn clean_tags(tags: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for tag in tags {
@@ -235,6 +247,7 @@ fn create_paper(app: &AppHandle, input: PaperInput) -> Result<Paper, String> {
         status: clean_status(&input.status),
         venue: input.venue.trim().to_string(),
         tags: clean_tags(&input.tags),
+        rating: clean_rating(input.rating),
         x: input.x,
         y: input.y,
         created_at: ts,
@@ -258,6 +271,7 @@ fn update_paper(app: &AppHandle, id: &str, input: PaperInput) -> Result<Paper, S
     paper.status = clean_status(&input.status);
     paper.venue = input.venue.trim().to_string();
     paper.tags = clean_tags(&input.tags);
+    paper.rating = clean_rating(input.rating);
     paper.updated_at = now();
     let result = paper.clone();
     save_graph(app, &graph)?;

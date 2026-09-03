@@ -10,6 +10,23 @@
 
   /* Accent-tinted focus ring, kept in sync from JS per active section. */
   --focus: rgba(47, 123, 230, 0.45);
+
+  /* Shared Markdown type scale. Keep editors, previews and every chat surface
+     aligned with Obsidian's default body and heading proportions. */
+  --nomi-markdown-font-size: 16px;
+  --nomi-markdown-sidebar-font-size: calc(var(--nomi-markdown-font-size) * 0.9);
+  --nomi-markdown-h1-size: 1.618em;
+  --nomi-markdown-h2-size: 1.462em;
+  --nomi-markdown-h3-size: 1.318em;
+  --nomi-markdown-h4-size: 1.188em;
+  --nomi-markdown-h5-size: 1.076em;
+  --nomi-markdown-h6-size: 1em;
+  --nomi-markdown-h1-line-height: 1.2;
+  --nomi-markdown-h2-line-height: 1.2;
+  --nomi-markdown-h3-line-height: 1.3;
+  --nomi-markdown-h4-line-height: 1.4;
+  --nomi-markdown-h5-line-height: 1.5;
+  --nomi-markdown-h6-line-height: 1.5;
 }
 
 * {
@@ -42,8 +59,11 @@ button {
   width: auto;
 }
 
-/* Rendered assistant markdown. Colour/size come from an inline style on the
-   container; these rules only tidy block spacing, lists and code. */
+/* Rendered assistant Markdown. Dynamic colour comes from the container; the
+   shared scale below keeps main and sidebar conversations typographically equal. */
+.nomi-md {
+  font-size: var(--nomi-markdown-font-size);
+}
 .nomi-md > *:first-child {
   margin-top: 0;
 }
@@ -89,10 +109,35 @@ button {
 .nomi-md h1,
 .nomi-md h2,
 .nomi-md h3,
-.nomi-md h4 {
+.nomi-md h4,
+.nomi-md h5,
+.nomi-md h6 {
   font-weight: 700;
-  line-height: 1.3;
   margin: 0.8em 0 0.4em;
+}
+.nomi-md h1 {
+  font-size: var(--nomi-markdown-h1-size);
+  line-height: var(--nomi-markdown-h1-line-height);
+}
+.nomi-md h2 {
+  font-size: var(--nomi-markdown-h2-size);
+  line-height: var(--nomi-markdown-h2-line-height);
+}
+.nomi-md h3 {
+  font-size: var(--nomi-markdown-h3-size);
+  line-height: var(--nomi-markdown-h3-line-height);
+}
+.nomi-md h4 {
+  font-size: var(--nomi-markdown-h4-size);
+  line-height: var(--nomi-markdown-h4-line-height);
+}
+.nomi-md h5 {
+  font-size: var(--nomi-markdown-h5-size);
+  line-height: var(--nomi-markdown-h5-line-height);
+}
+.nomi-md h6 {
+  font-size: var(--nomi-markdown-h6-size);
+  line-height: var(--nomi-markdown-h6-line-height);
 }
 .nomi-md table {
   border-collapse: collapse;

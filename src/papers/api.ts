@@ -15,6 +15,9 @@ export interface Paper {
   /** Target venue / journal (e.g. "NeurIPS 2026"). */
   venue: string;
   tags: string[];
+  /** Importance, 1–5 stars; 0 = unrated. Used to rank 打算写 / 有潜力 within
+   *  their group, where a status alone says nothing about which to start next. */
+  rating: number;
   x: number;
   y: number;
   createdAt: number;
@@ -41,6 +44,7 @@ export interface PaperInput {
   status: PaperStatus;
   venue: string;
   tags: string[];
+  rating: number;
   x: number;
   y: number;
 }
@@ -51,6 +55,8 @@ export interface SavedImage {
 }
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+/** Mirrors the backend's clamp, so the browser preview behaves the same. */
+const clampRating = (rating: number) => Math.min(5, Math.max(0, Math.round(rating || 0)));
 const nowSec = () => Math.floor(Date.now() / 1000);
 const previewId = (prefix: string) => `${prefix}${Math.random().toString(36).slice(2, 10)}`;
 
@@ -68,6 +74,7 @@ const preview: {
       status: "writing",
       venue: "TPAMI (计划投稿)",
       tags: ["diffusion", "survey"],
+      rating: 0,
       x: 40,
       y: -60,
       createdAt: nowSec(),
@@ -79,6 +86,7 @@ const preview: {
       status: "planned",
       venue: "NeurIPS 2026",
       tags: ["rlhf", "alignment"],
+      rating: 4,
       x: 320,
       y: 40,
       createdAt: nowSec(),
@@ -90,6 +98,7 @@ const preview: {
       status: "idea",
       venue: "",
       tags: ["agent", "memory"],
+      rating: 5,
       x: -220,
       y: 120,
       createdAt: nowSec(),
@@ -101,6 +110,7 @@ const preview: {
       status: "done",
       venue: "ICML 2025",
       tags: ["quantization"],
+      rating: 0,
       x: 60,
       y: 220,
       createdAt: nowSec(),
@@ -138,6 +148,7 @@ export async function createPaper(input: PaperInput): Promise<Paper> {
     ...input,
     id: previewId("paper-"),
     title: input.title.trim() || "未命名论文",
+    rating: clampRating(input.rating),
     createdAt: nowSec(),
     updatedAt: nowSec(),
   };
@@ -155,6 +166,7 @@ export async function updatePaper(id: string, input: PaperInput): Promise<Paper>
     status: input.status,
     venue: input.venue.trim(),
     tags: input.tags,
+    rating: clampRating(input.rating),
     updatedAt: nowSec(),
   });
   return { ...paper };

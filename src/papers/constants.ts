@@ -58,6 +58,13 @@ export const STATUS_META: Record<PaperStatus, StatusMeta> = {
 /** Collection list + legend order (active work first, finished last). */
 export const STATUS_ORDER: PaperStatus[] = ["writing", "planned", "idea", "done", "published"];
 
+/** Statuses where the paper is still a candidate rather than committed work.
+ *  These are the two the importance rating applies to: 打算写 and 有潜力 can each
+ *  hold a dozen entries that the status alone says nothing about, so the stars
+ *  are what rank them. The other three are either already underway or finished,
+ *  where a priority score has nothing left to decide. */
+export const RATED_STATUSES = new Set<PaperStatus>(["planned", "idea"]);
+
 /** Left→right tiers used by the graph's auto-arrange (idea → … → published pipeline). */
 export const PIPELINE_ORDER: PaperStatus[] = ["idea", "planned", "writing", "done", "published"];
 

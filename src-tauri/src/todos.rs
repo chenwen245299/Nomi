@@ -36,8 +36,14 @@ pub struct Todo {
     notes: String,
     quadrant: u8,
     /// `YYYY-MM-DD` in the user's local calendar, or `None` for "someday".
+    /// With `end_date` set this is the first day of a multi-day span.
     #[serde(default)]
     due_date: Option<String>,
+    /// Last day of a task that spans several days, or `None` for a single day.
+    /// Always `>= due_date`, and never set without one — `normalize_span`
+    /// guarantees both, so readers can treat `None` as "ends the day it starts".
+    #[serde(default)]
+    end_date: Option<String>,
     /// Optional start / end clock time (`HH:MM`, 24-hour) on the due date — a time
     /// block for the task. `None` means unset.
     #[serde(default)]
@@ -73,6 +79,8 @@ pub struct TodoPatch {
     quadrant: Option<u8>,
     #[serde(default, deserialize_with = "some_option")]
     due_date: Option<Option<String>>,
+    #[serde(default, deserialize_with = "some_option")]
+    end_date: Option<Option<String>>,
     #[serde(default, deserialize_with = "some_option")]
     start_time: Option<Option<String>>,
     #[serde(default, deserialize_with = "some_option")]
@@ -164,6 +172,24 @@ fn check_quadrant(quadrant: u8) -> Result<u8, String> {
 
 /// Accept only a plain `YYYY-MM-DD` calendar date so the stored file stays
 /// unambiguous (the frontend formats the user's local date; no timezone here).
+/// Force a start/end pair into the one shape the rest of the code assumes:
+/// an end never outlives its start, never stands alone, and a one-day span is
+/// stored as `None` rather than a repeat of the start date — so "single day" has
+/// exactly one representation everywhere.
+fn normalize_span(due: Option<String>, end: Option<String>) -> (Option<String>, Option<String>) {
+    let Some(due) = due else {
+        // An end date with no start has nothing to span from.
+        return (None, None);
+    };
+    match end {
+        // Reversed input is a slip, not an error: the user picked the two dates
+        // in the order that made sense to them.
+        Some(end) if end < due => (Some(end), Some(due)),
+        Some(end) if end == due => (Some(due), None),
+        other => (Some(due), other),
+    }
+}
+
 fn check_due_date(date: Option<String>) -> Result<Option<String>, String> {
     let Some(date) = date else {
         return Ok(None);
@@ -251,10 +277,11 @@ pub fn create_todo(
     title: String,
     quadrant: u8,
     due_date: Option<String>,
+    end_date: Option<String>,
 ) -> Result<Todo, String> {
     let title = clean_title(&title)?;
     let quadrant = check_quadrant(quadrant)?;
-    let due_date = check_due_date(due_date)?;
+    let (due_date, end_date) = normalize_span(check_due_date(due_date)?, check_due_date(end_date)?);
     let mut todos = load(&app)?;
     let timestamp = now();
     let todo = Todo {
@@ -263,6 +290,7 @@ pub fn create_todo(
         notes: String::new(),
         quadrant,
         due_date,
+        end_date,
         start_time: None,
         end_time: None,
         done: false,
@@ -298,6 +326,16 @@ pub fn update_todo(app: AppHandle, id: String, patch: TodoPatch) -> Result<Todo,
     if let Some(due_date) = patch.due_date {
         todos[index].due_date = check_due_date(due_date)?;
     }
+    if let Some(end_date) = patch.end_date {
+        todos[index].end_date = check_due_date(end_date)?;
+    }
+    // Run after both, because either one alone can leave the span inconsistent —
+    // moving the start past the old end, or clearing the start while an end
+    // remains.
+    let (due_date, end_date) =
+        normalize_span(todos[index].due_date.clone(), todos[index].end_date.clone());
+    todos[index].due_date = due_date;
+    todos[index].end_date = end_date;
     if let Some(start_time) = patch.start_time {
         todos[index].start_time = check_time(start_time)?;
     }
@@ -384,6 +422,7 @@ mod tests {
             notes: String::new(),
             quadrant,
             due_date: None,
+            end_date: None,
             start_time: None,
             end_time: None,
             done,
@@ -392,6 +431,28 @@ mod tests {
             updated_at: 1,
             order,
         }
+    }
+
+    #[test]
+    fn normalize_span_orders_and_collapses() {
+        let day = |s: &str| Some(s.to_string());
+        // A reversed pair is the user picking the two dates in the order that
+        // made sense to them, not an error.
+        assert_eq!(
+            normalize_span(day("2026-09-05"), day("2026-09-03")),
+            (day("2026-09-03"), day("2026-09-05"))
+        );
+        // One day is stored as a bare start, so "single day" has one shape.
+        assert_eq!(
+            normalize_span(day("2026-09-03"), day("2026-09-03")),
+            (day("2026-09-03"), None)
+        );
+        // An end with no start has nothing to span from.
+        assert_eq!(normalize_span(None, day("2026-09-03")), (None, None));
+        assert_eq!(
+            normalize_span(day("2026-09-03"), day("2026-09-05")),
+            (day("2026-09-03"), day("2026-09-05"))
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import type { Quadrant, Todo } from "./api";
-import { dateKey, dayHeading, fullDateLabel, shiftKey } from "./dates";
+import { dateKey, dayHeading, fullDateLabel, shiftKey, spanCovers, spanDays } from "./dates";
 import { quadrantStyle } from "./palette";
 
 // ── Views ────────────────────────────────────────────────────────────────────
@@ -37,6 +37,24 @@ export function scopeSupportsBoard(scope: TodoScope): boolean {
   return scope === "today" || scope === "week" || scope === "all";
 }
 
+/** The last day a todo occupies: its end date, or its due date for a single-day
+ *  task. Null only when it has no date at all. */
+export function lastDay(todo: Todo): string | null {
+  return todo.endDate ?? todo.dueDate;
+}
+
+/** A dated todo is overdue once the whole span is behind us — a task running
+ *  until Friday is not late on Wednesday just because it started Monday. */
+export function isOverdue(todo: Todo, today: string): boolean {
+  const last = lastDay(todo);
+  return !todo.done && last !== null && last < today;
+}
+
+/** Whether the todo occupies `day` — true for every day of a multi-day span. */
+export function occupiesDay(todo: Todo, day: string): boolean {
+  return todo.dueDate !== null && spanCovers(todo.dueDate, todo.endDate, day);
+}
+
 function completedOn(todo: Todo, day: string): boolean {
   return (
     todo.done && todo.completedAt !== null && dateKey(new Date(todo.completedAt * 1000)) === day
@@ -52,6 +70,7 @@ function completedOn(todo: Todo, day: string): boolean {
 export function inScope(todo: Todo, scope: TodoScope, today: string): boolean {
   switch (scope) {
     case "today":
+      // Started (or overdue) — a span that began last week is still today's work.
       return (todo.dueDate !== null && todo.dueDate <= today) || completedOn(todo, today);
     case "week":
       return (
@@ -108,9 +127,7 @@ function group(key: string, title: string, todos: Todo[]): TodoGroup[] {
  * `sortForList`, so finished items sink to the bottom of their own section.
  */
 export function groupForList(todos: Todo[], scope: TodoScope, today: string): TodoGroup[] {
-  const overdue = todos.filter(
-    (todo) => !todo.done && todo.dueDate !== null && todo.dueDate < today,
-  );
+  const overdue = todos.filter((todo) => isOverdue(todo, today));
   const overdueIds = new Set(overdue.map((todo) => todo.id));
   const rest = todos.filter((todo) => !overdueIds.has(todo.id));
 
@@ -136,14 +153,24 @@ export function groupForList(todos: Todo[], scope: TodoScope, today: string): To
   if (scope === "week") {
     const byDay = new Map<string, Todo[]>();
     const undated: Todo[] = [];
+    const last = shiftKey(today, 6);
     for (const todo of rest) {
       // A task finished today with no due date still belongs to today's list.
-      const day = todo.dueDate ?? (completedOn(todo, today) ? today : null);
-      if (day === null) {
+      const start = todo.dueDate ?? (completedOn(todo, today) ? today : null);
+      if (start === null) {
         undated.push(todo);
         continue;
       }
-      byDay.set(day, [...(byDay.get(day) ?? []), todo]);
+      // A multi-day task is listed under every day it runs, so a week view shows
+      // what is actually on your plate each day rather than only the day it
+      // started. Days outside the window are clipped, and a span that began in
+      // the past shows from today onwards.
+      for (const day of spanDays(start, todo.endDate)) {
+        if (day < today || day > last) {
+          continue;
+        }
+        byDay.set(day, [...(byDay.get(day) ?? []), todo]);
+      }
     }
     return [
       ...group("overdue", "已逾期", overdue),
@@ -164,7 +191,7 @@ export function groupForList(todos: Todo[], scope: TodoScope, today: string): To
       ...group(
         "today",
         "今天",
-        rest.filter((todo) => todo.dueDate === today),
+        rest.filter((todo) => occupiesDay(todo, today)),
       ),
       ...group(
         "upcoming",

@@ -85,6 +85,7 @@ import { useTodos, type TodosData } from "./todo/useTodos";
 import { TravelCollection, TravelMainColumn, useTravel, type TravelData } from "./travel";
 import { scopeLabel, type TodoLayout, type TodoScope } from "./todo/views";
 import { initVersion, startAutoUpdate, stopAutoUpdate } from "./updater/store";
+import { detachTabToWindow, isMainWindow } from "./tabWindows";
 import {
   accentFor,
   badgeGlow,
@@ -249,6 +250,17 @@ function readStoredSidebarWidth(): number {
 const TITLEBAR_DRAG = { dataSet: { tauriDragRegion: "deep" } } as unknown as ViewProps;
 const SPACER_DRAG = { dataSet: { tauriDragRegion: "" } } as unknown as ViewProps;
 
+// Titlebar geometry. The styles below and the tab tear-off maths both need it:
+// the titlebar sits at the window's top-left corner, so a pointer position in
+// viewport coordinates is also its position inside the window.
+const TITLEBAR_HEIGHT = 40;
+// Room kept clear on the left for the macOS traffic lights — also where the
+// first tab starts, which is what a torn-off tab becomes in its new window.
+const TITLEBAR_TRAFFIC_WIDTH = 96;
+// How far a dragged tab has to leave the titlebar before the drag stops being
+// a reorder and becomes "open this in its own window".
+const TAB_TEAR_OFF_MARGIN = 44;
+
 // react-native's Pressable types only model `{ pressed }`; react-native-web also
 // passes `hovered` / `focused`. Optional keeps the callback assignable.
 type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
@@ -295,6 +307,17 @@ function makeTab(id: number, section: SectionId): Tab {
     todoLayout: "board",
     settingsTab: "storage",
   };
+}
+
+/** The tab a window was born with, when it was torn off from another window.
+ *  The payload crossed a process boundary, so keep only what still parses as a
+ *  tab; anything else falls back to a fresh 对话 tab. */
+function adoptTab(raw: unknown): Tab {
+  const fresh = makeTab(1, "chat");
+  if (!raw || typeof raw !== "object") return fresh;
+  const candidate = raw as Partial<Tab>;
+  if (!sections.some((section) => section.id === candidate.section)) return fresh;
+  return { ...fresh, ...candidate, id: fresh.id };
 }
 
 const SETTINGS_LABEL: Record<SettingsTab, string> = {
@@ -389,13 +412,13 @@ function makeStyles(theme: Theme, accent: Accent) {
       borderBottomColor: t.separator,
       borderBottomWidth: 1,
       flexDirection: "row",
-      height: 40,
+      height: TITLEBAR_HEIGHT,
       paddingRight: 10,
       zIndex: 5,
     },
     tbTrafficSpace: {
       alignSelf: "stretch",
-      width: 96,
+      width: TITLEBAR_TRAFFIC_WIDTH,
     },
     tbTabs: {
       alignItems: "center",
@@ -1062,13 +1085,15 @@ function useStyles(accent: Accent): { styles: Styles; theme: Theme; accent: Acce
 }
 
 // ── App root ────────────────────────────────────────────────────────────────
-function App() {
+function App({ detachedTab }: { detachedTab?: unknown }) {
   const theme = useMemo(() => resolveTheme(), []);
   const { width } = useWindowDimensions();
   const compact = width < 900;
   const compactHeight = useWindowDimensions().height < 650;
 
-  const [tabs, setTabs] = useState<Tab[]>([makeTab(1, "chat")]);
+  // Torn-off windows open on the tab that was dragged out; every other window
+  // starts on a fresh 对话 tab. Read once — main.tsx resolves it before mounting.
+  const [tabs, setTabs] = useState<Tab[]>(() => [adoptTab(detachedTab)]);
   const [activeId, setActiveId] = useState(1);
   const nextTabId = useRef(2);
 
@@ -1210,6 +1235,24 @@ function App() {
       next.splice(insertIndex, 0, moving);
       return next;
     });
+  }
+
+  // Dropping a tab outside the titlebar moves it into a window of its own, at
+  // the drop point and at this window's size. The tab only leaves once that
+  // window is up, so a failure to open it never loses the tab.
+  async function detachTab(id: number, at: { x: number; y: number }) {
+    if (tabs.length <= 1) return;
+    const tab = tabs.find((candidate) => candidate.id === id);
+    if (!tab) return;
+    const opened = await detachTabToWindow(tab, {
+      height: window.innerHeight,
+      width: window.innerWidth,
+      x: at.x,
+      y: at.y,
+    });
+    if (opened) {
+      closeTab(id);
+    }
   }
 
   const setSettingsTab = (settingsTab: SettingsTab) => patchActiveTab({ settingsTab });
@@ -1379,6 +1422,9 @@ function App() {
 
   useEffect(() => {
     void initVersion();
+    // One updater per app: torn-off windows would otherwise each download the
+    // same release. They can still check by hand from 设置.
+    if (!isMainWindow()) return;
     startAutoUpdate();
     return () => stopAutoUpdate();
   }, []);
@@ -1442,6 +1488,7 @@ function App() {
           labelFor={tabLabel}
           onAdd={addTab}
           onClose={closeTab}
+          onDetach={detachTab}
           onReorder={reorderTabs}
           onSelect={setActiveId}
           onToggleSidebar={() => setSidebarOpen((open) => !open)}
@@ -1699,6 +1746,7 @@ function TitleBar({
   labelFor,
   onAdd,
   onClose,
+  onDetach,
   onReorder,
   onSelect,
   sidebarAvailable,
@@ -1711,6 +1759,7 @@ function TitleBar({
   labelFor: (tab: Tab) => string;
   onAdd: () => void;
   onClose: (id: number) => void;
+  onDetach: (id: number, at: { x: number; y: number }) => void;
   onReorder: (sourceId: number, targetId: number, position: TabDropPosition) => void;
   onSelect: (id: number) => void;
   sidebarAvailable: boolean;
@@ -1724,14 +1773,25 @@ function TitleBar({
     id: number;
     position: TabDropPosition;
   } | null>(null);
+  // Set while the dragged tab is far enough outside the titlebar to become its
+  // own window; holds the pointer position so the hint can follow the cursor.
+  const [tearOff, setTearOff] = useState<{ x: number; y: number } | null>(null);
   const tabNodes = useRef(new Map<number, HTMLDivElement>());
   const pointerSession = useRef<{
     dropTarget: { id: number; position: TabDropPosition } | null;
+    // Where the cursor sits relative to the window a drop would create.
+    grabX: number;
+    grabY: number;
     id: number;
     moved: boolean;
     pointerId: number;
     startX: number;
+    startY: number;
+    tearOff: boolean;
   } | null>(null);
+  // The last tab can be dragged around, but tearing it off would only swap one
+  // window for another — leave it where it is.
+  const canDetach = tabs.length > 1;
 
   useEffect(() => {
     if (draggedTabId == null) return;
@@ -1749,7 +1809,15 @@ function TitleBar({
     pointerSession.current = null;
     setDraggedTabId(null);
     setDropTarget(null);
+    setTearOff(null);
   };
+
+  /** Has the cursor left the titlebar strip by enough to mean "new window"? */
+  const outsideTitlebar = (clientX: number, clientY: number) =>
+    clientY > TITLEBAR_HEIGHT + TAB_TEAR_OFF_MARGIN ||
+    clientY < -TAB_TEAR_OFF_MARGIN ||
+    clientX < -TAB_TEAR_OFF_MARGIN ||
+    clientX > window.innerWidth + TAB_TEAR_OFF_MARGIN;
 
   const targetAt = (sourceId: number, clientX: number) => {
     const candidates = tabs
@@ -1777,12 +1845,20 @@ function TitleBar({
     } catch {
       // Pointer capture is unavailable in a few older embedded webviews.
     }
+    const bounds = event.currentTarget.getBoundingClientRect();
     pointerSession.current = {
       dropTarget: null,
+      // In a new window this tab becomes the first one, so it would sit right
+      // after the traffic-light space: offset the window by that much and the
+      // tab reappears under the cursor, where the user left it.
+      grabX: TITLEBAR_TRAFFIC_WIDTH + (event.clientX - bounds.left),
+      grabY: Math.min(TITLEBAR_HEIGHT, Math.max(0, event.clientY)),
       id: tabId,
       moved: false,
       pointerId: event.pointerId,
       startX: event.clientX,
+      startY: event.clientY,
+      tearOff: false,
     };
   };
 
@@ -1791,11 +1867,25 @@ function TitleBar({
     if (!session || session.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
-    if (!session.moved && Math.abs(event.clientX - session.startX) < 5) return;
+    // Straight-down drags tear a tab off, so the threshold has to see both axes.
+    if (
+      !session.moved &&
+      Math.hypot(event.clientX - session.startX, event.clientY - session.startY) < 5
+    ) {
+      return;
+    }
     if (!session.moved) {
       session.moved = true;
       setDraggedTabId(session.id);
     }
+    session.tearOff = canDetach && outsideTitlebar(event.clientX, event.clientY);
+    if (session.tearOff) {
+      // Out of the strip: no insertion point any more, just the new-window hint.
+      setDropTarget(null);
+      setTearOff({ x: event.clientX, y: event.clientY });
+      return;
+    }
+    setTearOff(null);
     const nextTarget = targetAt(session.id, event.clientX);
     session.dropTarget = nextTarget;
     setDropTarget((current) =>
@@ -1818,7 +1908,14 @@ function TitleBar({
       // See the pointer-capture fallback above.
     }
     if (!cancelled) {
-      if (session.moved && session.dropTarget) {
+      if (session.moved && session.tearOff) {
+        // screenX/Y is the cursor on screen; back out the grab offset to get the
+        // new window's top-left, so the tab lands exactly under the pointer.
+        onDetach(session.id, {
+          x: event.screenX - session.grabX,
+          y: event.screenY - session.grabY,
+        });
+      } else if (session.moved && session.dropTarget) {
         onReorder(session.id, session.dropTarget.id, session.dropTarget.position);
       } else if (!session.moved) {
         onSelect(session.id);
@@ -1853,7 +1950,7 @@ function TitleBar({
                 transition: "opacity 0.14s ease",
                 userSelect: "none",
               }}
-              title="拖动调整标签位置"
+              title={canDetach ? "拖动调整顺序，拖出标题栏可在新窗口打开" : "拖动调整标签位置"}
             >
               {dropPosition ? (
                 <div
@@ -1915,6 +2012,33 @@ function TitleBar({
             size={17}
           />
         </Pressable>
+      ) : null}
+      {tearOff ? (
+        // The titlebar starts at the window's top-left, so its own coordinate
+        // space is the viewport's — an absolute box can just follow the cursor.
+        <div
+          style={{
+            alignItems: "center",
+            background: theme.t.overlaySolid,
+            border: `1px solid ${theme.t.separatorStrong}`,
+            borderRadius: 8,
+            boxShadow: "0 12px 32px rgba(20,28,40,0.22)",
+            color: theme.t.textSecondary,
+            display: "flex",
+            fontSize: 12,
+            gap: 6,
+            left: tearOff.x + 14,
+            padding: "6px 10px",
+            pointerEvents: "none",
+            position: "absolute",
+            top: tearOff.y + 16,
+            whiteSpace: "nowrap",
+            zIndex: 30,
+          }}
+        >
+          <RiExternalLinkLine color={theme.t.textTertiary} size={14} />
+          松开以在新窗口打开
+        </div>
       ) : null}
     </View>
   );

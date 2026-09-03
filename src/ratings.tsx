@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Pressable, Text, View, type ViewStyle } from "react-native";
 import { RiStarFill, RiStarLine } from "@remixicon/react";
-import { motion, type Accent } from "../theme";
+import { motion, type Accent } from "./theme";
 
 // ── Star rating (5 = best, 1 = worst, 0 = unrated) ────────────────────────────
 
@@ -63,11 +63,21 @@ export function StarRating({
             onPress={() => onChange(rating === value ? 0 : value)}
             style={motion}
           >
-            {filled ? (
-              <RiStarFill color={GOLD} size={size} />
-            ) : (
-              <RiStarLine color="rgba(60,70,85,0.28)" size={size} />
-            )}
+            {/* The icon is swapped between two different components as the hover
+                preview moves, which replaces the DOM node under the cursor. When
+                that re-render lands between pointerdown and pointerup the press
+                gesture is broken and the click is silently lost — reliably so
+                when rating up from empty stars, and always on touch, where there
+                is no hover phase before the press. Taking the icon out of hit
+                testing keeps both events on the Pressable's own node, which is
+                stable. */}
+            <View pointerEvents="none">
+              {filled ? (
+                <RiStarFill color={GOLD} size={size} />
+              ) : (
+                <RiStarLine color="rgba(60,70,85,0.28)" size={size} />
+              )}
+            </View>
           </Pressable>
         );
       })}

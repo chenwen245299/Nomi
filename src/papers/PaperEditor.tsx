@@ -11,7 +11,8 @@ import {
   prepareForStorage,
   uploadNoteImages,
 } from "./assetBridge";
-import { STATUS_META, STATUS_ORDER, type PaperStatus } from "./constants";
+import { StarRating } from "../ratings";
+import { RATED_STATUSES, STATUS_META, STATUS_ORDER, type PaperStatus } from "./constants";
 
 type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
 
@@ -85,6 +86,7 @@ export function PaperEditor({
   const [venue, setVenue] = useState(paper.venue);
   const [tagsText, setTagsText] = useState(paper.tags.join(" "));
   const [status, setStatus] = useState<PaperStatus>(paper.status);
+  const [rating, setRating] = useState(paper.rating);
   const [titleFocused, setTitleFocused] = useState(false);
 
   const buildInput = useCallback(
@@ -93,11 +95,12 @@ export function PaperEditor({
       status,
       venue,
       tags: tagsText.split(/[\s,，、]+/).filter(Boolean),
+      rating,
       x: paper.x,
       y: paper.y,
       ...overrides,
     }),
-    [title, status, venue, tagsText, paper.x, paper.y],
+    [title, status, venue, tagsText, rating, paper.x, paper.y],
   );
 
   const commit = useCallback(
@@ -109,6 +112,14 @@ export function PaperEditor({
     (next: PaperStatus) => {
       setStatus(next);
       commit({ status: next });
+    },
+    [commit],
+  );
+
+  const chooseRating = useCallback(
+    (next: number) => {
+      setRating(next);
+      commit({ rating: next });
     },
     [commit],
   );
@@ -197,6 +208,12 @@ export function PaperEditor({
               </Pressable>
             );
           })}
+          {RATED_STATUSES.has(status) ? (
+            <View style={styles.ratingInline}>
+              <Text style={styles.ratingLabel}>重要性</Text>
+              <StarRating accent={accent} onChange={chooseRating} rating={rating} size={17} />
+            </View>
+          ) : null}
         </View>
         <View style={styles.fieldsRow}>
           <TextInput
@@ -434,6 +451,14 @@ function makeStyles(theme: Theme, accent: Accent) {
       paddingVertical: 11,
     },
     statusRow: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
+    ratingInline: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: 8,
+      height: 28,
+      paddingLeft: 6,
+    },
+    ratingLabel: { color: t.textTertiary, fontSize: 12.5 },
     statusPill: {
       alignItems: "center",
       backgroundColor: t.controlIdle,

@@ -12,15 +12,17 @@ import {
 import { useTheme, type Accent } from "../theme";
 import type { Paper, PaperEdge } from "./api";
 import { STATUS_META, STATUS_ORDER, statusMeta, type PaperStatus } from "./constants";
+import { orthoPath, pathMidpoint, routeEdges, type Point } from "./edgeRouting";
 
 // A free-form relationship graph for papers. Nodes are draggable cards coloured by
-// status; edges are directed links drawn between them. Pan by dragging the canvas,
-// zoom with the wheel, and connect two papers by dragging from a node's ▸ handle
-// onto another node. Everything is hand-drawn (DOM nodes + one SVG edge overlay)
-// so it themes exactly like the rest of the app.
+// status; edges are directed links routed as obstacle-avoiding orthogonal polylines
+// (see ./edgeRouting), so a link never disappears under a card it passes. Pan by
+// dragging the canvas, zoom with the wheel, and connect two papers by dragging
+// from a node's ▸ handle onto another node. Everything is hand-drawn (DOM nodes +
+// one SVG edge overlay) so it themes exactly like the rest of the app.
 
 const NODE_W = 190;
-const NODE_H = 78; // nominal, for edge border-intersection math
+const NODE_H = 78; // nominal, until a card reports its measured height
 const MIN_K = 0.3;
 const MAX_K = 2.4;
 
@@ -88,44 +90,6 @@ function distToSegment(
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
-/** Point where the segment from a rect's centre toward `(tx,ty)` crosses the border. */
-function borderPoint(
-  cx: number,
-  cy: number,
-  hw: number,
-  hh: number,
-  tx: number,
-  ty: number,
-): { x: number; y: number } {
-  const dx = tx - cx;
-  const dy = ty - cy;
-  if (dx === 0 && dy === 0) return { x: cx, y: cy };
-  const sx = dx !== 0 ? hw / Math.abs(dx) : Infinity;
-  const sy = dy !== 0 ? hh / Math.abs(dy) : Infinity;
-  const s = Math.min(sx, sy, 1);
-  return { x: cx + dx * s, y: cy + dy * s };
-}
-
-/**
- * Quadratic-bezier control point for the edge between two card centres, offset
- * perpendicular to the line by a length-proportional amount. A consistent side
- * means edges leaving the same node in similar directions fan apart, and an
- * A→B edge bows opposite to its B→A twin.
- */
-function controlPoint(
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number,
-  k: number,
-): { x: number; y: number } {
-  const dx = bx - ax;
-  const dy = by - ay;
-  const len = Math.hypot(dx, dy) || 1;
-  const bow = Math.min(64 * k, len * 0.15);
-  return { x: (ax + bx) / 2 + (-dy / len) * bow, y: (ay + by) / 2 + (dx / len) * bow };
-}
-
 function fitTransform(papers: Paper[], w: number, h: number): Transform {
   if (w === 0 || h === 0) return { x: 0, y: 0, k: 1 };
   if (papers.length === 0) return { x: w / 2, y: h / 2, k: 1 };
@@ -161,6 +125,9 @@ export function GraphCanvas(props: GraphCanvasProps) {
   const [menu, setMenu] = useState<MenuState | null>(null);
 
   const dragRef = useRef<DragSession | null>(null);
+  // Screen-space edge polylines, read by the context-menu hit test (which runs
+  // outside the render pass). Kept in sync by an effect after every commit.
+  const renderedRef = useRef<{ edge: PaperEdge; points: Point[]; active: boolean }[]>([]);
   const initializedRef = useRef(false);
   // Manual double-click detection: pointer capture on the viewport retargets the
   // native dblclick to the viewport (not the node), so we time clicks ourselves.
@@ -384,7 +351,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
       const rect = el.getBoundingClientRect();
       const sx = event.clientX - rect.left;
       const sy = event.clientY - rect.top;
-      const { papers: ps, edges: es, transform: tf } = latest.current;
+      const { transform: tf } = latest.current;
 
       const nodeEl = (event.target as HTMLElement).closest("[data-paper-id]");
       const nodeId = nodeEl?.getAttribute("data-paper-id");
@@ -392,24 +359,17 @@ export function GraphCanvas(props: GraphCanvasProps) {
         setMenu({ kind: "node", id: nodeId, x: event.clientX, y: event.clientY });
         return;
       }
-      // Edge hit-test in screen space.
-      const map = new Map(ps.map((p) => [p.id, p]));
+      // Edge hit-test in screen space, against the routed polylines.
       let best: { id: string; d: number } | null = null;
-      for (const edge of es) {
-        const a = map.get(edge.from);
-        const b = map.get(edge.to);
-        if (!a || !b) continue;
-        const ax = tf.x + tf.k * a.x;
-        const ay = tf.y + tf.k * a.y;
-        const bx = tf.x + tf.k * b.x;
-        const by = tf.y + tf.k * b.y;
-        // Match the drawn curve: approximate it by its two control sub-segments.
-        const ctrl = controlPoint(ax, ay, bx, by, tf.k);
-        const d = Math.min(
-          distToSegment(sx, sy, ax, ay, ctrl.x, ctrl.y),
-          distToSegment(sx, sy, ctrl.x, ctrl.y, bx, by),
-        );
-        if (d < 16 && (!best || d < best.d)) best = { id: edge.id, d };
+      for (const { edge, points } of renderedRef.current) {
+        let d = Infinity;
+        for (let i = 1; i < points.length; i += 1) {
+          d = Math.min(
+            d,
+            distToSegment(sx, sy, points[i - 1].x, points[i - 1].y, points[i].x, points[i].y),
+          );
+        }
+        if (d < 14 && (!best || d < best.d)) best = { id: edge.id, d };
       }
       if (best) {
         setMenu({ kind: "edge", id: best.id, x: event.clientX, y: event.clientY });
@@ -452,37 +412,39 @@ export function GraphCanvas(props: GraphCanvasProps) {
     latest.current.props.onCreateAt(world.x, world.y);
   }, [toWorld]);
 
-  // ── Edge geometry (screen space) for the SVG overlay.
+  // ── World-space routes. Only cards moving or resizing can change these, so
+  //    panning and zooming reuse the same polylines.
+  const routes = useMemo(() => {
+    const boxes = papers.map((p) => {
+      const s = nodeSizes.get(p.id) ?? { w: NODE_W, h: NODE_H };
+      return { id: p.id, cx: p.x, cy: p.y, w: s.w, h: s.h };
+    });
+    return routeEdges(
+      boxes,
+      edges.map((e) => ({ id: e.id, from: e.from, to: e.to })),
+    );
+  }, [papers, edges, nodeSizes]);
+
+  // ── Project each route into screen space for the SVG overlay.
   const rendered = useMemo(() => {
     const k = transform.k;
-    const gap = 3 * k; // land the arrowhead just outside the card, never under it
-    const half = (id: string) => {
-      const s = nodeSizes.get(id) ?? { w: NODE_W, h: NODE_H };
-      return { hw: (s.w / 2) * k + gap, hh: (s.h / 2) * k + gap };
-    };
     return edges
       .map((edge) => {
-        const a = paperById.get(edge.from);
-        const b = paperById.get(edge.to);
-        if (!a || !b) return null;
-        const acx = transform.x + k * a.x;
-        const acy = transform.y + k * a.y;
-        const bcx = transform.x + k * b.x;
-        const bcy = transform.y + k * b.y;
-        // Bow the edge sideways so edges sharing a node fan apart instead of
-        // stacking on the same straight line; reversed edges bow the other way.
-        const ctrl = controlPoint(acx, acy, bcx, bcy, k);
-        const aHalf = half(edge.from);
-        const bHalf = half(edge.to);
-        // Trim to each card's border along the curve's tangent (toward the
-        // control point), so the arrowhead meets the card at the right angle.
-        const start = borderPoint(acx, acy, aHalf.hw, aHalf.hh, ctrl.x, ctrl.y);
-        const end = borderPoint(bcx, bcy, bHalf.hw, bHalf.hh, ctrl.x, ctrl.y);
+        const route = routes.get(edge.id);
+        if (!route || route.points.length < 2) return null;
+        const points: Point[] = route.points.map((pt) => ({
+          x: transform.x + k * pt.x,
+          y: transform.y + k * pt.y,
+        }));
         const active = selectedId === edge.from || selectedId === edge.to;
-        return { edge, start, end, ctrl, active };
+        return { edge, points, active };
       })
       .filter((v): v is NonNullable<typeof v> => v !== null);
-  }, [edges, paperById, transform, selectedId, nodeSizes]);
+  }, [edges, routes, transform, selectedId]);
+
+  useEffect(() => {
+    renderedRef.current = rendered;
+  });
 
   const linkSource = useMemo(() => {
     if (!linkCursor || !linkFrom) return null;
@@ -495,6 +457,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
   }, [linkCursor, linkFrom, paperById, transform]);
 
   const arrowSize = Math.max(10, 13 * transform.k);
+  const cornerRadius = Math.max(4, 10 * transform.k);
   const isEmpty = papers.length === 0;
 
   return (
@@ -530,13 +493,14 @@ export function GraphCanvas(props: GraphCanvasProps) {
         height={size.h}
         style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
       >
-        {rendered.map(({ edge, start, end, ctrl, active }) => {
+        {rendered.map(({ edge, points, active }) => {
           const color = active ? accent.accent : t.separatorStrong;
-          // Curve midpoint (bezier at t=0.5) for the label chip.
-          const mx = 0.25 * start.x + 0.5 * ctrl.x + 0.25 * end.x;
-          const my = 0.25 * start.y + 0.5 * ctrl.y + 0.25 * end.y;
-          // Arrowhead follows the tangent at the end (from the control point).
-          const angle = Math.atan2(end.y - ctrl.y, end.x - ctrl.x);
+          const end = points[points.length - 1];
+          const prev = points[points.length - 2];
+          // The label rides the middle of the polyline, by arc length.
+          const mid = pathMidpoint(points);
+          // Arrowhead follows the final segment, which is always axis-aligned.
+          const angle = Math.atan2(end.y - prev.y, end.x - prev.x);
           const ax1 = end.x - arrowSize * Math.cos(angle - Math.PI / 7);
           const ay1 = end.y - arrowSize * Math.sin(angle - Math.PI / 7);
           const ax2 = end.x - arrowSize * Math.cos(angle + Math.PI / 7);
@@ -544,18 +508,19 @@ export function GraphCanvas(props: GraphCanvasProps) {
           return (
             <g key={edge.id}>
               <path
-                d={`M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`}
+                d={orthoPath(points, cornerRadius)}
                 fill="none"
                 stroke={color}
                 strokeWidth={active ? 3.5 : 2.5}
                 strokeLinecap="round"
+                strokeLinejoin="round"
               />
               <polygon points={`${end.x},${end.y} ${ax1},${ay1} ${ax2},${ay2}`} fill={color} />
               {edge.label ? (
                 <g>
                   <rect
-                    x={mx - edge.label.length * 6 - 6}
-                    y={my - 10}
+                    x={mid.x - edge.label.length * 6 - 6}
+                    y={mid.y - 10}
                     width={edge.label.length * 12 + 12}
                     height={20}
                     rx={7}
@@ -564,8 +529,8 @@ export function GraphCanvas(props: GraphCanvasProps) {
                     strokeWidth={1}
                   />
                   <text
-                    x={mx}
-                    y={my + 4}
+                    x={mid.x}
+                    y={mid.y + 4}
                     textAnchor="middle"
                     fontSize={11}
                     fill={t.textSecondary}

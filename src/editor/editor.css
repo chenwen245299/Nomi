@@ -14,11 +14,13 @@
   flex: 1;
   min-height: 0;
 }
+.nomi-editor--fill.vditor,
 .nomi-editor--fill .vditor {
   flex: 1;
   min-height: 0;
 }
 
+.nomi-editor.vditor,
 .nomi-editor .vditor {
   display: flex;
   flex-direction: column;
@@ -240,6 +242,25 @@
   display: none !important;
 }
 
+/* Vditor labels editable headings with H1/H2/... pseudo-elements. They sit in
+   a negative left margin and can escape the writing column, so Nomi keeps the
+   semantic heading styling without exposing those implementation markers. */
+.nomi-editor .vditor-wysiwyg > .vditor-reset > h1::before,
+.nomi-editor .vditor-wysiwyg > .vditor-reset > h2::before,
+.nomi-editor .vditor-wysiwyg > .vditor-reset > h3::before,
+.nomi-editor .vditor-wysiwyg > .vditor-reset > h4::before,
+.nomi-editor .vditor-wysiwyg > .vditor-reset > h5::before,
+.nomi-editor .vditor-wysiwyg > .vditor-reset > h6::before,
+.nomi-editor .vditor-ir .vditor-reset > h1::before,
+.nomi-editor .vditor-ir .vditor-reset > h2::before,
+.nomi-editor .vditor-ir .vditor-reset > h3::before,
+.nomi-editor .vditor-ir .vditor-reset > h4::before,
+.nomi-editor .vditor-ir .vditor-reset > h5::before,
+.nomi-editor .vditor-ir .vditor-reset > h6::before {
+  content: none;
+  display: none;
+}
+
 /* ── Content ──────────────────────────────────────────────────────────────── */
 .nomi-editor .vditor-reset,
 .nomi-editor .vditor-sv,
@@ -248,8 +269,11 @@
   font-family: inherit;
   color: #1b2430;
 }
+.nomi-editor .vditor-reset,
+.nomi-editor .vditor-sv {
+  font-size: var(--nomi-markdown-font-size);
+}
 .nomi-editor .vditor-reset {
-  font-size: 15px;
   line-height: 1.8;
   width: 100%;
   max-width: none;
@@ -280,16 +304,62 @@
    For editors docked in a narrow side panel (e.g. the travel-note detail), where
    the full-page notes typography reads oversized. Smaller body text, tighter
    rhythm, less lead-in padding, and a softer placeholder. */
+.nomi-editor--compact .vditor-reset,
+.nomi-editor--compact .vditor-sv {
+  font-size: var(--nomi-markdown-sidebar-font-size);
+}
 .nomi-editor--compact .vditor-reset {
-  font-size: 13.5px;
   line-height: 1.72;
   /* Vditor writes horizontal padding inline; !important keeps the compact inset. */
   padding: 14px 18px 72px !important;
 }
 .nomi-editor--compact .vditor-wysiwyg pre.vditor-reset:empty::before {
   color: rgba(120, 130, 146, 0.5);
-  font-size: 13.5px;
+  font-size: var(--nomi-markdown-sidebar-font-size);
   font-weight: 400;
+}
+.nomi-editor .vditor-reset h1,
+.nomi-editor .vditor-sv .h1,
+.nomi-md-preview.vditor-reset h1 {
+  font-size: var(--nomi-markdown-h1-size);
+  line-height: var(--nomi-markdown-h1-line-height);
+}
+.nomi-editor .vditor-reset h2,
+.nomi-editor .vditor-sv .h2,
+.nomi-md-preview.vditor-reset h2 {
+  font-size: var(--nomi-markdown-h2-size);
+  line-height: var(--nomi-markdown-h2-line-height);
+}
+.nomi-editor .vditor-reset h3,
+.nomi-editor .vditor-sv .h3,
+.nomi-md-preview.vditor-reset h3 {
+  font-size: var(--nomi-markdown-h3-size);
+  line-height: var(--nomi-markdown-h3-line-height);
+}
+.nomi-editor .vditor-reset h4,
+.nomi-editor .vditor-sv .h4,
+.nomi-md-preview.vditor-reset h4 {
+  font-size: var(--nomi-markdown-h4-size);
+  line-height: var(--nomi-markdown-h4-line-height);
+}
+.nomi-editor .vditor-reset h5,
+.nomi-editor .vditor-sv .h5,
+.nomi-md-preview.vditor-reset h5 {
+  font-size: var(--nomi-markdown-h5-size);
+  line-height: var(--nomi-markdown-h5-line-height);
+}
+.nomi-editor .vditor-reset h6,
+.nomi-editor .vditor-sv .h6,
+.nomi-md-preview.vditor-reset h6 {
+  font-size: var(--nomi-markdown-h6-size);
+  line-height: var(--nomi-markdown-h6-line-height);
+}
+.nomi-editor .vditor-reset h1,
+.nomi-editor .vditor-reset h2,
+.nomi-md-preview.vditor-reset h1,
+.nomi-md-preview.vditor-reset h2 {
+  border-bottom: 0;
+  padding-bottom: 0;
 }
 .nomi-editor .vditor-reset a {
   color: rgb(var(--nomi-editor-accent));
@@ -304,7 +374,7 @@
 }
 .nomi-md-preview.vditor-reset {
   font-family: inherit;
-  font-size: 15px;
+  font-size: var(--nomi-markdown-font-size);
   line-height: 1.75;
   color: #1b2430;
 }

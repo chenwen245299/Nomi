@@ -27,7 +27,7 @@ import { MapView, type MapHandle, type MapMarker } from "./MapView";
 import { OfflineMaps } from "./OfflineMaps";
 import { TravelNoteEditor } from "./TravelNoteEditor";
 import { LocationPicker } from "./LocationPicker";
-import { StarChip } from "./ratings";
+import { StarChip } from "../ratings";
 import { litRegions, type RegionCollection, type RegionLevel } from "./adminBoundaries";
 import {
   readNote,

@@ -33,7 +33,15 @@ import {
 } from "@remixicon/react";
 import { motion, SHELL_HEADER_HEIGHT, useTheme, type Accent, type Theme } from "../theme";
 import { revealTodoData, type Quadrant, type Todo, type TodoPatch } from "./api";
-import { dueLabel, shiftKey, todayKey, weekendKey } from "./dates";
+import {
+  daysBetween,
+  dueLabel,
+  shiftKey,
+  spanLabel,
+  spanProgress,
+  todayKey,
+  weekendKey,
+} from "./dates";
 import {
   OVERDUE_COLOR,
   OVERDUE_FILL,
@@ -49,6 +57,7 @@ import {
   scopeQuadrant,
   scopeSubtitle,
   scopeSupportsBoard,
+  isOverdue,
   sortForBoard,
   todayProgress,
   todosInScope,
@@ -440,14 +449,18 @@ export function TodoCollection({
   // with the scope it was made in, so switching views restores that view's
   // defaults without an effect.
   const [override, setOverride] = useState<{
-    dueToday: boolean;
+    span: DateSpan;
     quadrant: Quadrant;
     scope: TodoScope;
   } | null>(null);
   const target =
     override?.scope === scope
       ? override
-      : { dueToday: scope === "today", quadrant: scopeQuadrant(scope) ?? 2, scope };
+      : {
+          span: { start: scope === "today" ? today : null, end: null },
+          quadrant: scopeQuadrant(scope) ?? 2,
+          scope,
+        };
 
   const submit = async () => {
     const title = draft.trim();
@@ -455,7 +468,9 @@ export function TodoCollection({
       return;
     }
     setDraft("");
-    await todos.addTodo(title, target.quadrant, target.dueToday ? today : null);
+    // The date chosen here is kept for the next item: entering a week of work
+    // for the same day should not mean re-picking the date every line.
+    await todos.addTodo(title, target.quadrant, target.span.start, target.span.end);
   };
 
   const percent = progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100);
@@ -508,35 +523,13 @@ export function TodoCollection({
             );
           })}
           <View style={styles.captureSpacer} />
-          <Pressable
-            accessibilityLabel="截止日期设为今天"
-            accessibilityRole="button"
-            accessibilityState={{ selected: target.dueToday }}
-            onPress={() => setOverride({ ...target, dueToday: !target.dueToday, scope })}
-            style={({ hovered }: PressState) => [
-              styles.dueToggle,
-              motion,
-              {
-                backgroundColor: target.dueToday
-                  ? accent.selectedFill
-                  : hovered
-                    ? theme.t.controlHover
-                    : "transparent",
-                borderColor: target.dueToday ? accent.accent : theme.t.controlBorder,
-              } as ViewStyle,
-            ]}
-          >
-            <Text
-              style={[
-                styles.dueToggleText,
-                {
-                  color: target.dueToday ? accent.accentText : theme.t.textTertiary,
-                } as ViewStyle,
-              ]}
-            >
-              今天
-            </Text>
-          </Pressable>
+          <DateSpanPicker
+            accent={accent}
+            onChange={(span) => setOverride({ ...target, span, scope })}
+            span={target.span}
+            styles={styles}
+            today={today}
+          />
         </View>
       </View>
 
@@ -1332,6 +1325,10 @@ function TodoListView({
                   onEndEdit={onEndEdit}
                   onMenu={onMenu}
                   onStartEdit={() => onStartEdit(todo.id)}
+                  // The week view keys its sections by date, so that key is the
+                  // day this row stands for. Other sections ("已逾期", "未安排
+                  // 日期") are not days and fall back to today.
+                  refDay={/^\d{4}-\d{2}-\d{2}$/.test(group.key) ? group.key : undefined}
                   // A quadrant scope is already all one colour — the dot would
                   // repeat what the checkbox ring says.
                   showQuadrant={scopeQuadrant(scope) === null}
@@ -1358,6 +1355,7 @@ function TodoRow({
   onEndEdit,
   onMenu,
   onStartEdit,
+  refDay,
   showQuadrant,
   styles,
   today,
@@ -1372,6 +1370,10 @@ function TodoRow({
   onEndEdit: () => void;
   onMenu: (todo: Todo, x: number, y: number) => void;
   onStartEdit: () => void;
+  /** Which day this row stands for. A multi-day task is listed under each day it
+   *  runs, so its progress must count from that day rather than from today —
+   *  otherwise every copy reads "第 1/3 天". Defaults to today elsewhere. */
+  refDay?: string;
   showQuadrant?: boolean;
   styles: TodoStyles;
   today: string;
@@ -1467,6 +1469,9 @@ function TodoRow({
         )}
 
         {todo.dueDate ? <DueChip styles={styles} today={today} todo={todo} /> : null}
+        {todo.endDate && !todo.done ? (
+          <SpanProgressChip day={refDay ?? today} styles={styles} todo={todo} />
+        ) : null}
         {todo.startTime ? <TimeChip styles={styles} todo={todo} /> : null}
 
         {showQuadrant ? (
@@ -1545,7 +1550,9 @@ function RowTitleInput({
 
 function DueChip({ styles, today, todo }: { styles: TodoStyles; today: string; todo: Todo }) {
   const theme = useTheme();
-  const overdue = !todo.done && todo.dueDate !== null && todo.dueDate < today;
+  // Overdue tracks the END of the span: a task running until Friday is not late
+  // on Wednesday just because it started Monday.
+  const overdue = isOverdue(todo, today);
   const color = overdue ? OVERDUE_COLOR : theme.t.textSecondary;
   return (
     <View
@@ -1555,9 +1562,26 @@ function DueChip({ styles, today, todo }: { styles: TodoStyles; today: string; t
       ]}
     >
       <RiCalendarLine color={color} size={10} />
-      <Text style={[styles.chipText, { color } as ViewStyle]}>
-        {dueLabel(todo.dueDate ?? today, today)}
+      <Text numberOfLines={1} style={[styles.chipText, { color } as ViewStyle]}>
+        {todo.dueDate === null
+          ? dueLabel(today, today)
+          : spanLabel(todo.dueDate, todo.endDate, today)}
       </Text>
+    </View>
+  );
+}
+
+/** "第 2/4 天" for a multi-day task that is running right now. The date range
+ *  alone says when it ends, not how far into it you are. */
+function SpanProgressChip({ day, styles, todo }: { day: string; styles: TodoStyles; todo: Todo }) {
+  const theme = useTheme();
+  const label = todo.dueDate === null ? null : spanProgress(todo.dueDate, todo.endDate, day);
+  if (label === null) {
+    return null;
+  }
+  return (
+    <View style={[styles.chip, { backgroundColor: theme.t.controlIdle } as ViewStyle]}>
+      <Text style={[styles.chipText, { color: theme.t.textSecondary } as ViewStyle]}>{label}</Text>
     </View>
   );
 }
@@ -1625,6 +1649,248 @@ function InlineAdd({
         value={value}
       />
     </View>
+  );
+}
+
+// ── Date span picking ───────────────────────────────────────────────────────
+// One shared surface for "when does this happen", used by the capture bar (so a
+// todo can be dated as it is created, rather than filed under today and fixed
+// afterwards) and by the right-click menu. Native <input type="date"> for the
+// same reason TimeRangeEditor uses type="time": the OS calendar is better than
+// anything hand-rolled here, and it matches the rest of the module.
+
+export interface DateSpan {
+  start: string | null;
+  end: string | null;
+}
+
+/** Button text for a span: 不设日期 / 今天 / 今天 → 周四. */
+function spanButtonLabel(span: DateSpan, today: string): string {
+  if (span.start === null) {
+    return "不设日期";
+  }
+  return spanLabel(span.start, span.end, today);
+}
+
+/** Start → end inputs plus a day count. Emits a whole span, already ordered, so
+ *  neither caller has to think about which end moved. */
+function DateSpanFields({
+  accent,
+  onChange,
+  span,
+  theme,
+}: {
+  accent: Accent;
+  onChange: (span: DateSpan) => void;
+  span: DateSpan;
+  theme: Theme;
+}) {
+  const { t } = theme;
+  // flex + minWidth:0 because a native date input sizes to its content, so an
+  // empty end field rendered visibly narrower than a filled start field.
+  const inputStyle: React.CSSProperties = {
+    background: t.cardSurfaceAlt,
+    border: `1px solid ${t.separator}`,
+    borderRadius: 7,
+    color: t.textPrimary,
+    flex: 1,
+    fontFamily: "inherit",
+    fontSize: 12.5,
+    minWidth: 0,
+    outline: "none",
+    padding: "5px 7px",
+  };
+  const days = span.start && span.end ? daysBetween(span.start, span.end) + 1 : 0;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "2px 10px 6px" }}>
+      <div style={{ alignItems: "center", display: "flex", gap: 6 }}>
+        <input
+          aria-label="开始日期"
+          onChange={(event) => onChange({ start: event.target.value || null, end: span.end })}
+          style={inputStyle}
+          type="date"
+          value={span.start ?? ""}
+        />
+        <span style={{ color: t.textTertiary, fontSize: 12 }}>→</span>
+        <input
+          aria-label="结束日期"
+          // An end with no start has nothing to span from, so picking one first
+          // starts the task that day instead of being silently dropped.
+          disabled={span.start === null}
+          onChange={(event) => onChange({ start: span.start, end: event.target.value || null })}
+          style={{ ...inputStyle, opacity: span.start === null ? 0.5 : 1 }}
+          type="date"
+          value={span.end ?? ""}
+        />
+      </div>
+      {days > 1 ? (
+        <span style={{ color: accent.accentText, fontSize: 11.5, fontWeight: 600 }}>
+          共 {days} 天
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** A button showing the current span, opening a popover to change it. */
+function DateSpanPicker({
+  accent,
+  onChange,
+  span,
+  styles,
+  today,
+}: {
+  accent: Accent;
+  onChange: (span: DateSpan) => void;
+  span: DateSpan;
+  styles: TodoStyles;
+  today: string;
+}) {
+  const theme = useTheme();
+  const { t } = theme;
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null);
+
+  const openMenu = () => {
+    const rect = anchorRef.current?.getBoundingClientRect();
+    if (rect) {
+      setAnchor({ left: rect.left, top: rect.bottom + 6 });
+    }
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  const dated = span.start !== null;
+  const quick: { key: string; label: string; span: DateSpan }[] = [
+    { key: "today", label: "今天", span: { start: today, end: null } },
+    { key: "tomorrow", label: "明天", span: { start: shiftKey(today, 1), end: null } },
+    { key: "weekend", label: "本周末", span: { start: weekendKey(today), end: null } },
+    {
+      key: "3d",
+      label: "未来三天",
+      span: { start: today, end: shiftKey(today, 2) },
+    },
+    { key: "week", label: "本周七天", span: { start: today, end: shiftKey(today, 6) } },
+    { key: "none", label: "不设日期", span: { start: null, end: null } },
+  ];
+
+  return (
+    <div ref={anchorRef} style={{ display: "flex" }}>
+      <Pressable
+        accessibilityLabel="设置日期"
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        onPress={openMenu}
+        style={({ hovered }: PressState) => [
+          styles.dueToggle,
+          motion,
+          {
+            backgroundColor: dated ? accent.selectedFill : hovered ? t.controlHover : "transparent",
+            borderColor: dated ? accent.accent : t.controlBorder,
+            flexDirection: "row",
+            gap: 4,
+          } as ViewStyle,
+        ]}
+      >
+        <View pointerEvents="none" style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <RiCalendarLine color={dated ? accent.accentText : t.textTertiary} size={11} />
+          <Text
+            style={[
+              styles.dueToggleText,
+              { color: dated ? accent.accentText : t.textTertiary } as ViewStyle,
+            ]}
+          >
+            {spanButtonLabel(span, today)}
+          </Text>
+        </View>
+      </Pressable>
+
+      {open && anchor
+        ? createPortal(
+            <div
+              onClick={() => setOpen(false)}
+              style={{ position: "fixed", inset: 0, zIndex: 2000 }}
+            >
+              <div
+                onClick={(event) => event.stopPropagation()}
+                style={{
+                  background: t.cardSurface,
+                  border: `1px solid ${t.separator}`,
+                  borderRadius: 12,
+                  boxShadow: "0 12px 32px rgba(16,24,36,0.18), 0 2px 8px rgba(16,24,36,0.10)",
+                  left: Math.max(8, Math.min(anchor.left, window.innerWidth - 308)),
+                  padding: 6,
+                  position: "fixed",
+                  top: anchor.top,
+                  // Wide enough for two native date inputs side by side; below
+                  // this the browser clips the date text behind the picker icon.
+                  width: 300,
+                }}
+              >
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 4,
+                    gridTemplateColumns: "repeat(3, 1fr)",
+                    padding: "2px 4px 6px",
+                  }}
+                >
+                  {quick.map((option) => {
+                    const selected =
+                      option.span.start === span.start && option.span.end === span.end;
+                    return (
+                      <button
+                        key={option.key}
+                        onClick={() => {
+                          onChange(option.span);
+                          setOpen(false);
+                        }}
+                        onMouseEnter={(event) => {
+                          if (!selected) event.currentTarget.style.background = t.controlHover;
+                        }}
+                        onMouseLeave={(event) => {
+                          if (!selected) event.currentTarget.style.background = "transparent";
+                        }}
+                        style={{
+                          background: selected ? accent.selectedFill : "transparent",
+                          border: `1px solid ${selected ? accent.accent : t.controlBorder}`,
+                          borderRadius: 7,
+                          color: selected ? accent.accentText : t.textSecondary,
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                          fontSize: 12,
+                          fontWeight: selected ? 600 : 500,
+                          padding: "5px 4px",
+                          textAlign: "center",
+                          transition: "background-color 120ms ease",
+                          whiteSpace: "nowrap",
+                        }}
+                        type="button"
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ background: t.separator, height: 1, margin: "2px 4px 6px" }} />
+                <DateSpanFields accent={accent} onChange={onChange} span={span} theme={theme} />
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </div>
   );
 }
 
@@ -1773,7 +2039,11 @@ function TodoContextMenu({
   }, [onClose]);
 
   const iconColor = t.textSecondary;
-  const setDue = (date: string | null) => () => void todos.patchTodo(todo.id, { dueDate: date });
+  // Quick picks set a single day, so they clear any existing span rather than
+  // leaving an end date stranded behind a new start.
+  const setDue = (date: string | null) => () =>
+    void todos.patchTodo(todo.id, { dueDate: date, endDate: null });
+  const span: DateSpan = { start: todo.dueDate, end: todo.endDate };
 
   const rows: MenuRow[] = [
     {
@@ -1801,13 +2071,13 @@ function TodoContextMenu({
       run: () => void todos.patchTodo(todo.id, { quadrant: meta.id }),
     })),
     { kind: "divider", key: "d2" },
-    { kind: "heading", key: "h-due", label: "截止日期" },
+    { kind: "heading", key: "h-due", label: "日期" },
     {
       kind: "item",
       key: "due-today",
       label: "今天",
       icon: <RiCalendarTodoLine color={iconColor} size={15} />,
-      selected: todo.dueDate === today,
+      selected: todo.endDate === null && todo.dueDate === today,
       run: setDue(today),
     },
     {
@@ -1815,7 +2085,7 @@ function TodoContextMenu({
       key: "due-tomorrow",
       label: "明天",
       icon: <RiCalendarLine color={iconColor} size={15} />,
-      selected: todo.dueDate === shiftKey(today, 1),
+      selected: todo.endDate === null && todo.dueDate === shiftKey(today, 1),
       run: setDue(shiftKey(today, 1)),
     },
     {
@@ -1823,7 +2093,7 @@ function TodoContextMenu({
       key: "due-weekend",
       label: "本周末",
       icon: <RiCalendarScheduleLine color={iconColor} size={15} />,
-      selected: todo.dueDate === weekendKey(today),
+      selected: todo.endDate === null && todo.dueDate === weekendKey(today),
       run: setDue(weekendKey(today)),
     },
     {
@@ -1833,6 +2103,20 @@ function TodoContextMenu({
       icon: <RiCloseLine color={iconColor} size={15} />,
       selected: todo.dueDate === null,
       run: setDue(null),
+    },
+    {
+      kind: "custom",
+      key: "date-span",
+      render: () => (
+        <DateSpanFields
+          accent={accent}
+          onChange={(next) =>
+            void todos.patchTodo(todo.id, { dueDate: next.start, endDate: next.end })
+          }
+          span={span}
+          theme={theme}
+        />
+      ),
     },
     { kind: "divider", key: "d-time" },
     { kind: "heading", key: "h-time", label: "时间段（当天）" },

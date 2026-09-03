@@ -32,7 +32,12 @@ export interface TodosData {
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
-  addTodo: (title: string, quadrant: Quadrant, dueDate: string | null) => Promise<Todo | null>;
+  addTodo: (
+    title: string,
+    quadrant: Quadrant,
+    dueDate: string | null,
+    endDate?: string | null,
+  ) => Promise<Todo | null>;
   patchTodo: (id: string, patch: TodoPatch) => Promise<Todo | null>;
   removeTodo: (id: string) => Promise<void>;
   reorder: (quadrant: Quadrant, ids: string[]) => Promise<void>;
@@ -66,17 +71,25 @@ export function useTodos(active: boolean): TodosData {
     void refresh();
   }, [active, refresh]);
 
-  const addTodo = useCallback(async (title: string, quadrant: Quadrant, dueDate: string | null) => {
-    try {
-      const created = await createTodo(title, quadrant, dueDate);
-      setTodos((prev) => canonical([...prev, created]));
-      setError(null);
-      return created;
-    } catch (err) {
-      setError(String(err));
-      return null;
-    }
-  }, []);
+  const addTodo = useCallback(
+    async (
+      title: string,
+      quadrant: Quadrant,
+      dueDate: string | null,
+      endDate: string | null = null,
+    ) => {
+      try {
+        const created = await createTodo(title, quadrant, dueDate, endDate);
+        setTodos((prev) => canonical([...prev, created]));
+        setError(null);
+        return created;
+      } catch (err) {
+        setError(String(err));
+        return null;
+      }
+    },
+    [],
+  );
 
   const patchTodo = useCallback(
     async (id: string, patch: TodoPatch) => {
