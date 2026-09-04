@@ -251,6 +251,26 @@ export async function updateEdge(id: string, label: string): Promise<void> {
   if (edge) edge.label = label;
 }
 
+export async function updateEdgeSides(
+  id: string,
+  fromSide?: PaperEdgeSide,
+  toSide?: PaperEdgeSide,
+): Promise<void> {
+  if (isTauri()) {
+    await invoke("papers_update_edge_sides", {
+      id,
+      fromSide: fromSide ?? null,
+      toSide: toSide ?? null,
+    });
+    return;
+  }
+  const edge = preview.edges.find((item) => item.id === id);
+  if (edge) {
+    edge.fromSide = fromSide;
+    edge.toSide = toSide;
+  }
+}
+
 export async function deleteEdge(id: string): Promise<void> {
   if (isTauri()) {
     await invoke("papers_delete_edge", { id });

@@ -616,6 +616,9 @@ export function PapersMainColumn({
               onAddEdge={(from, to, fromSide, toSide) =>
                 void papers.addEdge(from, to, "", fromSide, toSide)
               }
+              onSetEdgeSides={(id, fromSide, toSide) =>
+                void papers.updateEdgeSides(id, fromSide, toSide)
+              }
               onRenameEdge={openEdgeRename}
               onDeleteEdge={(id) => void papers.deleteEdge(id)}
               onDeletePaper={handleDeletePaper}

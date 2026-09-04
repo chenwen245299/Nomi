@@ -148,6 +148,134 @@ button {
   padding: 4px 8px;
 }
 
+/* User turns align as blocks on the right, while their prose keeps the natural
+   left-to-right reading edge. Long turns are capped by the conversation UI. */
+.nomi-user-message-text {
+  cursor: text;
+  font-size: 15px;
+  line-height: 23px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+.nomi-chat-selectable,
+.nomi-chat-selectable * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.nomi-user-message-text.is-collapsed {
+  max-height: 230px;
+  overflow: hidden;
+}
+
+/* Release notes use their own compact editorial rhythm inside the updater.
+   The dialog shell owns scrolling so its header and actions stay anchored. */
+.nomi-update-notes {
+  font-size: 14px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.nomi-update-notes > *:first-child {
+  margin-top: 0;
+}
+
+.nomi-update-notes > *:last-child {
+  margin-bottom: 0;
+}
+
+.nomi-update-notes h1,
+.nomi-update-notes h2,
+.nomi-update-notes h3,
+.nomi-update-notes h4,
+.nomi-update-notes h5,
+.nomi-update-notes h6 {
+  color: #1b2430;
+  font-weight: 700;
+  line-height: 1.35;
+  margin: 1.5em 0 0.65em;
+}
+
+.nomi-update-notes h1,
+.nomi-update-notes h2 {
+  font-size: 17px;
+}
+
+.nomi-update-notes h3,
+.nomi-update-notes h4,
+.nomi-update-notes h5,
+.nomi-update-notes h6 {
+  font-size: 15px;
+}
+
+.nomi-update-notes p,
+.nomi-update-notes ul,
+.nomi-update-notes ol,
+.nomi-update-notes pre,
+.nomi-update-notes blockquote,
+.nomi-update-notes table {
+  margin: 0 0 0.8em;
+}
+
+.nomi-update-notes ul,
+.nomi-update-notes ol {
+  padding-left: 1.55em;
+}
+
+.nomi-update-notes li {
+  margin: 0.35em 0;
+  padding-left: 0.12em;
+}
+
+.nomi-update-notes li::marker {
+  color: #6f7782;
+}
+
+.nomi-update-notes strong {
+  color: #4e5661;
+  font-weight: 700;
+}
+
+.nomi-update-notes code {
+  background: rgba(120, 130, 148, 0.13);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+}
+
+.nomi-update-notes pre {
+  background: #f4f6f8;
+  border-radius: 8px;
+  overflow-x: auto;
+  padding: 10px 12px;
+}
+
+.nomi-update-notes pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.nomi-update-notes a {
+  color: #1e63c4;
+}
+
+.nomi-update-notes table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.nomi-update-notes th,
+.nomi-update-notes td {
+  border: 1px solid rgba(120, 130, 148, 0.25);
+  padding: 5px 8px;
+  text-align: left;
+}
+
 input:focus,
 textarea:focus,
 button:focus-visible {

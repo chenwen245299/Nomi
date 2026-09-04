@@ -90,6 +90,9 @@ interface ReasoningViewState {
 }
 
 const DEFAULT_REASONING_VIEW_STATE: ReasoningViewState = { expanded: false, open: true };
+const USER_MESSAGE_COLLAPSED_LINES = 10;
+const USER_MESSAGE_LINE_HEIGHT = 23;
+const USER_MESSAGE_COLLAPSED_HEIGHT = USER_MESSAGE_COLLAPSED_LINES * USER_MESSAGE_LINE_HEIGHT;
 
 function basename(p: string): string {
   return p.split(/[\\/]/).pop() ?? p;
@@ -134,20 +137,36 @@ function prettyArgs(raw: string): string {
   }
 }
 
-function updatePreservingScrollPosition(target: EventTarget | null, update: () => void) {
+function findScrollableParent(target: unknown): HTMLElement | null {
   let element = target instanceof HTMLElement ? target : null;
-  let scrollParent: HTMLElement | null = null;
   while (element) {
     const overflowY = window.getComputedStyle(element).overflowY;
     if (
       (overflowY === "auto" || overflowY === "scroll") &&
       element.scrollHeight > element.clientHeight
     ) {
-      scrollParent = element;
-      break;
+      return element;
     }
     element = element.parentElement;
   }
+  return null;
+}
+
+function selectionIsInside(root: HTMLElement | null): boolean {
+  const selection = document.getSelection();
+  if (!root || !selection || selection.isCollapsed) return false;
+  return Boolean(
+    (selection.anchorNode && root.contains(selection.anchorNode)) ||
+    (selection.focusNode && root.contains(selection.focusNode)),
+  );
+}
+
+function isNearScrollBottom(element: HTMLElement): boolean {
+  return element.scrollTop + element.clientHeight >= element.scrollHeight - 48;
+}
+
+function updatePreservingScrollPosition(target: unknown, update: () => void) {
+  const scrollParent = findScrollableParent(target);
   const scrollTop = scrollParent?.scrollTop;
   update();
   if (scrollParent && scrollTop != null) {
@@ -162,7 +181,7 @@ function MarkdownView({ content, color }: { content: string; color: string }) {
   const html = useMemo(() => renderMarkdown(content), [content]);
   return (
     <div
-      className="nomi-md"
+      className="nomi-chat-selectable nomi-md"
       style={{ color, lineHeight: 1.65, wordBreak: "break-word" }}
       dangerouslySetInnerHTML={{ __html: html }}
     />
@@ -182,13 +201,12 @@ function makeStyles(theme: Theme, accent: Accent) {
     rowUser: { alignItems: "flex-start", justifyContent: "flex-end" },
     rowAssistant: { alignItems: "flex-start", justifyContent: "flex-start" },
     userBubble: {
-      alignItems: "flex-end",
+      alignItems: "stretch",
       flexShrink: 1,
       maxWidth: "100%",
       minWidth: 0,
       paddingVertical: 4,
     },
-    userText: { color: t.textPrimary, fontSize: 15, lineHeight: 23, textAlign: "right" },
     userEditor: {
       backgroundColor: t.cardSurfaceAlt,
       borderColor: t.separatorStrong,
@@ -201,15 +219,26 @@ function makeStyles(theme: Theme, accent: Accent) {
       minWidth: 260,
       paddingHorizontal: 9,
       paddingVertical: 7,
-      textAlign: "right",
+      textAlign: "left",
     },
     userMetaRow: {
       alignItems: "center",
       flexDirection: "row",
+      gap: 3,
       justifyContent: "flex-end",
       marginTop: 2,
       minHeight: 23,
     },
+    userExpandButton: {
+      alignItems: "center",
+      borderRadius: 6,
+      flexDirection: "row",
+      gap: 2,
+      height: 24,
+      paddingHorizontal: 7,
+    },
+    userExpandButtonHover: { backgroundColor: t.controlHover },
+    userExpandText: { color: t.textSecondary, fontSize: 11.5, fontWeight: "600" },
     assistantBubble: { flex: 1, minWidth: 0 },
     assistantIcon: { marginTop: 1 },
     answerSurface: { minWidth: 0, width: "100%" },
@@ -2294,9 +2323,22 @@ function MessageBubble({
   const [hovered, setHovered] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
+  const [userExpanded, setUserExpanded] = useState(false);
+  const [userOverflows, setUserOverflows] = useState(false);
+  const userTextRef = useRef<HTMLDivElement | null>(null);
   const iconColor = theme.t.textTertiary;
   const showActions = hovered || editing;
   const persisted = !message.id.startsWith("local-");
+
+  useEffect(() => {
+    const element = userTextRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => {
+      setUserOverflows(element.scrollHeight > USER_MESSAGE_COLLAPSED_HEIGHT + 1);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [editing, message.content]);
 
   if (message.role === "user") {
     return (
@@ -2305,12 +2347,13 @@ function MessageBubble({
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           style={{
-            alignItems: "flex-end",
+            alignItems: "stretch",
             display: "flex",
             flexDirection: "column",
             flexShrink: 1,
             maxWidth: "85%",
             minWidth: 0,
+            width: "fit-content",
           }}
         >
           <View style={styles.userBubble}>
@@ -2355,7 +2398,31 @@ function MessageBubble({
                 </View>
               </>
             ) : message.content ? (
-              <Text style={styles.userText}>{message.content}</Text>
+              <div style={{ maxWidth: "100%", position: "relative" }}>
+                <div
+                  className={`nomi-user-message-text${
+                    userOverflows && !userExpanded ? " is-collapsed" : ""
+                  }`}
+                  ref={userTextRef}
+                  style={{ color: theme.t.textPrimary }}
+                >
+                  {message.content}
+                </div>
+                {userOverflows && !userExpanded ? (
+                  <div
+                    aria-hidden
+                    style={{
+                      background: `linear-gradient(180deg, rgba(255,255,255,0), ${theme.t.mainSolid})`,
+                      bottom: 0,
+                      height: USER_MESSAGE_LINE_HEIGHT * 2,
+                      left: 0,
+                      pointerEvents: "none",
+                      position: "absolute",
+                      right: 0,
+                    }}
+                  />
+                ) : null}
+              </div>
             ) : null}
           </View>
           <View style={styles.userMetaRow}>
@@ -2387,6 +2454,29 @@ function MessageBubble({
                 </>
               ) : null}
             </View>
+            {userOverflows && !editing ? (
+              <Pressable
+                accessibilityLabel={userExpanded ? "收起用户消息" : "展开用户消息"}
+                accessibilityRole="button"
+                onPress={(event) =>
+                  updatePreservingScrollPosition(event.target, () =>
+                    setUserExpanded((expanded) => !expanded),
+                  )
+                }
+                style={({ hovered, pressed }: PressState) => [
+                  styles.userExpandButton,
+                  motion,
+                  (hovered || pressed) && styles.userExpandButtonHover,
+                ]}
+              >
+                <Text style={styles.userExpandText}>{userExpanded ? "收起" : "展开"}</Text>
+                <RiArrowDownSLine
+                  color={theme.t.textSecondary}
+                  size={14}
+                  style={{ transform: userExpanded ? "rotate(180deg)" : "none" }}
+                />
+              </Pressable>
+            ) : null}
           </View>
         </div>
         <UserAvatar size={30} />
@@ -2575,6 +2665,9 @@ export function ConversationView({
   const pasteFilesRef = useRef<(files: File[]) => void>(() => undefined);
   const scrollRef = useRef<ScrollViewInstance>(null);
   const stickToBottomRef = useRef(true);
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const transcriptScrollRef = useRef<HTMLElement | null>(null);
+  const selectingTextRef = useRef(false);
   const thinkingMenuRef = useRef<HTMLDivElement>(null);
 
   const uploading = pending.some((p) => p.status === "uploading");
@@ -2619,12 +2712,46 @@ export function ConversationView({
     : "";
 
   useEffect(() => {
-    if (!stickToBottomRef.current) return;
+    if (
+      !stickToBottomRef.current ||
+      selectingTextRef.current ||
+      selectionIsInside(transcriptRef.current)
+    ) {
+      return;
+    }
     const frame = window.requestAnimationFrame(() => {
       scrollRef.current?.scrollToEnd({ animated: false });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [convo.messages.length, latestMessageId, streamingActivity]);
+
+  useEffect(() => {
+    const syncStickiness = () => {
+      if (selectingTextRef.current) return;
+      if (selectionIsInside(transcriptRef.current)) {
+        stickToBottomRef.current = false;
+        return;
+      }
+      const scroller = transcriptScrollRef.current;
+      if (scroller) stickToBottomRef.current = isNearScrollBottom(scroller);
+    };
+    const finishSelection = () => {
+      if (!selectingTextRef.current) return;
+      selectingTextRef.current = false;
+      window.requestAnimationFrame(syncStickiness);
+    };
+
+    document.addEventListener("pointerup", finishSelection);
+    document.addEventListener("pointercancel", finishSelection);
+    document.addEventListener("selectionchange", syncStickiness);
+    window.addEventListener("blur", finishSelection);
+    return () => {
+      document.removeEventListener("pointerup", finishSelection);
+      document.removeEventListener("pointercancel", finishSelection);
+      document.removeEventListener("selectionchange", syncStickiness);
+      window.removeEventListener("blur", finishSelection);
+    };
+  }, []);
 
   useEffect(
     () => () => {
@@ -2845,6 +2972,10 @@ export function ConversationView({
             contentContainerStyle={styles.scrollContent}
             onScroll={(event) => {
               const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+              if (selectingTextRef.current || selectionIsInside(transcriptRef.current)) {
+                stickToBottomRef.current = false;
+                return;
+              }
               stickToBottomRef.current =
                 contentOffset.y + layoutMeasurement.height >= contentSize.height - 48;
             }}
@@ -2852,108 +2983,124 @@ export function ConversationView({
             scrollEventThrottle={32}
             style={[styles.scroll, { scrollbarGutter: "stable" } as unknown as ViewStyle]}
           >
-            {convo.loaded && convo.messages.length === 0 && !convo.streaming ? (
-              <View style={styles.empty}>
-                <Text style={styles.emptyText}>开始和「{assistantName}」对话吧。</Text>
-                <Text style={styles.emptyText}>可上传 PDF，模型会用工具读取全文或渲染页面。</Text>
-              </View>
-            ) : (
-              (() => {
-                const seenGroups = new Set<string>();
-                return convo.messages.flatMap((message) => {
-                  if (message.role === "context_marker") {
+            <div
+              className="nomi-chat-transcript"
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                const target = event.target as HTMLElement;
+                if (!target.closest(".nomi-chat-selectable")) return;
+                selectingTextRef.current = true;
+                stickToBottomRef.current = false;
+                transcriptScrollRef.current = findScrollableParent(event.currentTarget);
+              }}
+              ref={transcriptRef}
+              style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}
+            >
+              {convo.loaded && convo.messages.length === 0 && !convo.streaming ? (
+                <View style={styles.empty}>
+                  <Text style={styles.emptyText}>开始和「{assistantName}」对话吧。</Text>
+                  <Text style={styles.emptyText}>可上传 PDF，模型会用工具读取全文或渲染页面。</Text>
+                </View>
+              ) : (
+                (() => {
+                  const seenGroups = new Set<string>();
+                  return convo.messages.flatMap((message) => {
+                    if (message.role === "context_marker") {
+                      return [
+                        <ContextMarker
+                          key={message.id}
+                          messageId={message.id}
+                          onDelete={convo.remove}
+                          styles={styles}
+                          theme={theme}
+                        />,
+                      ];
+                    }
+                    if (message.role !== "assistant") {
+                      return [
+                        <MessageBubble
+                          accent={accent}
+                          key={message.id}
+                          message={message}
+                          onDelete={convo.remove}
+                          onEdit={convo.edit}
+                          onPreviewAttachment={(attachment) =>
+                            void openAttachmentPreview(attachment)
+                          }
+                          providerKind={providerKind}
+                          providerName={providerName}
+                          styles={styles}
+                          theme={theme}
+                        />,
+                      ];
+                    }
+                    const groupId = message.responseGroupId ?? message.id;
+                    if (seenGroups.has(groupId)) return [];
+                    seenGroups.add(groupId);
+                    const groupMessages = convo.messages.filter(
+                      (candidate) =>
+                        candidate.role === "assistant" &&
+                        (candidate.responseGroupId ?? candidate.id) === groupId,
+                    );
                     return [
-                      <ContextMarker
-                        key={message.id}
-                        messageId={message.id}
-                        onDelete={convo.remove}
-                        styles={styles}
-                        theme={theme}
-                      />,
-                    ];
-                  }
-                  if (message.role !== "assistant") {
-                    return [
-                      <MessageBubble
+                      <ResponseGroup
                         accent={accent}
-                        key={message.id}
-                        message={message}
+                        fallbackProviderId={conversation.providerId}
+                        key={groupId}
+                        hideFeedback={hideFeedback}
+                        messages={groupMessages}
                         onDelete={convo.remove}
                         onEdit={convo.edit}
-                        onPreviewAttachment={(attachment) => void openAttachmentPreview(attachment)}
-                        providerKind={providerKind}
-                        providerName={providerName}
-                        styles={styles}
-                        theme={theme}
-                      />,
-                    ];
-                  }
-                  const groupId = message.responseGroupId ?? message.id;
-                  if (seenGroups.has(groupId)) return [];
-                  seenGroups.add(groupId);
-                  const groupMessages = convo.messages.filter(
-                    (candidate) =>
-                      candidate.role === "assistant" &&
-                      (candidate.responseGroupId ?? candidate.id) === groupId,
-                  );
-                  return [
-                    <ResponseGroup
-                      accent={accent}
-                      fallbackProviderId={conversation.providerId}
-                      key={groupId}
-                      hideFeedback={hideFeedback}
-                      messages={groupMessages}
-                      onDelete={convo.remove}
-                      onEdit={convo.edit}
-                      onFeedback={convo.feedback}
-                      onGenerate={(
-                        sourceMessageId,
-                        responseGroupId,
-                        providerId,
-                        modelId,
-                        replace,
-                      ) => {
-                        // The composer's effort is on the selected model's scale;
-                        // map it onto the model actually answering this variant.
-                        const targetProvider = providers.find((p) => p.id === providerId);
-                        const mapped = mapEffort(
-                          thinkingEffort,
-                          effortScaleFor(targetProvider, modelId),
-                        );
-                        return convo.generateVariant(
+                        onFeedback={convo.feedback}
+                        onGenerate={(
                           sourceMessageId,
                           responseGroupId,
                           providerId,
                           modelId,
                           replace,
-                          mapped === "off" ? null : mapped,
-                        );
-                      }}
-                      onSelect={convo.selectResponse}
-                      providerKind={providerKind}
-                      providerName={providerName}
-                      providers={providers}
-                      streaming={
-                        convo.streaming?.responseGroupId === groupId ? convo.streaming : null
-                      }
-                      styles={styles}
-                      theme={theme}
-                    />,
-                  ];
-                });
-              })()
-            )}
-            {convo.streaming && !convo.streaming.replaceMessageId && (
-              <StreamingBubble
-                accent={accent}
-                draft={convo.streaming}
-                modelId={conversation.modelId}
-                providerKind={providerKind}
-                providerName={providerName}
-                styles={styles}
-                theme={theme}
-              />
-            )}
+                        ) => {
+                          // The composer's effort is on the selected model's scale;
+                          // map it onto the model actually answering this variant.
+                          const targetProvider = providers.find((p) => p.id === providerId);
+                          const mapped = mapEffort(
+                            thinkingEffort,
+                            effortScaleFor(targetProvider, modelId),
+                          );
+                          return convo.generateVariant(
+                            sourceMessageId,
+                            responseGroupId,
+                            providerId,
+                            modelId,
+                            replace,
+                            mapped === "off" ? null : mapped,
+                          );
+                        }}
+                        onSelect={convo.selectResponse}
+                        providerKind={providerKind}
+                        providerName={providerName}
+                        providers={providers}
+                        streaming={
+                          convo.streaming?.responseGroupId === groupId ? convo.streaming : null
+                        }
+                        styles={styles}
+                        theme={theme}
+                      />,
+                    ];
+                  });
+                })()
+              )}
+              {convo.streaming && !convo.streaming.replaceMessageId && (
+                <StreamingBubble
+                  accent={accent}
+                  draft={convo.streaming}
+                  modelId={conversation.modelId}
+                  providerKind={providerKind}
+                  providerName={providerName}
+                  styles={styles}
+                  theme={theme}
+                />
+              )}
+            </div>
           </ScrollView>
 
           <View style={styles.composer}>

@@ -60,13 +60,40 @@ function nearestNodeSide(node: Element, clientX: number, clientY: number): Paper
   return CONNECT_SIDES.reduce((best, side) => (distances[side] < distances[best] ? side : best));
 }
 
+function nearestNodeSideWithin(
+  node: Element,
+  clientX: number,
+  clientY: number,
+  padding = 34,
+): PaperEdgeSide | null {
+  const rect = node.getBoundingClientRect();
+  if (
+    clientX < rect.left - padding ||
+    clientX > rect.right + padding ||
+    clientY < rect.top - padding ||
+    clientY > rect.bottom + padding
+  ) {
+    return null;
+  }
+  return nearestNodeSide(node, clientX, clientY);
+}
+
+function findPaperNode(root: Element, id: string): HTMLElement | null {
+  return (
+    Array.from(root.querySelectorAll<HTMLElement>("[data-paper-id]")).find(
+      (node) => node.dataset.paperId === id,
+    ) ?? null
+  );
+}
+
 interface Transform {
   x: number;
   y: number;
   k: number;
 }
 
-type DragMode = "none" | "pan" | "node" | "link";
+type EdgeEnd = "from" | "to";
+type DragMode = "none" | "pan" | "node" | "link" | "edge-endpoint";
 
 interface DragSession {
   mode: DragMode;
@@ -82,6 +109,9 @@ interface DragSession {
   panStart?: Transform;
   fromId?: string;
   fromSide?: PaperEdgeSide;
+  edgeId?: string;
+  edgeEnd?: EdgeEnd;
+  edgeNodeId?: string;
 }
 
 type MenuState =
@@ -100,6 +130,7 @@ export interface GraphCanvasProps {
   onMoveLocal: (id: string, x: number, y: number) => void;
   onCommitMove: (id: string, x: number, y: number) => void;
   onAddEdge: (from: string, to: string, fromSide: PaperEdgeSide, toSide: PaperEdgeSide) => void;
+  onSetEdgeSides: (id: string, fromSide?: PaperEdgeSide, toSide?: PaperEdgeSide) => void;
   onRenameEdge: (id: string) => void;
   onDeleteEdge: (id: string) => void;
   onDeletePaper: (id: string) => void;
@@ -168,6 +199,12 @@ export function GraphCanvas(props: GraphCanvasProps) {
   // native dblclick to the viewport (not the node), so we time clicks ourselves.
   const lastClickRef = useRef<{ id: string; t: number } | null>(null);
   const [linkFrom, setLinkFrom] = useState<{ id: string; side: PaperEdgeSide } | null>(null);
+  const [dockDrag, setDockDrag] = useState<{
+    edgeId: string;
+    end: EdgeEnd;
+    nodeId: string;
+  } | null>(null);
+  const [dockTargetSide, setDockTargetSide] = useState<PaperEdgeSide | null>(null);
   // Real (unscaled) node sizes — card height varies, so edges use the measured
   // size to land the arrowhead just outside each card instead of under it.
   const [nodeSizes, setNodeSizes] = useState<Map<string, { w: number; h: number }>>(new Map());
@@ -263,12 +300,38 @@ export function GraphCanvas(props: GraphCanvasProps) {
     // capture the pointer for them, or the capture steals their click event.
     if (target.closest("button, [data-graph-ui]")) return;
     const handleEl = target.closest<HTMLElement>("[data-connect-handle]");
+    const endpointEl = target.closest<HTMLElement>("[data-edge-endpoint]");
     const nodeEl = target.closest("[data-paper-id]") as HTMLElement | null;
     const nodeId = nodeEl?.getAttribute("data-paper-id") ?? undefined;
     const fromSide = handleEl?.dataset.connectSide;
 
     setMenu(null);
     el.setPointerCapture(event.pointerId);
+
+    const edgeId = endpointEl?.dataset.edgeEndpoint;
+    const edgeEnd = endpointEl?.dataset.edgeEnd;
+    if (edgeId && (edgeEnd === "from" || edgeEnd === "to")) {
+      const edge = latest.current.edges.find((item) => item.id === edgeId);
+      const edgeNodeId = edgeEnd === "from" ? edge?.from : edge?.to;
+      if (edge && edgeNodeId) {
+        dragRef.current = {
+          mode: "edge-endpoint",
+          pointerId: event.pointerId,
+          startX: sx,
+          startY: sy,
+          lastX: sx,
+          lastY: sy,
+          moved: false,
+          edgeId,
+          edgeEnd,
+          edgeNodeId,
+        };
+        setDockDrag({ edgeId, end: edgeEnd, nodeId: edgeNodeId });
+        setDockTargetSide(null);
+        setLinkCursor({ x: sx, y: sy });
+        return;
+      }
+    }
 
     if (handleEl && nodeId && isPaperEdgeSide(fromSide)) {
       dragRef.current = {
@@ -339,6 +402,11 @@ export function GraphCanvas(props: GraphCanvasProps) {
       latest.current.props.onMoveLocal(drag.nodeId, wx, wy);
     } else if (drag.mode === "link") {
       setLinkCursor({ x: sx, y: sy });
+    } else if (drag.mode === "edge-endpoint" && drag.edgeNodeId) {
+      setLinkCursor({ x: sx, y: sy });
+      const node = findPaperNode(el, drag.edgeNodeId);
+      const side = node ? nearestNodeSideWithin(node, event.clientX, event.clientY) : null;
+      setDockTargetSide((current) => (current === side ? current : side));
     }
   }, []);
 
@@ -382,6 +450,23 @@ export function GraphCanvas(props: GraphCanvasProps) {
         p.onAddEdge(drag.fromId, toId, drag.fromSide, toSide);
       }
       setLinkFrom(null);
+      setLinkCursor(null);
+    } else if (drag.mode === "edge-endpoint" && drag.edgeId && drag.edgeEnd && drag.edgeNodeId) {
+      const edge = latest.current.edges.find((item) => item.id === drag.edgeId);
+      const viewport = viewportRef.current;
+      const node = viewport ? findPaperNode(viewport, drag.edgeNodeId) : null;
+      const side = node ? nearestNodeSideWithin(node, event.clientX, event.clientY) : null;
+      if (drag.moved && edge && side) {
+        p.onSetEdgeSides(
+          edge.id,
+          drag.edgeEnd === "from" ? side : edge.fromSide,
+          drag.edgeEnd === "to" ? side : edge.toSide,
+        );
+      } else if (!drag.moved) {
+        p.onSelect(drag.edgeNodeId);
+      }
+      setDockDrag(null);
+      setDockTargetSide(null);
       setLinkCursor(null);
     } else if (drag.mode === "pan" && !drag.moved) {
       p.onSelect(null);
@@ -514,6 +599,13 @@ export function GraphCanvas(props: GraphCanvasProps) {
     };
   }, [linkCursor, linkFrom, nodeSizes, paperById, transform]);
 
+  const dockSource = useMemo(() => {
+    if (!dockDrag) return null;
+    const item = rendered.find(({ edge }) => edge.id === dockDrag.edgeId);
+    if (!item) return null;
+    return dockDrag.end === "from" ? item.points[0] : item.points[item.points.length - 1];
+  }, [dockDrag, rendered]);
+
   const arrowSize = Math.max(10, 13 * transform.k);
   const cornerRadius = Math.max(4, 10 * transform.k);
   const isEmpty = papers.length === 0;
@@ -540,9 +632,13 @@ export function GraphCanvas(props: GraphCanvasProps) {
       }}
     >
       <style>{`
-        .nomi-paper-node .nomi-connect-handle { opacity: 0; transition: opacity 120ms ease, transform 120ms ease; }
-        .nomi-paper-node:hover .nomi-connect-handle { opacity: 1; }
+        .nomi-paper-node .nomi-connect-handle { opacity: 0; transition: opacity 120ms ease, box-shadow 120ms ease; }
+        .nomi-paper-node:hover .nomi-connect-handle,
+        .nomi-paper-node[data-selected="true"] .nomi-connect-handle,
+        .nomi-paper-node[data-dock-target="true"] .nomi-connect-handle { opacity: 1; }
         .nomi-paper-node:hover { z-index: 5; }
+        .nomi-edge-endpoint { transition: opacity 120ms ease, border-color 120ms ease, transform 120ms ease; }
+        .nomi-edge-endpoint:hover { opacity: 1 !important; transform: translate(-50%, -50%) scale(1.18) !important; }
       `}</style>
 
       {/* Edges + temp link line (screen space, non-interactive). */}
@@ -601,10 +697,10 @@ export function GraphCanvas(props: GraphCanvasProps) {
             </g>
           );
         })}
-        {linkSource && linkCursor ? (
+        {(linkSource || dockSource) && linkCursor ? (
           <line
-            x1={linkSource.x}
-            y1={linkSource.y}
+            x1={(linkSource ?? dockSource)?.x}
+            y1={(linkSource ?? dockSource)?.y}
             x2={linkCursor.x}
             y2={linkCursor.y}
             stroke={accent.accent}
@@ -621,11 +717,14 @@ export function GraphCanvas(props: GraphCanvasProps) {
           const pos = screenPos(paper.x, paper.y);
           const meta = statusMeta(paper.status);
           const selected = paper.id === selectedId;
+          const dockingHere = dockDrag?.nodeId === paper.id;
           return (
             <div
               key={paper.id}
               ref={(el) => measureNode(paper.id, el)}
               data-paper-id={paper.id}
+              data-selected={selected ? "true" : undefined}
+              data-dock-target={dockingHere ? "true" : undefined}
               className="nomi-paper-node"
               style={{
                 position: "absolute",
@@ -733,23 +832,46 @@ export function GraphCanvas(props: GraphCanvasProps) {
                     data-connect-handle
                     data-connect-side={side}
                     className="nomi-connect-handle"
-                    title={`从${CONNECT_SIDE_LABEL[side]}拖拽到另一篇论文以建立关系`}
+                    title={
+                      dockingHere
+                        ? `松开后改为连接到${CONNECT_SIDE_LABEL[side]}`
+                        : `从${CONNECT_SIDE_LABEL[side]}拖拽到另一篇论文以建立关系`
+                    }
                     style={{
                       position: "absolute",
                       ...CONNECT_HANDLE_POSITION[side],
                       width: 22,
                       height: 22,
                       borderRadius: 11,
-                      background: accent.accent,
-                      border: `2px solid ${t.cardSurface}`,
-                      boxShadow: "0 2px 6px rgba(16,24,36,0.22)",
+                      background:
+                        dockingHere && dockTargetSide !== side ? t.cardSurface : accent.accent,
+                      border: `2px solid ${
+                        dockingHere && dockTargetSide !== side ? accent.accent : t.cardSurface
+                      }`,
+                      boxShadow:
+                        dockingHere && dockTargetSide === side
+                          ? `0 0 0 5px rgba(${accent.rgb},0.18), 0 3px 8px rgba(16,24,36,0.24)`
+                          : "0 2px 6px rgba(16,24,36,0.22)",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
                       cursor: "crosshair",
+                      transform: `scale(${1 / transform.k})`,
+                      transformOrigin: "center",
                     }}
                   >
-                    <RiAddLine color="#fff" size={14} />
+                    {dockingHere ? (
+                      <span
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: 999,
+                          background: dockTargetSide === side ? t.cardSurface : accent.accent,
+                        }}
+                      />
+                    ) : (
+                      <RiAddLine color="#fff" size={14} />
+                    )}
                   </div>
                 ))}
               </div>
@@ -757,6 +879,68 @@ export function GraphCanvas(props: GraphCanvasProps) {
           );
         })}
       </div>
+
+      {/* Existing edge endpoints stay visible and can be dragged around their
+          own card. This makes rerouting a link a direct manipulation instead of
+          a hidden context-menu setting. */}
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 7 }}>
+        {rendered.flatMap(({ edge, points, active }) => {
+          const endpoints: { end: EdgeEnd; nodeId: string; point: Point }[] = [
+            { end: "from", nodeId: edge.from, point: points[0] },
+            { end: "to", nodeId: edge.to, point: points[points.length - 1] },
+          ];
+          return endpoints.map(({ end, nodeId, point }) => (
+            <div
+              key={`${edge.id}:${end}`}
+              data-edge-endpoint={edge.id}
+              data-edge-end={end}
+              data-edge-node-id={nodeId}
+              className="nomi-edge-endpoint"
+              title={`拖动以调整${end === "from" ? "起点" : "终点"}连接侧边`}
+              style={{
+                position: "absolute",
+                left: point.x,
+                top: point.y,
+                width: 16,
+                height: 16,
+                borderRadius: 999,
+                background: t.cardSurface,
+                border: `2px solid ${accent.accent}`,
+                boxShadow: "0 2px 6px rgba(16,24,36,0.18)",
+                cursor: "grab",
+                opacity: active || dockDrag?.edgeId === edge.id ? 1 : 0.72,
+                pointerEvents: "auto",
+                transform: "translate(-50%, -50%)",
+              }}
+            />
+          ));
+        })}
+      </div>
+
+      {dockDrag && linkCursor ? (
+        <div
+          data-graph-ui
+          style={{
+            position: "absolute",
+            left: linkCursor.x + 16,
+            top: linkCursor.y + 16,
+            zIndex: 12,
+            pointerEvents: "none",
+            padding: "6px 9px",
+            borderRadius: 8,
+            background: "rgba(27,36,48,0.90)",
+            color: "#fff",
+            fontSize: 11,
+            fontWeight: 600,
+            boxShadow: "0 4px 12px rgba(16,24,36,0.18)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {dockTargetSide
+            ? `松开：连接到${CONNECT_SIDE_LABEL[dockTargetSide]}`
+            : "拖到当前节点的任意一边"}
+        </div>
+      ) : null}
 
       {/* Empty state. */}
       {isEmpty ? (

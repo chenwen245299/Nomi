@@ -14,8 +14,8 @@ import {
   RiDownload2Line,
   RiErrorWarningLine,
   RiRefreshLine,
-  RiSparkling2Fill,
 } from "@remixicon/react";
+import { renderMarkdown } from "../chat/markdown";
 import { useUpdater } from "./useUpdater";
 import { checkForUpdates, closeDialog, downloadAndInstall, openDialog } from "./store";
 import {
@@ -42,7 +42,6 @@ type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
 // Settings, so its neutral chrome uses graphite.
 function makeStyles(theme: Theme, chat: Accent, neutral: Accent) {
   const { t } = theme;
-  const overlayFill = theme.useSolid ? t.overlaySolid : t.overlaySurface;
 
   return StyleSheet.create({
     section: {
@@ -158,83 +157,92 @@ function makeStyles(theme: Theme, chat: Accent, neutral: Accent) {
       bottom: 0,
       justifyContent: "center",
       left: 0,
-      padding: 24,
+      padding: 20,
       position: "absolute",
       right: 0,
       top: 0,
       zIndex: 40,
     },
     modal: {
-      backgroundColor: overlayFill,
-      borderColor: t.edgeHighlight,
+      backgroundColor: t.cardSurface,
+      borderColor: t.separatorStrong,
       borderRadius: 18,
       borderWidth: 1,
       boxShadow: modalShadow(t),
-      maxWidth: 440,
-      padding: 22,
-      width: "100%",
+      height: "86%",
+      maxHeight: 840,
+      maxWidth: 760,
+      overflow: "hidden",
+      width: "88%",
     },
-    modalTop: {
+    modalHeader: {
       alignItems: "center",
+      borderBottomColor: t.separator,
+      borderBottomWidth: 1,
       flexDirection: "row",
       justifyContent: "space-between",
+      minHeight: 64,
+      paddingHorizontal: 24,
     },
-    modalIcon: {
+    modalHeading: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: 12,
+    },
+    versionBadge: {
       alignItems: "center",
       backgroundColor: chat.accent,
-      borderRadius: 12,
-      height: 40,
+      borderRadius: 8,
+      height: 27,
       justifyContent: "center",
-      width: 40,
-      boxShadow: withGlow("inset 0 1px 0 rgba(255,255,255,0.22)", chat),
+      paddingHorizontal: 11,
+    },
+    versionBadgeText: {
+      color: t.onAccent,
+      fontSize: 13,
+      fontWeight: "700",
+      letterSpacing: -0.1,
     },
     closeButton: {
       alignItems: "center",
-      borderRadius: 8,
-      height: 30,
+      backgroundColor: t.controlIdle,
+      borderRadius: 9,
+      height: 36,
       justifyContent: "center",
-      width: 30,
+      width: 36,
     },
     closeButtonHover: {
       backgroundColor: t.controlHover,
     },
-    modalEyebrow: {
-      color: t.textTertiary,
-      fontSize: 10,
-      fontWeight: "700",
-      letterSpacing: 1.4,
-      marginTop: 16,
-    },
     modalTitle: {
+      color: t.textPrimary,
+      fontSize: 18,
+      fontWeight: "700",
+      letterSpacing: -0.25,
+    },
+    modalBody: {
+      flex: 1,
+      minHeight: 0,
+    },
+    notesScroll: {
+      flex: 1,
+    },
+    notesContent: {
+      paddingBottom: 34,
+      paddingHorizontal: 24,
+      paddingTop: 16,
+    },
+    releaseNotesTitle: {
       color: t.textPrimary,
       fontSize: 16,
       fontWeight: "700",
-      letterSpacing: -0.3,
-      marginTop: 7,
-    },
-    modalSubtitle: {
-      color: t.textSecondary,
-      fontSize: 12,
-      marginTop: 6,
-    },
-    notesBox: {
-      backgroundColor: t.cardSurfaceAlt,
-      borderColor: t.separator,
-      borderRadius: 11,
-      borderWidth: 1,
-      marginTop: 16,
-      maxHeight: 190,
-    },
-    notesContent: {
-      padding: 14,
-    },
-    notesText: {
-      color: t.textSecondary,
-      fontSize: 12.5,
-      lineHeight: 20,
+      letterSpacing: -0.15,
+      marginBottom: 18,
     },
     progressWrap: {
-      marginTop: 18,
+      flex: 1,
+      maxWidth: 320,
+      minWidth: 180,
     },
     progressTrack: {
       backgroundColor: t.progressTrack,
@@ -260,26 +268,48 @@ function makeStyles(theme: Theme, chat: Accent, neutral: Accent) {
     progressText: {
       color: t.textTertiary,
       fontSize: 11,
-      marginTop: 8,
+      marginTop: 6,
     },
     errorRow: {
       alignItems: "flex-start",
+      flex: 1,
       flexDirection: "row",
       gap: 7,
+      marginRight: 12,
+    },
+    modalErrorText: {
+      color: t.errorText,
+      flex: 1,
+      fontSize: 11.5,
+      lineHeight: 17,
+    },
+    modalFooter: {
+      alignItems: "center",
+      backgroundColor: t.cardSurface,
+      borderTopColor: t.separator,
+      borderTopWidth: 1,
+      flexDirection: "row",
+      justifyContent: "flex-end",
+      minHeight: 70,
+      paddingHorizontal: 24,
+      paddingVertical: 14,
+    },
+    footerSpacer: {
+      flex: 1,
     },
     actions: {
       alignItems: "center",
       flexDirection: "row",
-      gap: 9,
-      justifyContent: "flex-end",
-      marginTop: 20,
+      gap: 10,
+      marginLeft: 20,
     },
     ghostButton: {
       alignItems: "center",
-      borderRadius: 9,
-      height: 34,
+      backgroundColor: t.controlIdle,
+      borderRadius: 10,
+      height: 40,
       justifyContent: "center",
-      paddingHorizontal: 13,
+      paddingHorizontal: 20,
     },
     ghostButtonHover: {
       backgroundColor: t.controlHover,
@@ -297,8 +327,8 @@ function makeStyles(theme: Theme, chat: Accent, neutral: Accent) {
       flexDirection: "row",
       gap: 7,
       justifyContent: "center",
-      height: 34,
-      paddingHorizontal: 13,
+      height: 40,
+      paddingHorizontal: 22,
     },
     primaryButtonPressed: {
       opacity: 0.9,
@@ -306,10 +336,22 @@ function makeStyles(theme: Theme, chat: Accent, neutral: Accent) {
     },
     primaryButtonText: {
       color: t.onAccent,
-      fontSize: 13,
+      fontSize: 13.5,
       fontWeight: "600",
     },
   });
+}
+
+function ReleaseNotes({ notes, color }: { notes: string; color: string }) {
+  const html = useMemo(() => renderMarkdown(notes), [notes]);
+
+  return (
+    <div
+      className="nomi-update-notes"
+      dangerouslySetInnerHTML={{ __html: html }}
+      style={{ color }}
+    />
+  );
 }
 
 function useUpdaterStyles() {
@@ -397,7 +439,12 @@ export function UpdateDialog() {
 
   const downloading = u.state === "downloading";
   const errored = u.state === "error";
-  const primaryLabel = downloading ? "更新中…" : errored ? "重试" : "立即更新并重启";
+  const primaryLabel = downloading ? "更新中…" : errored ? "重试" : "立即更新";
+  const newVersion = u.newVersion
+    ? u.newVersion.startsWith("v")
+      ? u.newVersion
+      : `v${u.newVersion}`
+    : "新版本";
   const widthTransition = reduceMotion
     ? undefined
     : ({
@@ -409,10 +456,13 @@ export function UpdateDialog() {
 
   return (
     <View style={[styles.overlay, glass(8, 115), enterFade()]}>
-      <View style={[styles.modal, glass(40, 180), enterModal()]}>
-        <View style={styles.modalTop}>
-          <View style={styles.modalIcon}>
-            <RiSparkling2Fill color={theme.t.onAccent} size={20} />
+      <View style={[styles.modal, enterModal()]}>
+        <View style={styles.modalHeader}>
+          <View style={styles.modalHeading}>
+            <View style={styles.versionBadge}>
+              <Text style={styles.versionBadgeText}>{newVersion}</Text>
+            </View>
+            <Text style={styles.modalTitle}>更新内容</Text>
           </View>
           {!downloading && (
             <Pressable
@@ -426,81 +476,80 @@ export function UpdateDialog() {
                 pressed && styles.softPressed,
               ]}
             >
-              <RiCloseLine color={theme.t.textTertiary} size={17} />
+              <RiCloseLine color={theme.t.textSecondary} size={20} />
             </Pressable>
           )}
         </View>
 
-        <Text style={styles.modalEyebrow}>软件更新</Text>
-        <Text style={styles.modalTitle}>发现新版本 v{u.newVersion}</Text>
-        <Text style={styles.modalSubtitle}>
-          当前 v{u.currentVersion || "—"} → 新版本 v{u.newVersion}
-        </Text>
-
-        {u.releaseNotes ? (
-          <ScrollView style={styles.notesBox} contentContainerStyle={styles.notesContent}>
-            <Text style={styles.notesText}>{u.releaseNotes}</Text>
+        <View style={styles.modalBody}>
+          <ScrollView style={styles.notesScroll} contentContainerStyle={styles.notesContent}>
+            <Text style={styles.releaseNotesTitle}>Release Notes</Text>
+            {u.releaseNotes ? (
+              <ReleaseNotes color={theme.t.textSecondary} notes={u.releaseNotes} />
+            ) : (
+              <Text style={{ color: theme.t.textSecondary, fontSize: 14 }}>
+                新版本已准备好，建议立即更新以获得最新功能与修复。
+              </Text>
+            )}
           </ScrollView>
-        ) : null}
+        </View>
 
-        {downloading && (
-          <View style={styles.progressWrap}>
-            <View style={styles.progressTrack}>
-              <View
-                style={[
-                  styles.progressBar,
-                  { width: `${u.progress}%` as `${number}%` },
-                  widthTransition,
+        <View style={styles.modalFooter}>
+          {downloading ? (
+            <View style={styles.progressWrap}>
+              <View style={styles.progressTrack}>
+                <View
+                  style={[
+                    styles.progressBar,
+                    { width: `${u.progress}%` as `${number}%` },
+                    widthTransition,
+                  ]}
+                >
+                  {showShimmer && <View style={[styles.progressShimmer, shimmerStyle]} />}
+                </View>
+              </View>
+              <Text style={styles.progressText}>正在下载并安装 {u.progress}%</Text>
+            </View>
+          ) : errored ? (
+            <View style={styles.errorRow}>
+              <RiErrorWarningLine color={theme.t.errorText} size={16} />
+              <Text style={styles.modalErrorText}>{u.error}</Text>
+            </View>
+          ) : (
+            <View style={styles.footerSpacer} />
+          )}
+
+          <View style={styles.actions}>
+            {!downloading && (
+              <Pressable
+                accessibilityRole="button"
+                onPress={closeDialog}
+                style={({ pressed, hovered }: PressState) => [
+                  styles.ghostButton,
+                  motion,
+                  hovered && styles.ghostButtonHover,
+                  pressed && styles.softPressed,
                 ]}
               >
-                {showShimmer && <View style={[styles.progressShimmer, shimmerStyle]} />}
-              </View>
-            </View>
-            <Text style={styles.progressText}>正在下载并安装 {u.progress}%</Text>
-          </View>
-        )}
-
-        {errored && (
-          <View style={styles.errorRow}>
-            <RiErrorWarningLine color={theme.t.errorText} size={15} />
-            <Text style={styles.inlineError}>{u.error}</Text>
-          </View>
-        )}
-
-        <View style={styles.actions}>
-          {!downloading && (
+                <Text style={styles.ghostButtonText}>稍后</Text>
+              </Pressable>
+            )}
             <Pressable
               accessibilityRole="button"
-              onPress={closeDialog}
+              disabled={downloading}
+              onPress={() => void downloadAndInstall()}
               style={({ pressed, hovered }: PressState) => [
-                styles.ghostButton,
+                styles.primaryButton,
                 motion,
-                hovered && styles.ghostButtonHover,
-                pressed && styles.softPressed,
+                hovered && ({ filter: "brightness(1.06)" } as ViewStyle),
+                pressed && styles.primaryButtonPressed,
+                downloading && styles.buttonDisabled,
               ]}
             >
-              <Text style={styles.ghostButtonText}>稍后</Text>
+              {downloading ? <ActivityIndicator color={theme.t.onAccent} size="small" /> : null}
+              <Text style={styles.primaryButtonText}>{primaryLabel}</Text>
             </Pressable>
-          )}
-          <Pressable
-            accessibilityRole="button"
-            disabled={downloading}
-            onPress={() => void downloadAndInstall()}
-            style={({ pressed, hovered }: PressState) => [
-              styles.primaryButton,
-              motion,
-              hovered && ({ filter: "brightness(1.06)" } as ViewStyle),
-              pressed && styles.primaryButtonPressed,
-              downloading && styles.buttonDisabled,
-            ]}
-          >
-            {downloading ? (
-              <ActivityIndicator color={theme.t.onAccent} size="small" />
-            ) : (
-              <RiDownload2Line color={theme.t.onAccent} size={17} />
-            )}
-            <Text style={styles.primaryButtonText}>{primaryLabel}</Text>
-          </Pressable>
+          </View>
         </View>
       </View>
     </View>

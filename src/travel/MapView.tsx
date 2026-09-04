@@ -6,9 +6,11 @@ import {
   Map as MapLibreMap,
   Marker,
   NavigationControl,
+  setWorkerUrl,
   type MapMouseEvent,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { RiErrorWarningLine, RiRefreshLine } from "@remixicon/react";
 import Supercluster from "supercluster";
 import { buildStyle } from "./mapStyle";
@@ -70,6 +72,17 @@ const REGION_SOURCE = "nomi-regions";
 const REGION_FILL = "nomi-regions-fill";
 const REGION_LINE = "nomi-regions-line";
 const TRAVEL_ACCENT = "#1FA089";
+
+// MapLibre 6 no longer inlines its vector-tile worker. Bundlers cannot infer the
+// worker location from `import.meta.url`, so explicitly let Vite emit a
+// self-contained worker and point MapLibre at the resulting app-local asset.
+// Without this, raster/background layers and HTML markers render, but vector
+// roads and labels silently remain blank in packaged WebViews (notably WKWebView).
+setWorkerUrl(maplibreWorkerUrl);
+
+function primaryBasemapSource(basemap: string): string {
+  return !basemap || basemap === "online" ? "openmaptiles" : "protomaps";
+}
 
 function makePinElement(marker: MapMarker, selected: boolean, accent: string): HTMLDivElement {
   const color = marker.color || accent;
@@ -152,9 +165,25 @@ export function MapView({
   // Latest callbacks + overlay inputs in a ref, so the once-created map always
   // reads current values (and the style-swap effect can re-apply the route
   // without listing routeLine as a dependency, which would rebuild the style).
-  const latest = useRef({ onMarkerClick, onMapClick, onViewBoxChange, routeLine, regions, accent });
+  const latest = useRef({
+    onMarkerClick,
+    onMapClick,
+    onViewBoxChange,
+    routeLine,
+    regions,
+    accent,
+    basemap,
+  });
   useEffect(() => {
-    latest.current = { onMarkerClick, onMapClick, onViewBoxChange, routeLine, regions, accent };
+    latest.current = {
+      onMarkerClick,
+      onMapClick,
+      onViewBoxChange,
+      routeLine,
+      regions,
+      accent,
+      basemap,
+    };
   });
 
   // Create the map once.
@@ -195,7 +224,7 @@ export function MapView({
     // Any tiles that actually arrive mean the source works — clear the failure
     // state (also recovers automatically when a flaky network comes back).
     map.on("sourcedata", (event) => {
-      if (event.isSourceLoaded) {
+      if (event.sourceId === primaryBasemapSource(latest.current.basemap) && event.isSourceLoaded) {
         errorCountRef.current = 0;
         setStatus("ready");
       }

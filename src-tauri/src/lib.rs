@@ -42,7 +42,8 @@ use notes::{
 use papers::{
     PapersState, papers_add_edge, papers_create_paper, papers_delete_edge, papers_delete_paper,
     papers_load_graph, papers_move_paper, papers_read_assets, papers_read_body, papers_reveal,
-    papers_save_body, papers_save_image, papers_update_edge, papers_update_paper,
+    papers_save_body, papers_save_image, papers_update_edge, papers_update_edge_sides,
+    papers_update_paper,
 };
 use providers::{
     create_provider, delete_provider, fetch_provider_models, list_providers, provider_balance,
@@ -156,6 +157,7 @@ pub fn run() {
             papers_save_body,
             papers_add_edge,
             papers_update_edge,
+            papers_update_edge_sides,
             papers_delete_edge,
             papers_save_image,
             papers_read_assets,

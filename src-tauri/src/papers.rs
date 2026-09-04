@@ -393,6 +393,23 @@ fn update_edge(app: &AppHandle, id: &str, label: &str) -> Result<(), String> {
     save_graph(app, &graph)
 }
 
+fn update_edge_sides(
+    app: &AppHandle,
+    id: &str,
+    from_side: Option<&str>,
+    to_side: Option<&str>,
+) -> Result<(), String> {
+    let mut graph = load_graph(app)?;
+    let edge = graph
+        .edges
+        .iter_mut()
+        .find(|edge| edge.id == id)
+        .ok_or_else(|| "关系不存在。".to_string())?;
+    edge.from_side = clean_edge_side(from_side);
+    edge.to_side = clean_edge_side(to_side);
+    save_graph(app, &graph)
+}
+
 fn delete_edge(app: &AppHandle, id: &str) -> Result<(), String> {
     let mut graph = load_graph(app)?;
     graph.edges.retain(|e| e.id != id);
@@ -645,6 +662,18 @@ pub fn papers_update_edge(
 ) -> Result<(), String> {
     let _guard = state.0.lock().map_err(|_| "论文数据被占用。".to_string())?;
     update_edge(&app, &id, &label)
+}
+
+#[tauri::command]
+pub fn papers_update_edge_sides(
+    app: AppHandle,
+    state: State<'_, PapersState>,
+    id: String,
+    from_side: Option<String>,
+    to_side: Option<String>,
+) -> Result<(), String> {
+    let _guard = state.0.lock().map_err(|_| "论文数据被占用。".to_string())?;
+    update_edge_sides(&app, &id, from_side.as_deref(), to_side.as_deref())
 }
 
 #[tauri::command]

@@ -8,6 +8,7 @@ import {
   movePaper as apiMovePaper,
   saveBody as apiSaveBody,
   updateEdge as apiUpdateEdge,
+  updateEdgeSides as apiUpdateEdgeSides,
   updatePaper as apiUpdatePaper,
   type Paper,
   type PaperEdge,
@@ -44,6 +45,7 @@ export interface PapersData {
     toSide?: PaperEdgeSide,
   ) => Promise<PaperEdge | null>;
   updateEdge: (id: string, label: string) => Promise<void>;
+  updateEdgeSides: (id: string, fromSide?: PaperEdgeSide, toSide?: PaperEdgeSide) => Promise<void>;
   deleteEdge: (id: string) => Promise<void>;
   dismissError: () => void;
 }
@@ -182,6 +184,21 @@ export function usePapers(enabled: boolean): PapersData {
     [fail],
   );
 
+  const updateEdgeSides = useCallback(
+    async (id: string, fromSide?: PaperEdgeSide, toSide?: PaperEdgeSide) => {
+      setEdges((prev) =>
+        prev.map((edge) => (edge.id === id ? { ...edge, fromSide, toSide } : edge)),
+      );
+      try {
+        await apiUpdateEdgeSides(id, fromSide, toSide);
+      } catch (err) {
+        fail(err);
+        void reload();
+      }
+    },
+    [fail, reload],
+  );
+
   const deleteEdge = useCallback(
     async (id: string) => {
       try {
@@ -212,6 +229,7 @@ export function usePapers(enabled: boolean): PapersData {
       saveBody,
       addEdge,
       updateEdge,
+      updateEdgeSides,
       deleteEdge,
       dismissError,
     }),
@@ -230,6 +248,7 @@ export function usePapers(enabled: boolean): PapersData {
       saveBody,
       addEdge,
       updateEdge,
+      updateEdgeSides,
       deleteEdge,
       dismissError,
     ],
