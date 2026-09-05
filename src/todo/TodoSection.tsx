@@ -1138,12 +1138,12 @@ function TodoBoard({
   return (
     <View style={styles.board}>
       <View style={styles.boardRow}>
-        {panel(1)}
         {panel(2)}
+        {panel(1)}
       </View>
       <View style={styles.boardRow}>
-        {panel(3)}
         {panel(4)}
+        {panel(3)}
       </View>
     </View>
   );

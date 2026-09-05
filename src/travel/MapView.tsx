@@ -6,6 +6,7 @@ import {
   Map as MapLibreMap,
   Marker,
   NavigationControl,
+  setWorkerCount,
   setWorkerUrl,
   type MapMouseEvent,
 } from "maplibre-gl";
@@ -72,6 +73,8 @@ const REGION_SOURCE = "nomi-regions";
 const REGION_FILL = "nomi-regions-fill";
 const REGION_LINE = "nomi-regions-line";
 const TRAVEL_ACCENT = "#1FA089";
+const MAP_PIXEL_RATIO_LIMIT = 1.5;
+const MAP_CANVAS_LIMIT: [number, number] = [3072, 3072];
 
 // MapLibre 6 no longer inlines its vector-tile worker. Bundlers cannot infer the
 // worker location from `import.meta.url`, so explicitly let Vite emit a
@@ -79,9 +82,23 @@ const TRAVEL_ACCENT = "#1FA089";
 // Without this, raster/background layers and HTML markers render, but vector
 // roads and labels silently remain blank in packaged WebViews (notably WKWebView).
 setWorkerUrl(maplibreWorkerUrl);
+// Safari normally creates up to three tile workers. One is enough for Nomi's
+// single map and avoids CPU/memory spikes while switching sections in WKWebView.
+setWorkerCount(1);
 
 function primaryBasemapSource(basemap: string): string {
   return !basemap || basemap === "online" ? "openmaptiles" : "protomaps";
+}
+
+function removeMapAfterNextPaint(map: MapLibreMap): void {
+  const remove = () => map.remove();
+  // `Map#remove` synchronously tears down its WebGL context. Give React/WebKit a
+  // chance to paint the newly selected section before doing that heavier work.
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(remove, { timeout: 250 });
+  } else {
+    window.setTimeout(remove, 32);
+  }
 }
 
 function makePinElement(marker: MapMarker, selected: boolean, accent: string): HTMLDivElement {
@@ -132,6 +149,7 @@ export function MapView({
   const markersRef = useRef<Map<string, Marker>>(new Map());
   const pickRef = useRef<Marker | null>(null);
   const readyRef = useRef(false);
+  const appliedBasemapRef = useRef(basemap);
   const accent = accentRgb ? `rgb(${accentRgb})` : TRAVEL_ACCENT;
 
   // A blank ("white") map is almost always the basemap failing to load — the
@@ -160,7 +178,9 @@ export function MapView({
     const map = mapRef.current;
     if (!map) return;
     armLoadTimeout();
-    map.setStyle(buildStyle(basemap));
+    readyRef.current = false;
+    map.stop();
+    map.setStyle(buildStyle(basemap), { diff: false });
   }, [armLoadTimeout, basemap]);
   // Latest callbacks + overlay inputs in a ref, so the once-created map always
   // reads current values (and the style-swap effect can re-apply the route
@@ -190,12 +210,18 @@ export function MapView({
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    let disposed = false;
     const map = new MapLibreMap({
       container: host,
       style: buildStyle(basemap),
       center: [initial?.lng ?? 105, initial?.lat ?? 35],
       zoom: initial?.zoom ?? 3.1,
       attributionControl: false,
+      canvasContextAttributes: { powerPreference: "low-power" },
+      fadeDuration: 0,
+      maxCanvasSize: MAP_CANVAS_LIMIT,
+      maxTileCacheZoomLevels: 2,
+      pixelRatio: Math.min(window.devicePixelRatio || 1, MAP_PIXEL_RATIO_LIMIT),
       dragRotate: false,
       pitchWithRotate: false,
     });
@@ -206,14 +232,17 @@ export function MapView({
     map.touchZoomRotate.disableRotation();
 
     map.on("click", (event: MapMouseEvent) => {
+      if (disposed) return;
       latest.current.onMapClick?.(event.lngLat.lat, event.lngLat.lng);
     });
     const emitViewBox = () => {
+      if (disposed) return;
       const b = map.getBounds();
       latest.current.onViewBoxChange?.([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
     };
     map.on("moveend", emitViewBox);
     map.on("load", () => {
+      if (disposed) return;
       readyRef.current = true;
       window.clearTimeout(loadTimerRef.current);
       setStatus("ready");
@@ -224,6 +253,7 @@ export function MapView({
     // Any tiles that actually arrive mean the source works — clear the failure
     // state (also recovers automatically when a flaky network comes back).
     map.on("sourcedata", (event) => {
+      if (disposed) return;
       if (event.sourceId === primaryBasemapSource(latest.current.basemap) && event.isSourceLoaded) {
         errorCountRef.current = 0;
         setStatus("ready");
@@ -231,8 +261,26 @@ export function MapView({
     });
     // Style/tile fetch failures pile up quickly when the basemap is unreachable.
     map.on("error", () => {
+      if (disposed) return;
       errorCountRef.current += 1;
       if (errorCountRef.current >= 6) setStatus("error");
+    });
+    map.on("style.load", () => {
+      if (disposed) return;
+      readyRef.current = true;
+      applyRegions(map, latest.current.regions ?? null);
+      applyRoute(map, latest.current.routeLine ?? null, latest.current.accent);
+    });
+    map.on("webglcontextlost", () => {
+      if (disposed) return;
+      map.getCanvas().style.visibility = "hidden";
+      setStatus("error");
+    });
+    map.on("webglcontextrestored", () => {
+      if (disposed) return;
+      map.getCanvas().style.visibility = "visible";
+      armLoadTimeout();
+      map.resize();
     });
     armLoadTimeout();
 
@@ -261,14 +309,16 @@ export function MapView({
     onReady?.(handle);
 
     return () => {
+      disposed = true;
       window.clearTimeout(loadTimerRef.current);
+      map.stop();
       markerStore.forEach((m) => m.remove());
       markerStore.clear();
       pickRef.current?.remove();
       pickRef.current = null;
-      map.remove();
       mapRef.current = null;
       readyRef.current = false;
+      removeMapAfterNextPaint(map);
     };
     // Create-once: subsequent prop changes are handled by the effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -277,13 +327,12 @@ export function MapView({
   // Swap the basemap style when it changes (re-applies overlays on style.load).
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !readyRef.current) return;
+    if (!map || appliedBasemapRef.current === basemap) return;
+    appliedBasemapRef.current = basemap;
     armLoadTimeout();
-    map.setStyle(buildStyle(basemap));
-    map.once("styledata", () => {
-      applyRegions(map, latest.current.regions ?? null);
-      applyRoute(map, latest.current.routeLine ?? null, latest.current.accent);
-    });
+    readyRef.current = false;
+    map.stop();
+    map.setStyle(buildStyle(basemap), { diff: false });
   }, [basemap, armLoadTimeout]);
 
   // Reconcile pins against the markers prop — with optional clustering. When
@@ -409,13 +458,14 @@ export function MapView({
   }, [regions]);
 
   return (
-    <div style={{ position: "absolute", inset: 0 }}>
-      <div ref={hostRef} style={{ position: "absolute", inset: 0 }} />
+    <div style={{ background: "#f8f4f0", position: "absolute", inset: 0 }}>
+      <div ref={hostRef} style={{ background: "#f8f4f0", position: "absolute", inset: 0 }} />
       {mapStatus !== "ready" ? (
         <div
           style={{
             position: "absolute",
             inset: 0,
+            background: mapStatus === "error" ? "rgba(248,244,240,0.94)" : "transparent",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",

@@ -1,6 +1,7 @@
 import { AppRegistry } from "react-native";
 import App from "./App";
 import "./global.css";
+import { installScrollActivityTracking } from "./scrollActivity";
 import { takeDetachedTab } from "./tabWindows";
 
 const rootTag = document.getElementById("root");
@@ -10,6 +11,11 @@ if (!rootTag) {
 }
 
 AppRegistry.registerComponent("Nomi", () => App);
+
+const stopScrollActivityTracking = installScrollActivityTracking();
+if (import.meta.hot) {
+  import.meta.hot.dispose(stopScrollActivityTracking);
+}
 
 // A window torn off from a tab carries that tab's state. Claim it before the
 // first paint so the window opens on the right view instead of flashing 对话;

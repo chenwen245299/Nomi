@@ -18,6 +18,7 @@ import {
   RiArrowLeftSLine,
   RiArrowRightSLine,
   RiBarChart2Line,
+  RiBillLine,
   RiCheckDoubleLine,
   RiCloseLine,
   RiEraserLine,
@@ -899,6 +900,10 @@ export function FinanceMainColumn({
               hovered && view !== "capture" && styles.viewButtonHover,
             ]}
           >
+            <RiBillLine
+              color={view === "capture" ? accent.accentText : theme.t.textTertiary}
+              size={13}
+            />
             <Text
               style={[styles.viewButtonText, view === "capture" && styles.viewButtonTextActive]}
             >

@@ -636,9 +636,48 @@ export function GraphCanvas(props: GraphCanvasProps) {
         .nomi-paper-node:hover .nomi-connect-handle,
         .nomi-paper-node[data-selected="true"] .nomi-connect-handle,
         .nomi-paper-node[data-dock-target="true"] .nomi-connect-handle { opacity: 1; }
+        .nomi-connect-handle-dot {
+          align-items: center;
+          background: ${accent.accent};
+          border: 1.5px solid ${t.cardSurface};
+          border-radius: 999px;
+          box-shadow: 0 1px 3px rgba(16,24,36,0.16);
+          display: flex;
+          height: 8px;
+          justify-content: center;
+          overflow: hidden;
+          transition: width 120ms ease, height 120ms ease, border-width 120ms ease, box-shadow 120ms ease;
+          width: 8px;
+        }
+        .nomi-connect-handle-plus { opacity: 0; transform: scale(0.65); transition: opacity 80ms ease, transform 120ms ease; }
+        .nomi-connect-handle:hover .nomi-connect-handle-dot,
+        .nomi-connect-handle[data-dock-active="true"] .nomi-connect-handle-dot {
+          border-width: 2px;
+          box-shadow: 0 0 0 4px rgba(${accent.rgb},0.14), 0 2px 6px rgba(16,24,36,0.22);
+          height: 22px;
+          width: 22px;
+        }
+        .nomi-connect-handle:hover .nomi-connect-handle-plus,
+        .nomi-connect-handle[data-dock-active="true"] .nomi-connect-handle-plus { opacity: 1; transform: scale(1); }
         .nomi-paper-node:hover { z-index: 5; }
-        .nomi-edge-endpoint { transition: opacity 120ms ease, border-color 120ms ease, transform 120ms ease; }
-        .nomi-edge-endpoint:hover { opacity: 1 !important; transform: translate(-50%, -50%) scale(1.18) !important; }
+        .nomi-edge-endpoint { transition: opacity 120ms ease; }
+        .nomi-edge-endpoint-dot {
+          background: ${t.cardSurface};
+          border: 1.5px solid ${accent.accent};
+          border-radius: 999px;
+          box-shadow: 0 1px 3px rgba(16,24,36,0.14);
+          height: 8px;
+          transition: width 120ms ease, height 120ms ease, border-width 120ms ease, box-shadow 120ms ease;
+          width: 8px;
+        }
+        .nomi-edge-endpoint:hover { opacity: 1 !important; }
+        .nomi-edge-endpoint:hover .nomi-edge-endpoint-dot,
+        .nomi-edge-endpoint[data-dragging="true"] .nomi-edge-endpoint-dot {
+          border-width: 2px;
+          box-shadow: 0 0 0 4px rgba(${accent.rgb},0.14), 0 2px 6px rgba(16,24,36,0.18);
+          height: 16px;
+          width: 16px;
+        }
       `}</style>
 
       {/* Edges + temp link line (screen space, non-interactive). */}
@@ -831,6 +870,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
                     key={side}
                     data-connect-handle
                     data-connect-side={side}
+                    data-dock-active={dockingHere && dockTargetSide === side ? "true" : undefined}
                     className="nomi-connect-handle"
                     title={
                       dockingHere
@@ -842,16 +882,6 @@ export function GraphCanvas(props: GraphCanvasProps) {
                       ...CONNECT_HANDLE_POSITION[side],
                       width: 22,
                       height: 22,
-                      borderRadius: 11,
-                      background:
-                        dockingHere && dockTargetSide !== side ? t.cardSurface : accent.accent,
-                      border: `2px solid ${
-                        dockingHere && dockTargetSide !== side ? accent.accent : t.cardSurface
-                      }`,
-                      boxShadow:
-                        dockingHere && dockTargetSide === side
-                          ? `0 0 0 5px rgba(${accent.rgb},0.18), 0 3px 8px rgba(16,24,36,0.24)`
-                          : "0 2px 6px rgba(16,24,36,0.22)",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -860,18 +890,9 @@ export function GraphCanvas(props: GraphCanvasProps) {
                       transformOrigin: "center",
                     }}
                   >
-                    {dockingHere ? (
-                      <span
-                        style={{
-                          width: 6,
-                          height: 6,
-                          borderRadius: 999,
-                          background: dockTargetSide === side ? t.cardSurface : accent.accent,
-                        }}
-                      />
-                    ) : (
-                      <RiAddLine color="#fff" size={14} />
-                    )}
+                    <span className="nomi-connect-handle-dot">
+                      <RiAddLine className="nomi-connect-handle-plus" color="#fff" size={14} />
+                    </span>
                   </div>
                 ))}
               </div>
@@ -895,24 +916,28 @@ export function GraphCanvas(props: GraphCanvasProps) {
               data-edge-endpoint={edge.id}
               data-edge-end={end}
               data-edge-node-id={nodeId}
+              data-dragging={
+                dockDrag?.edgeId === edge.id && dockDrag.end === end ? "true" : undefined
+              }
               className="nomi-edge-endpoint"
               title={`拖动以调整${end === "from" ? "起点" : "终点"}连接侧边`}
               style={{
                 position: "absolute",
                 left: point.x,
                 top: point.y,
-                width: 16,
-                height: 16,
-                borderRadius: 999,
-                background: t.cardSurface,
-                border: `2px solid ${accent.accent}`,
-                boxShadow: "0 2px 6px rgba(16,24,36,0.18)",
+                alignItems: "center",
+                display: "flex",
+                height: 24,
+                justifyContent: "center",
+                width: 24,
                 cursor: "grab",
-                opacity: active || dockDrag?.edgeId === edge.id ? 1 : 0.72,
+                opacity: active || dockDrag?.edgeId === edge.id ? 0.78 : 0.54,
                 pointerEvents: "auto",
                 transform: "translate(-50%, -50%)",
               }}
-            />
+            >
+              <span className="nomi-edge-endpoint-dot" />
+            </div>
           ));
         })}
       </div>

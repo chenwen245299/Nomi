@@ -31,6 +31,8 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-color: transparent transparent;
+  scrollbar-width: thin;
   -webkit-user-drag: none;
 }
 
@@ -359,10 +361,35 @@ textarea#nomi-finance-composer:focus {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(60, 70, 85, 0.24);
+  background-color: transparent;
+  background-clip: padding-box;
+  border: 2px solid transparent;
   border-radius: 99px;
+  min-height: 32px;
+  transition: background-color 160ms ease;
 }
 
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* The 8px scrollbar strip always stays in the layout. Scrolling only fades its
+   thumb in and out, so lists and editor text never jump horizontally. */
+[data-nomi-scrolling="true"] {
+  scrollbar-color: rgba(60, 70, 85, 0.32) transparent;
+  scrollbar-width: thin;
+}
+
+[data-nomi-scrolling="true"]::-webkit-scrollbar-thumb {
+  background-color: rgba(60, 70, 85, 0.32);
+}
+
+[data-nomi-scrolling="true"]::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(60, 70, 85, 0.46);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::-webkit-scrollbar-thumb {
+    transition: none;
+  }
 }

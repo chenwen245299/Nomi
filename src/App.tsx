@@ -2131,7 +2131,7 @@ function NavigationRail({
   return (
     <View style={[styles.rail, glass(30, 180), compact && styles.railCompact]}>
       <View style={styles.railHeader}>
-        <EditableUserAvatar size={34} />
+        <EditableUserAvatar size={38} />
       </View>
 
       <View style={styles.railNavigation}>
@@ -2198,7 +2198,7 @@ function RailButton({
             color={
               active ? accent.accentText : hovered ? theme.t.textSecondary : theme.t.textTertiary
             }
-            size={21}
+            size={24}
           />
         </>
       )}
