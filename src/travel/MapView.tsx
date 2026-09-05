@@ -106,13 +106,9 @@ function makePinElement(marker: MapMarker, selected: boolean, accent: string): H
   const el = document.createElement("div");
   el.className = "nomi-map-pin";
   el.style.cssText = [
-    "position:relative",
     "width:26px",
     "height:34px",
     "cursor:pointer",
-    `transform:translateY(0) scale(${selected ? 1.18 : 1})`,
-    "transform-origin:50% 100%",
-    "transition:transform 160ms cubic-bezier(0.32,0.72,0,1)",
   ].join(";");
   // Teardrop body + inner dot / badge, drawn as inline SVG so it stays crisp.
   const badge = marker.badge
@@ -120,7 +116,7 @@ function makePinElement(marker: MapMarker, selected: boolean, accent: string): H
     : `<circle cx="13" cy="13" r="4.5" fill="#fff"/>`;
   el.innerHTML = `
     <svg width="26" height="34" viewBox="0 0 26 34" fill="none" xmlns="http://www.w3.org/2000/svg"
-         style="filter:drop-shadow(0 3px 5px rgba(16,24,36,0.28))">
+         style="display:block;transform:scale(${selected ? 1.18 : 1});transform-origin:50% 100%;transition:transform 160ms cubic-bezier(0.32,0.72,0,1);filter:drop-shadow(0 3px 5px rgba(16,24,36,0.28))">
       <path d="M13 0C5.82 0 0 5.82 0 13c0 8.4 11.1 19.6 12.2 20.6a1.1 1.1 0 0 0 1.6 0C14.9 32.6 26 21.4 26 13 26 5.82 20.18 0 13 0Z"
             fill="${color}"/>
       ${selected ? `<path d="M13 0C5.82 0 0 5.82 0 13c0 8.4 11.1 19.6 12.2 20.6a1.1 1.1 0 0 0 1.6 0C14.9 32.6 26 21.4 26 13 26 5.82 20.18 0 13 0Z" fill="none" stroke="#fff" stroke-width="2"/>` : ""}

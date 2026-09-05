@@ -314,6 +314,9 @@
 .nomi-editor--compact .vditor-sv {
   font-size: var(--nomi-markdown-sidebar-font-size);
 }
+.nomi-editor--compact .vditor-toolbar {
+  display: none;
+}
 .nomi-editor--compact .vditor-reset {
   line-height: 1.72;
   /* Vditor writes horizontal padding inline; !important keeps the compact inset. */

@@ -29,6 +29,11 @@ export const CHAT_TOOLS: { id: string; name: string; description: string; requir
     requires: "需在设置中配置 Exa Key",
   },
   {
+    id: "web_fetch",
+    name: "获取网页与文件",
+    description: "读取已知网址并保存到当前对话的附件目录",
+  },
+  {
     id: "create_markdown_document",
     name: "生成文档",
     description: "把 Markdown 导出为 PDF / PNG 文件",

@@ -3,6 +3,7 @@ mod chat_agent;
 mod exa;
 mod finance;
 mod llm;
+mod markdown_assets;
 mod mcp;
 mod notes;
 mod papers;
@@ -36,14 +37,14 @@ use finance::{
 use mcp::{mcp_get_client_config, mcp_get_status, mcp_set_enabled};
 use notes::{
     create_folder, create_note, delete_folder, delete_note, move_node, note_reveal_path,
-    notes_tree, read_note, read_note_assets, rename_folder, rename_note, save_note,
-    save_note_image,
+    notes_tree, read_note, read_note_asset_bytes, read_note_assets, rename_folder, rename_note,
+    save_note, save_note_image, save_note_image_bytes,
 };
 use papers::{
     PapersState, papers_add_edge, papers_create_paper, papers_delete_edge, papers_delete_paper,
-    papers_load_graph, papers_move_paper, papers_read_assets, papers_read_body, papers_reveal,
-    papers_save_body, papers_save_image, papers_update_edge, papers_update_edge_sides,
-    papers_update_paper,
+    papers_load_graph, papers_move_paper, papers_read_asset_bytes, papers_read_assets,
+    papers_read_body, papers_reveal, papers_save_body, papers_save_image, papers_save_image_bytes,
+    papers_update_edge, papers_update_edge_sides, papers_update_paper,
 };
 use providers::{
     create_provider, delete_provider, fetch_provider_models, list_providers, provider_balance,
@@ -59,9 +60,9 @@ use travel::{
     travel_create_note, travel_create_plan, travel_delete_map, travel_delete_note,
     travel_delete_plan, travel_download_map, travel_get_settings, travel_import_map,
     travel_list_maps, travel_list_notes, travel_list_plans, travel_map_read_range,
-    travel_read_note, travel_read_note_assets, travel_reveal, travel_reveal_maps, travel_save_note,
-    travel_save_note_image, travel_save_plan, travel_set_settings, travel_update_map,
-    travel_update_note,
+    travel_read_note, travel_read_note_asset_bytes, travel_read_note_assets, travel_reveal,
+    travel_reveal_maps, travel_save_note, travel_save_note_image, travel_save_note_image_bytes,
+    travel_save_plan, travel_set_settings, travel_update_map, travel_update_note,
 };
 use windowing::{PendingTabs, open_tab_window, take_tab_payload};
 
@@ -146,7 +147,9 @@ pub fn run() {
             delete_folder,
             move_node,
             save_note_image,
+            save_note_image_bytes,
             read_note_assets,
+            read_note_asset_bytes,
             note_reveal_path,
             papers_load_graph,
             papers_create_paper,
@@ -160,7 +163,9 @@ pub fn run() {
             papers_update_edge_sides,
             papers_delete_edge,
             papers_save_image,
+            papers_save_image_bytes,
             papers_read_assets,
+            papers_read_asset_bytes,
             papers_reveal,
             todos_list,
             create_todo,
@@ -191,7 +196,9 @@ pub fn run() {
             travel_update_note,
             travel_delete_note,
             travel_save_note_image,
+            travel_save_note_image_bytes,
             travel_read_note_assets,
+            travel_read_note_asset_bytes,
             travel_reveal,
             travel_list_plans,
             travel_create_plan,

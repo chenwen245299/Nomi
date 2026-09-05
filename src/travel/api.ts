@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import {
+  fileToDataUrl,
+  mimeFromPath,
+  readImageBlob,
+  writeImageBytes,
+} from "../editor/binaryAssets";
 
 // ── Travel data access ───────────────────────────────────────────────────────
 // Real Tauri commands in the app, an in-memory fallback so `pnpm dev` renders
@@ -209,6 +215,31 @@ export async function saveNoteImage(
 export async function readNoteAssets(id: string, relPaths: string[]): Promise<string[]> {
   if (isTauri()) return invoke<string[]>("travel_read_note_assets", { id, relPaths });
   return relPaths.map((rel) => preview.images.get(`${id} ${rel}`) ?? "");
+}
+
+export async function saveNoteImageFile(id: string, name: string, file: File): Promise<string> {
+  if (isTauri()) {
+    return writeImageBytes("travel_save_note_image_bytes", id, name, file);
+  }
+  const dataUrl = await fileToDataUrl(file);
+  const saved = await saveNoteImage(id, name, dataUrl.slice(dataUrl.indexOf(",") + 1));
+  return saved.relPath;
+}
+
+export async function readNoteAssetBlob(id: string, relPath: string): Promise<Blob | null> {
+  if (isTauri()) {
+    try {
+      return await readImageBlob(
+        "travel_read_note_asset_bytes",
+        { id, relPath },
+        mimeFromPath(relPath),
+      );
+    } catch {
+      return null;
+    }
+  }
+  const dataUrl = preview.images.get(`${id} ${relPath}`);
+  return dataUrl ? fetch(dataUrl).then((response) => response.blob()) : null;
 }
 
 export async function revealTravel(id?: string | null): Promise<void> {

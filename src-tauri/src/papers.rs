@@ -26,7 +26,7 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, ipc::Response};
 
 use crate::storage;
 
@@ -469,22 +469,18 @@ fn mime_for(ext: &str) -> &'static str {
     }
 }
 
-fn save_image(
+fn store_image_bytes(
     app: &AppHandle,
     id: &str,
     name: &str,
-    data_base64: &str,
-) -> Result<SavedImage, String> {
+    bytes: &[u8],
+) -> Result<String, String> {
     let dir = paper_dir(app, id)?;
     if !dir.is_dir() {
         return Err("论文不存在。".into());
     }
     let assets = dir.join(ASSETS_DIR);
     fs::create_dir_all(&assets).map_err(|error| format!("无法创建 assets 目录：{error}"))?;
-
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data_base64.trim())
-        .map_err(|error| format!("图片数据无法解码：{error}"))?;
 
     let cleaned = sanitize_asset(name);
     let base = if Path::new(&cleaned).extension().is_some() {
@@ -493,9 +489,23 @@ fn save_image(
         format!("{cleaned}.png")
     };
     let file = unique_name(&assets, &base);
-    fs::write(assets.join(&file), &bytes).map_err(|error| format!("无法保存图片：{error}"))?;
+    fs::write(assets.join(&file), bytes).map_err(|error| format!("无法保存图片：{error}"))?;
 
-    let ext = Path::new(&file)
+    Ok(format!("{ASSETS_DIR}/{file}"))
+}
+
+fn save_image(
+    app: &AppHandle,
+    id: &str,
+    name: &str,
+    data_base64: &str,
+) -> Result<SavedImage, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.trim())
+        .map_err(|error| format!("图片数据无法解码：{error}"))?;
+    let rel_path = store_image_bytes(app, id, name, &bytes)?;
+
+    let ext = Path::new(&rel_path)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("png");
@@ -504,10 +514,7 @@ fn save_image(
         mime_for(ext),
         base64::engine::general_purpose::STANDARD.encode(&bytes)
     );
-    Ok(SavedImage {
-        rel_path: format!("{ASSETS_DIR}/{file}"),
-        data_url,
-    })
+    Ok(SavedImage { rel_path, data_url })
 }
 
 /// Resolve a paper-relative asset path, rejecting anything that would escape the
@@ -551,6 +558,12 @@ fn read_assets(app: &AppHandle, id: &str, rel_paths: &[String]) -> Result<Vec<St
         }
     }
     Ok(out)
+}
+
+fn read_asset_bytes(app: &AppHandle, id: &str, rel_path: &str) -> Result<Vec<u8>, String> {
+    let dir = paper_dir(app, id)?;
+    let path = resolve_under(&dir, rel_path)?;
+    fs::read(path).map_err(|error| format!("无法读取图片：{error}"))
 }
 
 /// Absolute path of a paper folder (or the papers root when `id` is empty), for
@@ -699,12 +712,32 @@ pub fn papers_save_image(
 }
 
 #[tauri::command]
+pub fn papers_save_image_bytes(
+    app: AppHandle,
+    state: State<'_, PapersState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
+    let (id, name, bytes) = crate::markdown_assets::parse_write_request(&request)?;
+    let _guard = state.0.lock().map_err(|_| "论文数据被占用。".to_string())?;
+    store_image_bytes(&app, &id, &name, bytes)
+}
+
+#[tauri::command]
 pub fn papers_read_assets(
     app: AppHandle,
     id: String,
     rel_paths: Vec<String>,
 ) -> Result<Vec<String>, String> {
     read_assets(&app, &id, &rel_paths)
+}
+
+#[tauri::command]
+pub fn papers_read_asset_bytes(
+    app: AppHandle,
+    id: String,
+    rel_path: String,
+) -> Result<Response, String> {
+    read_asset_bytes(&app, &id, &rel_path).map(Response::new)
 }
 
 #[tauri::command]

@@ -15,9 +15,8 @@ import {
 type UploadHandler = NonNullable<NonNullable<VditorOptions["upload"]>["handler"]>;
 
 /** One image the host resolved for an upload/paste/drop. `url` is whatever the
- *  editor should reference in `![alt](url)` — a `data:` URL, an http(s) URL, or a
- *  relative path the host understands. Nomi's notes pass `data:` URLs and persist
- *  the on-disk relative path separately (see src/notes). */
+ * editor should reference in `![alt](url)` — normally a short local Blob URL
+ * while the host persists its portable on-disk relative path. */
 export interface UploadedImage {
   url: string;
   alt?: string;

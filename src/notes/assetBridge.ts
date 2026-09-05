@@ -1,21 +1,32 @@
 import type { UploadedImage } from "../editor";
-import { readNoteAssets, saveNoteImage } from "./api";
+import { readNoteAssetBlob, saveNoteImage, saveNoteImageFile } from "./api";
 
 // ── Local image round-trip ───────────────────────────────────────────────────
 //
 // Notes persist portable, human-readable Markdown: images are referenced by a
 // path relative to the note (`assets/pic.png`) and stored in the note's folder.
 // The webview can't load those relative paths directly, so while a note is open
-// we swap them for `data:` URLs (display), and swap them back on save (storage).
+// we swap them for short Blob URLs (display), and swap them back on save (storage).
 // Each note keeps a NoteImageMap tracking that correspondence for its session.
 
 export interface NoteImageMap {
-  /** data: URL → note-relative path (what gets written to disk). */
+  /** Short display URL → note-relative path (what gets written to disk). */
   byDataUrl: Map<string, string>;
+  /** A freshly pasted Blob URL can display before its background write finishes. */
+  pendingByUrl: Map<string, Promise<string>>;
+  /** Blob URLs owned by this open editor, revoked when the editor closes. */
+  objectUrls: Set<string>;
 }
 
 export function createImageMap(): NoteImageMap {
-  return { byDataUrl: new Map() };
+  return { byDataUrl: new Map(), pendingByUrl: new Map(), objectUrls: new Set() };
+}
+
+export function disposeImageMap(map: NoteImageMap): void {
+  for (const url of map.objectUrls) URL.revokeObjectURL(url);
+  map.objectUrls.clear();
+  map.byDataUrl.clear();
+  map.pendingByUrl.clear();
 }
 
 // Markdown image: `![alt](url)` or `![alt](url "title")` or `![alt](<url>)`.
@@ -53,8 +64,8 @@ function mapImageUrls(markdown: string, fn: (url: string) => string): string {
 const isLocalRef = (url: string) => !/^[a-z][a-z0-9+.-]*:/i.test(url) && !url.startsWith("/");
 const isDataUrl = (url: string) => url.startsWith("data:");
 
-/** Turn stored Markdown (relative `assets/…` paths) into display Markdown with
- *  `data:` URLs the editor can render. Populates `map` for the reverse trip. */
+/** Turn stored Markdown into short Blob URLs. Large image bytes never become
+ * part of the Markdown string that Vditor parses and diffs. */
 export async function hydrateForDisplay(
   notePath: string,
   markdown: string,
@@ -71,16 +82,18 @@ export async function hydrateForDisplay(
     return markdown;
   }
   const relList = [...rels];
-  const dataUrls = await readNoteAssets(notePath, relList);
-  const relToData = new Map<string, string>();
-  relList.forEach((rel, index) => {
-    const dataUrl = dataUrls[index];
-    if (dataUrl) {
-      relToData.set(rel, dataUrl);
-      map.byDataUrl.set(dataUrl, rel);
-    }
-  });
-  return mapImageUrls(markdown, (url) => relToData.get(url) ?? url);
+  const loaded = await Promise.all(
+    relList.map(async (rel) => {
+      const blob = await readNoteAssetBlob(notePath, rel);
+      if (!blob) return null;
+      const url = URL.createObjectURL(blob);
+      map.objectUrls.add(url);
+      map.byDataUrl.set(url, rel);
+      return [rel, url] as const;
+    }),
+  );
+  const relToDisplay = new Map(loaded.filter((item) => item !== null));
+  return mapImageUrls(markdown, (url) => relToDisplay.get(url) ?? url);
 }
 
 const extFromMime = (mime: string): string => {
@@ -109,20 +122,24 @@ async function persistDataUrl(notePath: string, dataUrl: string): Promise<string
   return saved.relPath;
 }
 
-/** Turn display Markdown (with `data:` URLs) back into stored Markdown (relative
- *  `assets/…` paths). Any inline image not already on disk is written first. */
+/** Turn display Markdown back into stored Markdown with relative `assets/…`
+ * paths. Any legacy inline data image not already on disk is written first. */
 export async function prepareForStorage(
   notePath: string,
   markdown: string,
   map: NoteImageMap,
 ): Promise<string> {
+  const pending = new Set<Promise<string>>();
   const unknown = new Set<string>();
   mapImageUrls(markdown, (url) => {
+    const write = map.pendingByUrl.get(url);
+    if (write) pending.add(write);
     if (isDataUrl(url) && !map.byDataUrl.has(url)) {
       unknown.add(url);
     }
     return url;
   });
+  await Promise.all(pending);
   for (const dataUrl of unknown) {
     const rel = await persistDataUrl(notePath, dataUrl);
     if (rel) {
@@ -132,39 +149,37 @@ export async function prepareForStorage(
   return mapImageUrls(markdown, (url) => map.byDataUrl.get(url) ?? url);
 }
 
-const readAsDataUrl = (file: File): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error("读取图片失败"));
-    reader.readAsDataURL(file);
-  });
-
 // Alt text sits inside `![…]`, so strip brackets/newlines that would break it.
 const stem = (name: string) =>
   (name.replace(/\.[^.]+$/, "") || "图片").replace(/[[\]\r\n]/g, " ").trim() || "图片";
 
 /**
  * MarkdownEditor `onImageUpload` for notes: copy each pasted/dropped/picked image
- * into the note's `assets/` folder and hand back a `data:` URL for display. The
- * portable relative path is remembered in `map` and substituted back on save.
+ * into the note's `assets/` folder. A Blob URL is returned immediately for
+ * display; autosave waits for the binary background write before persisting.
  */
 export async function uploadNoteImages(
   notePath: string,
   files: File[],
   map: NoteImageMap,
 ): Promise<UploadedImage[]> {
-  const out: UploadedImage[] = [];
-  for (const file of files) {
-    if (!file.type.startsWith("image/")) {
-      continue;
-    }
-    const dataUrl = await readAsDataUrl(file);
-    const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  return files.flatMap((file) => {
+    if (!file.type.startsWith("image/")) return [];
+    const displayUrl = URL.createObjectURL(file);
+    map.objectUrls.add(displayUrl);
     const name = file.name || `image.${extFromMime(file.type)}`;
-    const saved = await saveNoteImage(notePath, name, base64);
-    map.byDataUrl.set(saved.dataUrl, saved.relPath);
-    out.push({ url: saved.dataUrl, alt: stem(file.name || "图片") });
-  }
-  return out;
+    const write = saveNoteImageFile(notePath, name, file);
+    map.pendingByUrl.set(displayUrl, write);
+    void write.then(
+      (relPath) => {
+        map.byDataUrl.set(displayUrl, relPath);
+        map.pendingByUrl.delete(displayUrl);
+      },
+      () => {
+        // Keep the rejected promise in the map so autosave reports an error
+        // instead of ever writing a temporary blob: URL into the Markdown file.
+      },
+    );
+    return [{ url: displayUrl, alt: stem(file.name || "图片") }];
+  });
 }

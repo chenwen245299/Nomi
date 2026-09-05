@@ -5,7 +5,7 @@ use std::{
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, ipc::Response};
 
 use crate::storage;
 
@@ -440,9 +440,37 @@ fn mime_for(ext: &str) -> &'static str {
     }
 }
 
-/// Store a pasted/dropped/picked image next to its note (`<folder>/assets/…`) and
-/// return both the portable relative path (for the Markdown) and a data URL (for
-/// immediate display). Bytes arrive as standard base64.
+fn store_note_image_bytes(
+    app: &AppHandle,
+    note_path: &str,
+    name: &str,
+    bytes: &[u8],
+) -> Result<String, String> {
+    let root = notes_root(app)?;
+    // Mirror save_note's guard: never recreate the folder of a note that was just
+    // deleted/moved (a late flush persisting an inline image would otherwise leave a
+    // half-resurrected directory with an orphan image and no note).
+    let file = resolve(&root, note_path)?;
+    if !file.is_file() {
+        return Err("笔记不存在。".into());
+    }
+    let dir = note_dir(&root, note_path)?;
+    let assets = dir.join(ASSETS_DIR);
+    fs::create_dir_all(&assets).map_err(|error| format!("无法创建 assets 目录：{error}"))?;
+
+    let cleaned = asset_file_name(name);
+    let base = if Path::new(&cleaned).extension().is_some() {
+        cleaned
+    } else {
+        format!("{cleaned}.png")
+    };
+    let file = unique_name(&assets, &base);
+    fs::write(assets.join(&file), bytes).map_err(|error| format!("无法保存图片：{error}"))?;
+
+    Ok(format!("{ASSETS_DIR}/{file}"))
+}
+
+/// Legacy Base64 command kept for compatibility with already-open older windows.
 #[tauri::command]
 pub fn save_note_image(
     app: AppHandle,
@@ -450,32 +478,12 @@ pub fn save_note_image(
     name: String,
     data_base64: String,
 ) -> Result<SavedImage, String> {
-    let root = notes_root(&app)?;
-    // Mirror save_note's guard: never recreate the folder of a note that was just
-    // deleted/moved (a late flush persisting an inline image would otherwise leave a
-    // half-resurrected directory with an orphan image and no note).
-    let file = resolve(&root, &note_path)?;
-    if !file.is_file() {
-        return Err("笔记不存在。".into());
-    }
-    let dir = note_dir(&root, &note_path)?;
-    let assets = dir.join(ASSETS_DIR);
-    fs::create_dir_all(&assets).map_err(|error| format!("无法创建 assets 目录：{error}"))?;
-
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data_base64.trim())
         .map_err(|error| format!("图片数据无法解码：{error}"))?;
+    let rel_path = store_note_image_bytes(&app, &note_path, &name, &bytes)?;
 
-    let cleaned = asset_file_name(&name);
-    let base = if Path::new(&cleaned).extension().is_some() {
-        cleaned
-    } else {
-        format!("{cleaned}.png")
-    };
-    let file = unique_name(&assets, &base);
-    fs::write(assets.join(&file), &bytes).map_err(|error| format!("无法保存图片：{error}"))?;
-
-    let ext = Path::new(&file)
+    let ext = Path::new(&rel_path)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("png");
@@ -484,10 +492,18 @@ pub fn save_note_image(
         mime_for(ext),
         base64::engine::general_purpose::STANDARD.encode(&bytes)
     );
-    Ok(SavedImage {
-        rel_path: format!("{ASSETS_DIR}/{file}"),
-        data_url,
-    })
+    Ok(SavedImage { rel_path, data_url })
+}
+
+/// Fast path used by every Markdown editor: raw bytes in, only a short relative
+/// path out. This avoids Base64 expansion and a second encode on the return trip.
+#[tauri::command]
+pub fn save_note_image_bytes(
+    app: AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
+    let (note_path, name, bytes) = crate::markdown_assets::parse_write_request(&request)?;
+    store_note_image_bytes(&app, &note_path, &name, bytes)
 }
 
 /// Resolve note-relative image paths (e.g. `assets/pic.png`) to data URLs so the
@@ -526,6 +542,19 @@ pub fn read_note_assets(
         }
     }
     Ok(out)
+}
+
+#[tauri::command]
+pub fn read_note_asset_bytes(
+    app: AppHandle,
+    note_path: String,
+    rel_path: String,
+) -> Result<Response, String> {
+    let root = notes_root(&app)?;
+    let dir = note_dir(&root, &note_path)?;
+    let path = resolve(&dir, &rel_path)?;
+    let bytes = fs::read(path).map_err(|error| format!("无法读取图片：{error}"))?;
+    Ok(Response::new(bytes))
 }
 
 /// Absolute filesystem path of an existing note or folder, for "reveal in Finder".

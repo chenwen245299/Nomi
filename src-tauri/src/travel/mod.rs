@@ -6,7 +6,7 @@ mod maps;
 mod store;
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, ipc::Response};
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -175,12 +175,30 @@ pub fn travel_save_note_image(
 }
 
 #[tauri::command]
+pub fn travel_save_note_image_bytes(
+    app: AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
+    let (id, name, bytes) = crate::markdown_assets::parse_write_request(&request)?;
+    store::save_note_image_bytes(&app, &id, &name, bytes)
+}
+
+#[tauri::command]
 pub fn travel_read_note_assets(
     app: AppHandle,
     id: String,
     rel_paths: Vec<String>,
 ) -> Result<Vec<String>, String> {
     store::read_note_assets(&app, &id, &rel_paths)
+}
+
+#[tauri::command]
+pub fn travel_read_note_asset_bytes(
+    app: AppHandle,
+    id: String,
+    rel_path: String,
+) -> Result<Response, String> {
+    store::read_note_asset_bytes(&app, &id, &rel_path).map(Response::new)
 }
 
 #[tauri::command]

@@ -21,6 +21,7 @@ import { enterLeft, motion, useTheme, type Accent, type Theme } from "../theme";
 import { readNote, revealTravel, saveNote, type NoteInput, type TravelNote } from "./api";
 import {
   createImageMap,
+  disposeImageMap,
   hydrateForDisplay,
   prepareForStorage,
   uploadNoteImages,
@@ -40,35 +41,6 @@ async function confirmDelete(message: string): Promise<boolean> {
   }
   return typeof window !== "undefined" ? window.confirm(message) : true;
 }
-
-// One overflow menu keeps Vditor's commands out of the way (mirrors notes).
-const TRAVEL_TOOLBAR = [
-  {
-    name: "more",
-    tip: "格式与插入",
-    toolbar: [
-      "headings",
-      "bold",
-      "italic",
-      "strike",
-      "list",
-      "ordered-list",
-      "check",
-      "quote",
-      "line",
-      "inline-code",
-      "code",
-      "link",
-      "table",
-      {
-        name: "upload",
-        tip: "插入图片",
-        icon: '<svg aria-hidden="true"><use xlink:href="#vditor-icon-upload"></use></svg>',
-      },
-      "emoji",
-    ],
-  },
-];
 
 const AUTOSAVE_MS = 800;
 const META_SAVE_MS = 500;
@@ -119,7 +91,6 @@ export function TravelNoteEditor({
   const [bodyState, setBodyState] = useState<SaveState>("idle");
   const [picking, setPicking] = useState(false);
   const [titleFocused, setTitleFocused] = useState(false);
-  const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null);
 
   // ── Metadata autosave ───────────────────────────────────────────────────────
   const metaTimer = useRef<number | undefined>(undefined);
@@ -236,7 +207,8 @@ export function TravelNoteEditor({
       mountedRef.current = false;
       window.clearTimeout(bodyTimer.current);
       window.clearTimeout(metaTimer.current);
-      void flushBody();
+      const map = mapImg.current;
+      void flushBody().finally(() => disposeImageMap(map));
     },
     [flushBody],
   );
@@ -270,213 +242,202 @@ export function TravelNoteEditor({
     <View style={[styles.panel, enterLeft()]}>
       {/* Header: title + save state + actions */}
       <View style={styles.header}>
-          <TextInput
-            accessibilityLabel="旅行标题"
-            onBlur={() => setTitleFocused(false)}
-            onChangeText={(value) => {
-              setTitle(value);
-              patchMeta({ title: value });
-            }}
-            onFocus={() => setTitleFocused(true)}
-            placeholder="给这段旅程起个名字…"
-            placeholderTextColor={theme.t.textTertiary}
-            style={[styles.titleInput, titleFocused && styles.titleInputFocused]}
-            value={title}
-          />
-          <View style={styles.headerActions}>
-            <Text style={styles.saveHint}>{SAVE_LABELS[combinedState]}</Text>
-            {isTauriRuntime() ? (
-              <Pressable
-                accessibilityLabel="在文件夹中显示"
-                accessibilityRole="button"
-                onPress={() => void revealTravel(note.id)}
-                style={({ hovered }: PressState) => [
-                  styles.iconButton,
-                  motion,
-                  hovered && styles.iconButtonHover,
-                ]}
-              >
-                <RiExternalLinkLine color={theme.t.textSecondary} size={16} />
-              </Pressable>
-            ) : null}
+        <TextInput
+          accessibilityLabel="旅行标题"
+          onBlur={() => setTitleFocused(false)}
+          onChangeText={(value) => {
+            setTitle(value);
+            patchMeta({ title: value });
+          }}
+          onFocus={() => setTitleFocused(true)}
+          placeholder="给这段旅程起个名字…"
+          placeholderTextColor={theme.t.textTertiary}
+          style={[styles.titleInput, titleFocused && styles.titleInputFocused]}
+          value={title}
+        />
+        <View style={styles.headerActions}>
+          <Text style={styles.saveHint}>{SAVE_LABELS[combinedState]}</Text>
+          {isTauriRuntime() ? (
             <Pressable
-              accessibilityLabel="删除旅行笔记"
+              accessibilityLabel="在文件夹中显示"
               accessibilityRole="button"
-              onPress={() => void handleDelete()}
+              onPress={() => void revealTravel(note.id)}
               style={({ hovered }: PressState) => [
                 styles.iconButton,
                 motion,
-                hovered && styles.iconButtonDanger,
+                hovered && styles.iconButtonHover,
               ]}
             >
-              <RiDeleteBinLine color={theme.t.errorText} size={16} />
+              <RiExternalLinkLine color={theme.t.textSecondary} size={16} />
             </Pressable>
-            <Pressable
-              accessibilityLabel="完成"
-              accessibilityRole="button"
-              onPress={() => void close()}
-              style={styles.doneButton}
-            >
-              <Text style={styles.doneButtonText}>完成</Text>
-            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityLabel="删除旅行笔记"
+            accessibilityRole="button"
+            onPress={() => void handleDelete()}
+            style={({ hovered }: PressState) => [
+              styles.iconButton,
+              motion,
+              hovered && styles.iconButtonDanger,
+            ]}
+          >
+            <RiDeleteBinLine color={theme.t.errorText} size={16} />
+          </Pressable>
+          <Pressable
+            accessibilityLabel="完成"
+            accessibilityRole="button"
+            onPress={() => void close()}
+            style={styles.doneButton}
+          >
+            <Text style={styles.doneButtonText}>完成</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {/* Metadata */}
+      <View style={styles.metaBar}>
+        <View style={styles.metaTopRow}>
+          <View style={styles.metaField}>
+            <Text style={styles.metaLabel}>日期</Text>
+            <input
+              aria-label="旅行日期"
+              onChange={(event) => {
+                setDate(event.target.value);
+                patchMeta({ date: event.target.value });
+              }}
+              style={{
+                background: theme.t.cardSurface,
+                border: `1px solid ${theme.t.controlBorder}`,
+                borderRadius: 8,
+                color: theme.t.textPrimary,
+                fontFamily: "inherit",
+                fontSize: 13,
+                outline: "none",
+                padding: "7px 9px",
+              }}
+              type="date"
+              value={date}
+            />
+          </View>
+          <View style={styles.metaFieldGrow}>
+            <Text style={styles.metaLabel}>评分</Text>
+            <StarRating
+              accent={accent}
+              onChange={(value) => {
+                setRating(value);
+                patchMeta({ rating: value });
+              }}
+              rating={rating}
+            />
           </View>
         </View>
 
-        {/* Metadata */}
-        <View style={styles.metaBar}>
-          <View style={styles.metaTopRow}>
-            <View style={styles.metaField}>
-              <Text style={styles.metaLabel}>日期</Text>
-              <input
-                aria-label="旅行日期"
-                onChange={(event) => {
-                  setDate(event.target.value);
-                  patchMeta({ date: event.target.value });
+        <Text style={styles.metaLabel}>分类</Text>
+        <View style={styles.chipWrap}>
+          {categories.map((cat) => {
+            const active = category === cat;
+            return (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                key={cat}
+                onPress={() => {
+                  const next = active ? "" : cat;
+                  setCategory(next);
+                  patchMeta({ category: next });
                 }}
-                style={{
-                  background: theme.t.cardSurface,
-                  border: `1px solid ${theme.t.controlBorder}`,
-                  borderRadius: 8,
-                  color: theme.t.textPrimary,
-                  fontFamily: "inherit",
-                  fontSize: 13,
-                  outline: "none",
-                  padding: "7px 9px",
-                }}
-                type="date"
-                value={date}
-              />
-            </View>
-            <View style={styles.metaFieldGrow}>
-              <Text style={styles.metaLabel}>评分</Text>
-              <StarRating
-                accent={accent}
-                onChange={(value) => {
-                  setRating(value);
-                  patchMeta({ rating: value });
-                }}
-                rating={rating}
-              />
-            </View>
-          </View>
-
-          <Text style={styles.metaLabel}>分类</Text>
-          <View style={styles.chipWrap}>
-            {categories.map((cat) => {
-              const active = category === cat;
-              return (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                  key={cat}
-                  onPress={() => {
-                    const next = active ? "" : cat;
-                    setCategory(next);
-                    patchMeta({ category: next });
-                  }}
-                  style={({ hovered }: PressState) => [
-                    styles.chip,
-                    motion,
-                    {
-                      backgroundColor: active
-                        ? accent.accent
-                        : hovered
-                          ? theme.t.controlHover
-                          : theme.t.controlIdle,
-                      borderColor: active ? accent.accent : theme.t.controlBorder,
-                    } as ViewStyle,
+                style={({ hovered }: PressState) => [
+                  styles.chip,
+                  motion,
+                  {
+                    backgroundColor: active
+                      ? accent.accent
+                      : hovered
+                        ? theme.t.controlHover
+                        : theme.t.controlIdle,
+                    borderColor: active ? accent.accent : theme.t.controlBorder,
+                  } as ViewStyle,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.chipText,
+                    { color: active ? theme.t.onAccent : theme.t.textSecondary } as ViewStyle,
                   ]}
                 >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      { color: active ? theme.t.onAccent : theme.t.textSecondary } as ViewStyle,
-                    ]}
-                  >
-                    {cat}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+                  {cat}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
 
-          <Text style={styles.metaLabel}>位置</Text>
-          <View style={styles.locationRow}>
+        <Text style={styles.metaLabel}>位置</Text>
+        <View style={styles.locationRow}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setPicking(true)}
+            style={({ hovered }: PressState) => [
+              styles.locationButton,
+              motion,
+              hovered && { backgroundColor: theme.t.controlHover },
+            ]}
+          >
+            {lat != null && lng != null ? (
+              <RiMapPin2Fill color={accent.accentText} size={15} />
+            ) : (
+              <RiMapPin2Line color={theme.t.textTertiary} size={15} />
+            )}
+            <Text numberOfLines={1} style={styles.locationText}>
+              {locationLabel || "在地图上选择位置（或输入经纬度）"}
+            </Text>
+          </Pressable>
+          {lat != null && lng != null ? (
             <Pressable
+              accessibilityLabel="清除位置"
               accessibilityRole="button"
-              onPress={() => setPicking(true)}
+              onPress={() => {
+                setLat(null);
+                setLng(null);
+                setAddress("");
+                patchMeta({ lat: null, lng: null, address: "" });
+              }}
               style={({ hovered }: PressState) => [
-                styles.locationButton,
-                motion,
+                styles.clearLocation,
                 hovered && { backgroundColor: theme.t.controlHover },
               ]}
             >
-              {lat != null && lng != null ? (
-                <RiMapPin2Fill color={accent.accentText} size={15} />
-              ) : (
-                <RiMapPin2Line color={theme.t.textTertiary} size={15} />
-              )}
-              <Text numberOfLines={1} style={styles.locationText}>
-                {locationLabel || "在地图上选择位置（或输入经纬度）"}
-              </Text>
+              <Text style={styles.clearLocationText}>清除</Text>
             </Pressable>
-            {lat != null && lng != null ? (
-              <Pressable
-                accessibilityLabel="清除位置"
-                accessibilityRole="button"
-                onPress={() => {
-                  setLat(null);
-                  setLng(null);
-                  setAddress("");
-                  patchMeta({ lat: null, lng: null, address: "" });
-                }}
-                style={({ hovered }: PressState) => [
-                  styles.clearLocation,
-                  hovered && { backgroundColor: theme.t.controlHover },
-                ]}
-              >
-                <Text style={styles.clearLocationText}>清除</Text>
-              </Pressable>
-            ) : null}
+          ) : null}
+        </View>
+      </View>
+
+      {/* Body editor */}
+      <View style={styles.editorHost}>
+        {body.kind === "loading" ? (
+          <View style={styles.centered}>
+            <ActivityIndicator color={theme.t.textTertiary} size="small" />
           </View>
-        </View>
-
-        {/* Format toolbar — its own row so the overflow menu opens over the empty
-            editor area instead of covering the metadata above. */}
-        <View style={styles.toolbarRow}>
-          <div
-            className="nomi-note-toolbar-host"
-            ref={setToolbarHost}
-            style={{ "--nomi-editor-accent": accent.rgb } as React.CSSProperties}
+        ) : body.kind === "error" ? (
+          <ScrollView contentContainerStyle={styles.centered}>
+            <Text style={styles.errorText}>{body.error}</Text>
+          </ScrollView>
+        ) : (
+          <MarkdownEditor
+            accentRgb={accent.rgb}
+            className="nomi-editor--compact"
+            mode="wysiwyg"
+            onBlur={() => void flushBody()}
+            onChange={onBodyChange}
+            onImageUpload={onImageUpload}
+            onSave={() => void flushBody()}
+            placeholder="记录这段旅程…（⌘V 可粘贴图片）"
+            toolbar={[]}
+            value={body.content}
           />
-        </View>
-
-        {/* Body editor */}
-        <View style={styles.editorHost}>
-          {body.kind === "loading" ? (
-            <View style={styles.centered}>
-              <ActivityIndicator color={theme.t.textTertiary} size="small" />
-            </View>
-          ) : body.kind === "error" ? (
-            <ScrollView contentContainerStyle={styles.centered}>
-              <Text style={styles.errorText}>{body.error}</Text>
-            </ScrollView>
-          ) : (
-            <MarkdownEditor
-              accentRgb={accent.rgb}
-              className="nomi-editor--compact"
-              mode="wysiwyg"
-              onBlur={() => void flushBody()}
-              onChange={onBodyChange}
-              onImageUpload={onImageUpload}
-              onSave={() => void flushBody()}
-              placeholder="记录这段旅程…（⌘V 可粘贴图片）"
-              toolbar={TRAVEL_TOOLBAR}
-              toolbarHost={toolbarHost}
-              value={body.content}
-            />
-          )}
-        </View>
+        )}
+      </View>
 
       {picking ? (
         <LocationPicker
@@ -549,11 +510,6 @@ function makeStyles(theme: Theme, accent: Accent) {
       backgroundColor: t.cardSurface,
       borderColor: accent.accent,
       boxShadow: `0 0 0 3px rgba(${accent.rgb},0.16)`,
-    },
-    toolbarRow: {
-      flexDirection: "row",
-      paddingHorizontal: 14,
-      paddingTop: 8,
     },
     headerActions: { alignItems: "center", flexDirection: "row", gap: 4 },
     saveHint: { color: t.textTertiary, fontSize: 10.5, minWidth: 36, textAlign: "right" },

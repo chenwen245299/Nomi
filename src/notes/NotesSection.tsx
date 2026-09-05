@@ -36,6 +36,7 @@ import { EmptyIllustration } from "../illustrations";
 import { readNote, revealInFinder, saveNote, type NoteNode } from "./api";
 import {
   createImageMap,
+  disposeImageMap,
   hydrateForDisplay,
   prepareForStorage,
   uploadNoteImages,
@@ -1555,7 +1556,8 @@ function NoteEditor({
     () => () => {
       mountedRef.current = false;
       window.clearTimeout(timerRef.current);
-      void flush();
+      const map = mapRef.current;
+      void flush().finally(() => disposeImageMap(map));
     },
     [flush],
   );

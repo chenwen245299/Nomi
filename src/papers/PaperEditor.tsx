@@ -7,6 +7,7 @@ import { SHELL_HEADER_HEIGHT, motion, useTheme, type Accent, type Theme } from "
 import { readBody, type Paper, type PaperInput } from "./api";
 import {
   createImageMap,
+  disposeImageMap,
   hydrateForDisplay,
   prepareForStorage,
   uploadNoteImages,
@@ -329,7 +330,8 @@ function PaperBody({
     () => () => {
       mountedRef.current = false;
       window.clearTimeout(timerRef.current);
-      void flush();
+      const map = mapRef.current;
+      void flush().finally(() => disposeImageMap(map));
     },
     [flush],
   );

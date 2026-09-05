@@ -303,22 +303,18 @@ fn mime_for(ext: &str) -> &'static str {
     }
 }
 
-pub(super) fn save_note_image(
+fn store_note_image_bytes(
     app: &AppHandle,
     id: &str,
     name: &str,
-    data_base64: &str,
-) -> Result<SavedImage, String> {
+    bytes: &[u8],
+) -> Result<String, String> {
     let dir = note_dir(app, id)?;
     if !dir.is_dir() {
         return Err("旅行笔记不存在。".into());
     }
     let assets = dir.join(ASSETS_DIR);
     fs::create_dir_all(&assets).map_err(|error| format!("无法创建 assets 目录：{error}"))?;
-
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data_base64.trim())
-        .map_err(|error| format!("图片数据无法解码：{error}"))?;
 
     let cleaned = sanitize_asset(name);
     let base = if Path::new(&cleaned).extension().is_some() {
@@ -327,9 +323,23 @@ pub(super) fn save_note_image(
         format!("{cleaned}.png")
     };
     let file = unique_name(&assets, &base);
-    fs::write(assets.join(&file), &bytes).map_err(|error| format!("无法保存图片：{error}"))?;
+    fs::write(assets.join(&file), bytes).map_err(|error| format!("无法保存图片：{error}"))?;
 
-    let ext = Path::new(&file)
+    Ok(format!("{ASSETS_DIR}/{file}"))
+}
+
+pub(super) fn save_note_image(
+    app: &AppHandle,
+    id: &str,
+    name: &str,
+    data_base64: &str,
+) -> Result<SavedImage, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.trim())
+        .map_err(|error| format!("图片数据无法解码：{error}"))?;
+    let rel_path = store_note_image_bytes(app, id, name, &bytes)?;
+
+    let ext = Path::new(&rel_path)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("png");
@@ -338,10 +348,16 @@ pub(super) fn save_note_image(
         mime_for(ext),
         base64::engine::general_purpose::STANDARD.encode(&bytes)
     );
-    Ok(SavedImage {
-        rel_path: format!("{ASSETS_DIR}/{file}"),
-        data_url,
-    })
+    Ok(SavedImage { rel_path, data_url })
+}
+
+pub(super) fn save_note_image_bytes(
+    app: &AppHandle,
+    id: &str,
+    name: &str,
+    bytes: &[u8],
+) -> Result<String, String> {
+    store_note_image_bytes(app, id, name, bytes)
 }
 
 pub(super) fn read_note_assets(
@@ -375,6 +391,16 @@ pub(super) fn read_note_assets(
         }
     }
     Ok(out)
+}
+
+pub(super) fn read_note_asset_bytes(
+    app: &AppHandle,
+    id: &str,
+    rel_path: &str,
+) -> Result<Vec<u8>, String> {
+    let dir = note_dir(app, id)?;
+    let path = resolve_under(&dir, rel_path)?;
+    fs::read(path).map_err(|error| format!("无法读取图片：{error}"))
 }
 
 /// Resolve a note-relative asset path, rejecting anything that would escape the

@@ -9,8 +9,9 @@
 //! Ported from Argus's `balance.rs`.
 //! Ref: <https://openrouter.ai/docs/api-reference/get-credits>
 //!
-//! OpenRouter's chat-time server tools (web_search / web_fetch, citation
-//! annotations) would hang off the [`ProviderSpec`] hooks here when added.
+//! OpenRouter's provider-hosted search and citation annotations would hang off
+//! the [`ProviderSpec`] hooks here when added. Nomi's local `web_search` and
+//! `web_fetch` tools live in `chat_agent` so downloaded files stay with the chat.
 
 use async_trait::async_trait;
 use serde::Deserialize;
