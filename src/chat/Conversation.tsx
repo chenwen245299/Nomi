@@ -51,7 +51,9 @@ import {
   RiToolsFill,
 } from "@remixicon/react";
 import { open } from "@tauri-apps/plugin-dialog";
+import Vditor from "vditor";
 import { AttachmentPreviewModal, type AttachmentPreviewKind } from "../AttachmentPreviewModal";
+import { VDITOR_CDN } from "../editor/vditorAssets";
 import { accentFor, motion, useTheme, type Accent, type Theme } from "../theme";
 import { BrandIcon } from "../providers/BrandIcon";
 import { modelIconUrl, providerIconUrl } from "../providers/icons";
@@ -69,6 +71,7 @@ import {
   type MessageUsage,
 } from "./api";
 import { useConversation, type DraftToolCall, type StreamingMessage } from "./useConversation";
+import type { ConversationContextSource } from "./chatRuntime";
 import { renderMarkdown } from "./markdown";
 import { effortScaleFor, mapEffort, THINKING_LABEL, type ThinkingEffort } from "./reasoning";
 
@@ -93,6 +96,79 @@ const DEFAULT_REASONING_VIEW_STATE: ReasoningViewState = { expanded: false, open
 const USER_MESSAGE_COLLAPSED_LINES = 10;
 const USER_MESSAGE_LINE_HEIGHT = 23;
 const USER_MESSAGE_COLLAPSED_HEIGHT = USER_MESSAGE_COLLAPSED_LINES * USER_MESSAGE_LINE_HEIGHT;
+const CHAT_SCROLL_STORAGE_KEY = "nomi.chat.scroll-positions.v1";
+const MAX_SAVED_CHAT_SCROLL_POSITIONS = 200;
+
+interface SavedChatScrollPosition {
+  atBottom: boolean;
+  top: number;
+  updatedAt: number;
+}
+
+const savedChatScrollPositions = new Map<string, SavedChatScrollPosition>();
+let chatScrollPositionsLoaded = false;
+let chatScrollPersistTimer: number | undefined;
+
+function chatScrollKey(scope: string, assistantId: string, conversationId: string): string {
+  return [scope || "main", assistantId, conversationId].map(encodeURIComponent).join("/");
+}
+
+function loadChatScrollPositions(): void {
+  if (chatScrollPositionsLoaded || typeof window === "undefined") return;
+  chatScrollPositionsLoaded = true;
+  try {
+    const raw = window.localStorage.getItem(CHAT_SCROLL_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Record<string, Partial<SavedChatScrollPosition>>;
+    for (const [key, value] of Object.entries(parsed)) {
+      if (
+        typeof value.top === "number" &&
+        Number.isFinite(value.top) &&
+        typeof value.atBottom === "boolean"
+      ) {
+        savedChatScrollPositions.set(key, {
+          atBottom: value.atBottom,
+          top: Math.max(0, value.top),
+          updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : 0,
+        });
+      }
+    }
+  } catch {
+    // Corrupt or unavailable localStorage must never block opening a conversation.
+  }
+}
+
+function readChatScrollPosition(key: string): SavedChatScrollPosition | null {
+  loadChatScrollPositions();
+  return savedChatScrollPositions.get(key) ?? null;
+}
+
+function persistChatScrollPositions(): void {
+  if (typeof window === "undefined") return;
+  const entries = [...savedChatScrollPositions.entries()]
+    .sort((left, right) => right[1].updatedAt - left[1].updatedAt)
+    .slice(0, MAX_SAVED_CHAT_SCROLL_POSITIONS);
+  savedChatScrollPositions.clear();
+  entries.forEach(([key, value]) => savedChatScrollPositions.set(key, value));
+  try {
+    window.localStorage.setItem(
+      CHAT_SCROLL_STORAGE_KEY,
+      JSON.stringify(Object.fromEntries(entries)),
+    );
+  } catch {
+    // The in-memory copy still keeps positions for the current app session.
+  }
+}
+
+function rememberChatScrollPosition(
+  key: string,
+  position: Omit<SavedChatScrollPosition, "updatedAt">,
+): void {
+  savedChatScrollPositions.set(key, { ...position, updatedAt: Date.now() });
+  if (typeof window === "undefined") return;
+  window.clearTimeout(chatScrollPersistTimer);
+  chatScrollPersistTimer = window.setTimeout(persistChatScrollPositions, 180);
+}
 
 function basename(p: string): string {
   return p.split(/[\\/]/).pop() ?? p;
@@ -141,10 +217,7 @@ function findScrollableParent(target: unknown): HTMLElement | null {
   let element = target instanceof HTMLElement ? target : null;
   while (element) {
     const overflowY = window.getComputedStyle(element).overflowY;
-    if (
-      (overflowY === "auto" || overflowY === "scroll") &&
-      element.scrollHeight > element.clientHeight
-    ) {
+    if (overflowY === "auto" || overflowY === "scroll") {
       return element;
     }
     element = element.parentElement;
@@ -179,9 +252,21 @@ function updatePreservingScrollPosition(target: unknown, update: () => void) {
 // ── Markdown (raw DOM, like the <select> used elsewhere in the app) ────────────
 function MarkdownView({ content, color }: { content: string; color: string }) {
   const html = useMemo(() => renderMarkdown(content), [content]);
+  const elementRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element?.querySelector(".language-math")) return;
+    Vditor.mathRender(element, {
+      cdn: VDITOR_CDN,
+      math: { engine: "KaTeX" },
+    });
+  }, [html]);
+
   return (
     <div
       className="nomi-chat-selectable nomi-md"
+      ref={elementRef}
       style={{ color, lineHeight: 1.65, wordBreak: "break-word" }}
       dangerouslySetInnerHTML={{ __html: html }}
     />
@@ -2622,6 +2707,7 @@ export function ConversationView({
   providerName,
   providers,
   scope = "",
+  contextSource,
   hideFeedback = false,
 }: {
   accent: Accent;
@@ -2634,12 +2720,14 @@ export function ConversationView({
   providers: Provider[];
   /** "" = main chat; a tab id routes this view to that tab's AI sidebar store. */
   scope?: string;
+  /** Main conversation shown to the left of an AI sidebar, used as model context. */
+  contextSource?: ConversationContextSource | null;
   /** Hide the 👍/👎 feedback buttons (used by the compact AI sidebar). */
   hideFeedback?: boolean;
 }) {
   const theme = useTheme();
   const styles = useMemo(() => makeStyles(theme, accent), [theme, accent]);
-  const convo = useConversation(assistantId, conversation.id, scope);
+  const convo = useConversation(assistantId, conversation.id, scope, contextSource);
   const thinkingModelKey = `${conversation.id}/${conversation.providerId ?? ""}/${conversation.modelId ?? ""}`;
 
   const [text, setText] = useState("");
@@ -2664,7 +2752,14 @@ export function ConversationView({
   const submitRef = useRef<() => void>(() => undefined);
   const pasteFilesRef = useRef<(files: File[]) => void>(() => undefined);
   const scrollRef = useRef<ScrollViewInstance>(null);
-  const stickToBottomRef = useRef(true);
+  const scrollPositionKey = chatScrollKey(scope, assistantId, conversation.id);
+  const initialScrollPosition = useMemo(
+    () => readChatScrollPosition(scrollPositionKey),
+    [scrollPositionKey],
+  );
+  const savedScrollPositionRef = useRef(initialScrollPosition);
+  const scrollRestoredRef = useRef(false);
+  const stickToBottomRef = useRef(initialScrollPosition?.atBottom ?? true);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const transcriptScrollRef = useRef<HTMLElement | null>(null);
   const selectingTextRef = useRef(false);
@@ -2712,7 +2807,38 @@ export function ConversationView({
     : "";
 
   useEffect(() => {
+    if (!convo.loaded || scrollRestoredRef.current) return;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const scroller = transcriptScrollRef.current ?? findScrollableParent(transcriptRef.current);
+        transcriptScrollRef.current = scroller;
+        const saved = savedScrollPositionRef.current;
+        if (scroller) {
+          if (saved && !saved.atBottom) {
+            scroller.scrollTop = Math.min(
+              saved.top,
+              Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+            );
+          } else {
+            scroller.scrollTop = scroller.scrollHeight;
+          }
+        } else if (!saved || saved.atBottom) {
+          scrollRef.current?.scrollToEnd({ animated: false });
+        }
+        stickToBottomRef.current = saved?.atBottom ?? true;
+        scrollRestoredRef.current = true;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [convo.loaded, scrollPositionKey]);
+
+  useEffect(() => {
     if (
+      !scrollRestoredRef.current ||
       !stickToBottomRef.current ||
       selectingTextRef.current ||
       selectionIsInside(transcriptRef.current)
@@ -2724,6 +2850,18 @@ export function ConversationView({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [convo.messages.length, latestMessageId, streamingActivity]);
+
+  useEffect(
+    () => () => {
+      const scroller = transcriptScrollRef.current ?? findScrollableParent(transcriptRef.current);
+      if (!scrollRestoredRef.current || !scroller) return;
+      rememberChatScrollPosition(scrollPositionKey, {
+        atBottom: isNearScrollBottom(scroller),
+        top: scroller.scrollTop,
+      });
+    },
+    [scrollPositionKey],
+  );
 
   useEffect(() => {
     const syncStickiness = () => {
@@ -2972,12 +3110,21 @@ export function ConversationView({
             contentContainerStyle={styles.scrollContent}
             onScroll={(event) => {
               const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+              const scroller = findScrollableParent(transcriptRef.current);
+              if (scroller) transcriptScrollRef.current = scroller;
+              const atBottom =
+                contentOffset.y + layoutMeasurement.height >= contentSize.height - 48;
+              if (scrollRestoredRef.current) {
+                rememberChatScrollPosition(scrollPositionKey, {
+                  atBottom,
+                  top: Math.max(0, contentOffset.y),
+                });
+              }
               if (selectingTextRef.current || selectionIsInside(transcriptRef.current)) {
                 stickToBottomRef.current = false;
                 return;
               }
-              stickToBottomRef.current =
-                contentOffset.y + layoutMeasurement.height >= contentSize.height - 48;
+              stickToBottomRef.current = atBottom;
             }}
             ref={scrollRef}
             scrollEventThrottle={32}

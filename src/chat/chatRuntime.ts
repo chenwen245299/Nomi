@@ -47,6 +47,12 @@ export interface StreamingMessage {
   replaceMessageId?: string;
 }
 
+/** A main-chat conversation that an AI sidebar may use as read-only context. */
+export interface ConversationContextSource {
+  assistantId: string;
+  chatId: string;
+}
+
 /** Everything a conversation view needs, per conversation key. */
 export interface ConversationSlice {
   messages: ChatMessage[];
@@ -278,6 +284,7 @@ export async function send(
   text: string,
   attachments: Attachment[],
   reasoningEffort?: string | null,
+  contextSource?: ConversationContextSource | null,
 ): Promise<void> {
   const k = key(scope, assistantId, chatId);
   if (slices.get(k)?.sending) return;
@@ -312,7 +319,17 @@ export async function send(
 
   try {
     await sendMessage(
-      { scope, assistantId, chatId, requestId, text, attachments, reasoningEffort },
+      {
+        scope,
+        assistantId,
+        chatId,
+        requestId,
+        text,
+        attachments,
+        reasoningEffort,
+        contextAssistantId: contextSource?.assistantId,
+        contextChatId: contextSource?.chatId,
+      },
       (event) => handleStreamEvent(k, event),
     );
   } catch (err) {
@@ -408,6 +425,7 @@ export async function generateVariant(
   modelId: string,
   replace: boolean,
   reasoningEffort?: string | null,
+  contextSource?: ConversationContextSource | null,
 ): Promise<void> {
   const k = key(scope, assistantId, chatId);
   if (slices.get(k)?.sending) return;
@@ -439,6 +457,8 @@ export async function generateVariant(
         modelId,
         replace,
         reasoningEffort,
+        contextAssistantId: contextSource?.assistantId,
+        contextChatId: contextSource?.chatId,
       },
       (event) => handleStreamEvent(k, event),
     );

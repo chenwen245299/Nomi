@@ -232,13 +232,6 @@ function makeStyles(theme: Theme, chat: Accent, neutral: Accent) {
       paddingHorizontal: 24,
       paddingTop: 16,
     },
-    releaseNotesTitle: {
-      color: t.textPrimary,
-      fontSize: 16,
-      fontWeight: "700",
-      letterSpacing: -0.15,
-      marginBottom: 18,
-    },
     progressWrap: {
       flex: 1,
       maxWidth: 320,
@@ -483,7 +476,6 @@ export function UpdateDialog() {
 
         <View style={styles.modalBody}>
           <ScrollView style={styles.notesScroll} contentContainerStyle={styles.notesContent}>
-            <Text style={styles.releaseNotesTitle}>Release Notes</Text>
             {u.releaseNotes ? (
               <ReleaseNotes color={theme.t.textSecondary} notes={u.releaseNotes} />
             ) : (

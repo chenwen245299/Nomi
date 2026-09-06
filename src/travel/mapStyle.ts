@@ -11,8 +11,24 @@ import { mapReadRange } from "./api";
 // the Rust `travel_map_read_range` command — so a selected offline map renders
 // with zero network. Offline uses Protomaps' beige "light" flavor.
 
-/** Keyless hosted vector style, the default online basemap. */
-export const ONLINE_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+export type MapLayerId = "auto" | "standard" | "light" | "terrain" | "satellite" | "dark";
+
+/** Keyless hosted vector styles used by the online map-layer picker. */
+const ONLINE_STYLE_URLS: Record<Exclude<MapLayerId, "auto" | "terrain" | "satellite">, string> = {
+  standard: "https://tiles.openfreemap.org/styles/liberty",
+  light: "https://tiles.openfreemap.org/styles/positron",
+  dark: "https://tiles.openfreemap.org/styles/dark",
+};
+export const ONLINE_STYLE_URL = ONLINE_STYLE_URLS.standard;
+
+// The public Sentinel-2 cloudless layer used by MapLibre's own satellite-map
+// example. It is static imagery rather than a live traffic product and requires
+// no user API key.
+const SATELLITE_TILES =
+  "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg";
+const TERRAIN_TILES = ["a", "b", "c"].map(
+  (subdomain) => `https://${subdomain}.tile.opentopomap.org/{z}/{x}/{y}.png`,
+);
 // Label glyphs + POI sprites for the OFFLINE Protomaps style. These still touch
 // the network for labels; tile geometry is fully offline. (Online uses
 // OpenFreeMap's own bundled glyphs/sprites, so it needs nothing from here.)
@@ -68,11 +84,46 @@ function offlineArchiveId(name: string): string {
  * downloaded offline map name, rendered from its local `.pmtiles` with Protomaps'
  * beige "light" flavor (labels in Simplified Chinese where available).
  */
-export function buildStyle(basemap: string): StyleSpecification | string {
+export function buildStyle(
+  basemap: string,
+  mapLayer: MapLayerId = "auto",
+): StyleSpecification | string {
+  const layer = mapLayer === "auto" ? "standard" : mapLayer;
   if (!basemap || basemap === "online") {
-    return ONLINE_STYLE_URL;
+    if (layer === "satellite") {
+      return {
+        version: 8,
+        sources: {
+          satellite: {
+            type: "raster",
+            tiles: [SATELLITE_TILES],
+            tileSize: 256,
+            attribution: "Sentinel-2 cloudless · EOX",
+          },
+        },
+        layers: [{ id: "satellite", type: "raster", source: "satellite" }],
+      };
+    }
+    if (layer === "terrain") {
+      return {
+        version: 8,
+        sources: {
+          terrain: {
+            type: "raster",
+            tiles: TERRAIN_TILES,
+            tileSize: 256,
+            maxzoom: 17,
+            attribution:
+              'Kartendaten: © <a href="https://openstreetmap.org">OpenStreetMap</a>-Mitwirkende, SRTM · Kartendarstellung: © <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)',
+          },
+        },
+        layers: [{ id: "terrain", type: "raster", source: "terrain" }],
+      };
+    }
+    return ONLINE_STYLE_URLS[layer];
   }
   const archive = offlineArchiveId(basemap);
+  const flavor = layer === "dark" ? "dark" : layer === "light" ? "white" : "light";
   return {
     version: 8,
     glyphs: GLYPHS,
@@ -86,8 +137,15 @@ export function buildStyle(basemap: string): StyleSpecification | string {
     },
     // The style-spec LayerSpecification from @protomaps/basemaps is structurally
     // identical to maplibre-gl's; cast to avoid a cross-package nominal mismatch.
-    layers: layers("protomaps", namedFlavor("light"), {
+    layers: layers("protomaps", namedFlavor(flavor), {
       lang: "zh-Hans",
     }) as StyleSpecification["layers"],
   };
+}
+
+/** Source id watched by MapView's load/error state. */
+export function primaryMapSource(basemap: string, mapLayer: MapLayerId): string {
+  if ((!basemap || basemap === "online") && mapLayer === "satellite") return "satellite";
+  if ((!basemap || basemap === "online") && mapLayer === "terrain") return "terrain";
+  return !basemap || basemap === "online" ? "openmaptiles" : "protomaps";
 }

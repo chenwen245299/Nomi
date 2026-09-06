@@ -78,6 +78,11 @@ pub struct PlanStop {
     /// 1-based day within the trip (0 = unscheduled).
     #[serde(default)]
     pub day: u32,
+    /// Local 24-hour times (HH:mm); empty means unscheduled within the day.
+    #[serde(default)]
+    pub start_time: String,
+    #[serde(default)]
+    pub end_time: String,
     #[serde(default)]
     pub note: String,
     #[serde(default)]

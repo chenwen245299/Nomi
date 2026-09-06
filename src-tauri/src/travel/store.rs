@@ -37,7 +37,7 @@ const ASSETS_DIR: &str = "assets";
 const NOTE_FILE: &str = "note.md";
 const META_FILE: &str = "meta.json";
 const SETTINGS_FILE: &str = "settings.json";
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 pub(super) fn now() -> u64 {
     SystemTime::now()
@@ -485,9 +485,19 @@ pub(super) fn delete_plan(app: &AppHandle, id: &str) -> Result<(), String> {
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
-const DEFAULT_CATEGORIES: [&str; 8] = [
-    "城市", "自然", "美食", "住宿", "文化", "购物", "海岛", "其他",
-];
+const DEFAULT_CATEGORIES: [&str; 4] = ["美食", "文化", "购物", "其他"];
+const REMOVED_V1_CATEGORIES: [&str; 4] = ["城市", "自然", "住宿", "海岛"];
+
+fn normalize_categories(categories: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for category in categories {
+        let category = category.trim();
+        if !category.is_empty() && !normalized.iter().any(|entry| entry == category) {
+            normalized.push(category.to_string());
+        }
+    }
+    normalized
+}
 
 pub(super) fn read_settings(app: &AppHandle) -> Result<TravelSettings, String> {
     let path = travel_root(app)?.join(SETTINGS_FILE);
@@ -498,7 +508,26 @@ pub(super) fn read_settings(app: &AppHandle) -> Result<TravelSettings, String> {
             categories: DEFAULT_CATEGORIES.iter().map(|s| s.to_string()).collect(),
         });
     }
-    read_json(&path).map_err(|error| format!("旅行设置无法解析：{error}"))
+    let mut settings: TravelSettings =
+        read_json(&path).map_err(|error| format!("旅行设置无法解析：{error}"))?;
+    let migrating_from_v1 = settings.schema_version < SCHEMA_VERSION;
+    if migrating_from_v1 {
+        settings
+            .categories
+            .retain(|category| !REMOVED_V1_CATEGORIES.contains(&category.trim()));
+    }
+    settings.categories = normalize_categories(settings.categories);
+    if settings.categories.is_empty() {
+        settings.categories = DEFAULT_CATEGORIES.iter().map(|s| s.to_string()).collect();
+    }
+    settings.schema_version = SCHEMA_VERSION;
+    if settings.basemap.trim().is_empty() {
+        settings.basemap = "online".into();
+    }
+    if migrating_from_v1 {
+        write_json(&path, &settings)?;
+    }
+    Ok(settings)
 }
 
 pub(super) fn write_settings(
@@ -506,6 +535,7 @@ pub(super) fn write_settings(
     mut settings: TravelSettings,
 ) -> Result<TravelSettings, String> {
     settings.schema_version = SCHEMA_VERSION;
+    settings.categories = normalize_categories(settings.categories);
     if settings.categories.is_empty() {
         settings.categories = DEFAULT_CATEGORIES.iter().map(|s| s.to_string()).collect();
     }

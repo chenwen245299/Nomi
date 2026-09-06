@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { Attachment, ChatMessage } from "./api";
 import * as runtime from "./chatRuntime";
-import type { StreamingMessage } from "./chatRuntime";
+import type { ConversationContextSource, StreamingMessage } from "./chatRuntime";
 
 export type { DraftToolCall, StreamingMessage } from "./chatRuntime";
 
@@ -38,6 +38,8 @@ export function useConversation(
   chatId: string,
   /** "" = main chat; a tab id routes to that tab's AI sidebar store. */
   scope = "",
+  /** Main conversation visible beside a scoped AI sidebar, when applicable. */
+  contextSource?: ConversationContextSource | null,
 ): ConversationController {
   const slice = useSyncExternalStore(runtime.subscribe, () =>
     runtime.getSlice(scope, assistantId, chatId),
@@ -50,8 +52,8 @@ export function useConversation(
 
   const send = useCallback(
     (text: string, attachments: Attachment[], reasoningEffort?: string | null) =>
-      runtime.send(scope, assistantId, chatId, text, attachments, reasoningEffort),
-    [scope, assistantId, chatId],
+      runtime.send(scope, assistantId, chatId, text, attachments, reasoningEffort, contextSource),
+    [scope, assistantId, chatId, contextSource],
   );
   const clearContext = useCallback(
     () => runtime.clearContext(scope, assistantId, chatId),
@@ -95,8 +97,9 @@ export function useConversation(
         modelId,
         replace,
         reasoningEffort,
+        contextSource,
       ),
-    [scope, assistantId, chatId],
+    [scope, assistantId, chatId, contextSource],
   );
   const stop = useCallback(
     () => runtime.stop(scope, assistantId, chatId),

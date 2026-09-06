@@ -149,6 +149,18 @@ button {
   border: 1px solid rgba(120, 130, 148, 0.3);
   padding: 4px 8px;
 }
+.nomi-md .language-math {
+  display: block;
+  margin: 0.75em 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+  text-align: center;
+}
+.nomi-md .language-math .katex-display {
+  margin: 0;
+}
 
 /* User turns align as blocks on the right, while their prose keeps the natural
    left-to-right reading edge. Long turns are capped by the conversation UI. */

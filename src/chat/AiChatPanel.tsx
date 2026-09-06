@@ -21,6 +21,7 @@ import {
 
 import { EmptyIllustration } from "../illustrations";
 import { ConversationView } from "./Conversation";
+import type { ConversationContextSource } from "./chatRuntime";
 import { ConversationModelPicker } from "./ModelPicker";
 import { useSidebarChat } from "./useSidebarChat";
 import { DEFAULT_ASSISTANT_ID, listMessages } from "./api";
@@ -46,12 +47,15 @@ export function AiChatPanel({
   accent,
   providers,
   onBalance,
+  contextSource,
 }: {
   /** The active tab id — routes this panel to `<tab>/ai-sidebar/…`. */
   scope: SectionId;
   accent: Accent;
   providers: Provider[];
   onBalance: (providerId: string) => Promise<ProviderBalance>;
+  /** Current main-chat conversation; only the chat sidebar supplies this. */
+  contextSource?: ConversationContextSource | null;
 }) {
   const theme = useTheme();
   const styles = useMemo(() => makeStyles(theme, accent), [theme, accent]);
@@ -145,6 +149,7 @@ export function AiChatPanel({
               assistantId={DEFAULT_ASSISTANT_ID}
               assistantName="AI 助手"
               conversation={active}
+              contextSource={contextSource}
               hideFeedback
               key={active.id}
               onNewConversation={() => void sidebar.newConversation()}

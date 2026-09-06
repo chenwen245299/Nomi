@@ -35,6 +35,42 @@ export interface RegionCollection {
 const DATAV = "https://geo.datav.aliyun.com/areas_v3/bound";
 const CHINA_ADCODE = "100000";
 
+// The compact Natural Earth-derived world file intentionally omits some small
+// sovereign states. Its simplified Malaysia polygon also reaches across
+// Singapore, so a Singapore point would otherwise be attributed to Malaysia.
+// Keep a small, local mainland outline and resolve these overrides before the
+// coarse world polygons. This is deliberately bundled so trajectory matching
+// remains reliable offline.
+const COUNTRY_OVERRIDES: RegionFeature[] = [
+  {
+    type: "Feature",
+    properties: { name: "Singapore", code: "SGP" },
+    geometry: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [103.598, 1.395],
+          [103.638, 1.452],
+          [103.72, 1.469],
+          [103.807, 1.478],
+          [103.875, 1.452],
+          [103.969, 1.42],
+          [104.015, 1.366],
+          [104.047, 1.324],
+          [104.0, 1.278],
+          [103.918, 1.248],
+          [103.85, 1.235],
+          [103.78, 1.245],
+          [103.7, 1.257],
+          [103.641, 1.284],
+          [103.603, 1.337],
+          [103.598, 1.395],
+        ],
+      ],
+    },
+  },
+];
+
 // ── Point-in-polygon (ray casting, holes-aware, MultiPolygon-aware) ───────────
 function pointInRing(x: number, y: number, ring: Ring): boolean {
   let inside = false;
@@ -122,6 +158,13 @@ export async function litRegions(
     const china = chinaFc.features[0];
     let anyChina = false;
     for (const point of points) {
+      const override = COUNTRY_OVERRIDES.find((feature) =>
+        pointInGeometry(point.lng, point.lat, feature.geometry),
+      );
+      if (override) {
+        lit.set(`override:${override.properties.name}`, override);
+        continue;
+      }
       if (china && pointInGeometry(point.lng, point.lat, china.geometry)) {
         anyChina = true;
         continue;

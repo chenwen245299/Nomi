@@ -14,7 +14,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { RiErrorWarningLine, RiRefreshLine } from "@remixicon/react";
 import Supercluster from "supercluster";
-import { buildStyle } from "./mapStyle";
+import { buildStyle, primaryMapSource, type MapLayerId } from "./mapStyle";
 import type { ViewBox } from "./geocode";
 import type { RegionCollection } from "./adminBoundaries";
 
@@ -39,18 +39,31 @@ export interface MapMarker {
   badge?: string;
 }
 
+export interface MapRoute {
+  id: string;
+  color: string;
+  coordinates: [number, number][];
+}
+
 export interface MapHandle {
   flyTo: (lat: number, lng: number, zoom?: number) => void;
-  fit: (markers: { lat: number; lng: number }[]) => void;
+  fit: (
+    markers: { lat: number; lng: number }[],
+    padding?: number | { top: number; right: number; bottom: number; left: number },
+  ) => void;
   getViewBox: () => ViewBox | null;
   getCenter: () => { lat: number; lng: number };
 }
 
 export interface MapViewProps {
   basemap: string;
+  /** Visual basemap selected from the map-layer control. */
+  mapLayer?: MapLayerId;
   markers: MapMarker[];
   /** Ordered [lng, lat] points for the trajectory line, or null to hide it. */
   routeLine?: [number, number][] | null;
+  /** Multiple independently colored routes, used by the per-day trip planner. */
+  routeLines?: MapRoute[];
   /** Filled "lit-up" administrative regions (trajectory view), or null to hide. */
   regions?: RegionCollection | null;
   selectedId?: string | null;
@@ -86,10 +99,6 @@ setWorkerUrl(maplibreWorkerUrl);
 // single map and avoids CPU/memory spikes while switching sections in WKWebView.
 setWorkerCount(1);
 
-function primaryBasemapSource(basemap: string): string {
-  return !basemap || basemap === "online" ? "openmaptiles" : "protomaps";
-}
-
 function removeMapAfterNextPaint(map: MapLibreMap): void {
   const remove = () => map.remove();
   // `Map#remove` synchronously tears down its WebGL context. Give React/WebKit a
@@ -105,11 +114,7 @@ function makePinElement(marker: MapMarker, selected: boolean, accent: string): H
   const color = marker.color || accent;
   const el = document.createElement("div");
   el.className = "nomi-map-pin";
-  el.style.cssText = [
-    "width:26px",
-    "height:34px",
-    "cursor:pointer",
-  ].join(";");
+  el.style.cssText = ["width:26px", "height:34px", "cursor:pointer"].join(";");
   // Teardrop body + inner dot / badge, drawn as inline SVG so it stays crisp.
   const badge = marker.badge
     ? `<text x="13" y="15.5" text-anchor="middle" font-size="11" font-weight="700" fill="#fff" font-family="inherit">${marker.badge}</text>`
@@ -125,10 +130,37 @@ function makePinElement(marker: MapMarker, selected: boolean, accent: string): H
   return el;
 }
 
+function dominantClusterColor(
+  index: Supercluster<{ markerId: string }>,
+  clusterId: number,
+  pointCount: number,
+  markersById: Map<string, MapMarker>,
+  accent: string,
+): string {
+  const counts = new Map<string, number>();
+  for (const leaf of index.getLeaves(clusterId, pointCount)) {
+    const marker = markersById.get(leaf.properties.markerId);
+    const color = marker?.color || accent;
+    counts.set(color, (counts.get(color) ?? 0) + 1);
+  }
+
+  let dominant = accent;
+  let highestCount = 0;
+  for (const [color, count] of counts) {
+    if (count > highestCount) {
+      dominant = color;
+      highestCount = count;
+    }
+  }
+  return dominant;
+}
+
 export function MapView({
   basemap,
+  mapLayer = "auto",
   markers,
   routeLine,
+  routeLines,
   regions,
   selectedId,
   pick,
@@ -145,7 +177,7 @@ export function MapView({
   const markersRef = useRef<Map<string, Marker>>(new Map());
   const pickRef = useRef<Marker | null>(null);
   const readyRef = useRef(false);
-  const appliedBasemapRef = useRef(basemap);
+  const appliedStyleRef = useRef(`${basemap}:${mapLayer}`);
   const accent = accentRgb ? `rgb(${accentRgb})` : TRAVEL_ACCENT;
 
   // A blank ("white") map is almost always the basemap failing to load — the
@@ -176,8 +208,8 @@ export function MapView({
     armLoadTimeout();
     readyRef.current = false;
     map.stop();
-    map.setStyle(buildStyle(basemap), { diff: false });
-  }, [armLoadTimeout, basemap]);
+    map.setStyle(buildStyle(basemap, mapLayer), { diff: false });
+  }, [armLoadTimeout, basemap, mapLayer]);
   // Latest callbacks + overlay inputs in a ref, so the once-created map always
   // reads current values (and the style-swap effect can re-apply the route
   // without listing routeLine as a dependency, which would rebuild the style).
@@ -186,9 +218,11 @@ export function MapView({
     onMapClick,
     onViewBoxChange,
     routeLine,
+    routeLines,
     regions,
     accent,
     basemap,
+    mapLayer,
   });
   useEffect(() => {
     latest.current = {
@@ -196,9 +230,11 @@ export function MapView({
       onMapClick,
       onViewBoxChange,
       routeLine,
+      routeLines,
       regions,
       accent,
       basemap,
+      mapLayer,
     };
   });
 
@@ -209,7 +245,7 @@ export function MapView({
     let disposed = false;
     const map = new MapLibreMap({
       container: host,
-      style: buildStyle(basemap),
+      style: buildStyle(basemap, mapLayer),
       center: [initial?.lng ?? 105, initial?.lat ?? 35],
       zoom: initial?.zoom ?? 3.1,
       attributionControl: false,
@@ -243,14 +279,22 @@ export function MapView({
       window.clearTimeout(loadTimerRef.current);
       setStatus("ready");
       applyRegions(map, latest.current.regions ?? null);
-      applyRoute(map, latest.current.routeLine ?? null, latest.current.accent);
+      applyRoutes(
+        map,
+        latest.current.routeLines,
+        latest.current.routeLine ?? null,
+        latest.current.accent,
+      );
       emitViewBox();
     });
     // Any tiles that actually arrive mean the source works — clear the failure
     // state (also recovers automatically when a flaky network comes back).
     map.on("sourcedata", (event) => {
       if (disposed) return;
-      if (event.sourceId === primaryBasemapSource(latest.current.basemap) && event.isSourceLoaded) {
+      if (
+        event.sourceId === primaryMapSource(latest.current.basemap, latest.current.mapLayer) &&
+        event.isSourceLoaded
+      ) {
         errorCountRef.current = 0;
         setStatus("ready");
       }
@@ -265,7 +309,12 @@ export function MapView({
       if (disposed) return;
       readyRef.current = true;
       applyRegions(map, latest.current.regions ?? null);
-      applyRoute(map, latest.current.routeLine ?? null, latest.current.accent);
+      applyRoutes(
+        map,
+        latest.current.routeLines,
+        latest.current.routeLine ?? null,
+        latest.current.accent,
+      );
     });
     map.on("webglcontextlost", () => {
       if (disposed) return;
@@ -283,15 +332,27 @@ export function MapView({
     const handle: MapHandle = {
       flyTo: (lat, lng, zoom) =>
         map.flyTo({ center: [lng, lat], zoom: zoom ?? Math.max(map.getZoom(), 11), speed: 1.4 }),
-      fit: (points) => {
+      fit: (points, padding = 96) => {
         if (points.length === 0) return;
         if (points.length === 1) {
-          map.flyTo({ center: [points[0].lng, points[0].lat], zoom: 11, speed: 1.4 });
+          const offset =
+            typeof padding === "number"
+              ? ([0, 0] as [number, number])
+              : ([(padding.left - padding.right) / 2, (padding.top - padding.bottom) / 2] as [
+                  number,
+                  number,
+                ]);
+          map.flyTo({
+            center: [points[0].lng, points[0].lat],
+            zoom: 11,
+            speed: 1.4,
+            offset,
+          });
           return;
         }
         const bounds = new LngLatBounds();
         points.forEach((p) => bounds.extend([p.lng, p.lat]));
-        map.fitBounds(bounds, { padding: 96, maxZoom: 13, duration: 700 });
+        map.fitBounds(bounds, { padding, maxZoom: 13, duration: 700 });
       },
       getViewBox: () => {
         const b = map.getBounds();
@@ -320,16 +381,18 @@ export function MapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Swap the basemap style when it changes (re-applies overlays on style.load).
+  // Swap the basemap or visual map layer when it changes (re-applies overlays
+  // on style.load).
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || appliedBasemapRef.current === basemap) return;
-    appliedBasemapRef.current = basemap;
+    const styleKey = `${basemap}:${mapLayer}`;
+    if (!map || appliedStyleRef.current === styleKey) return;
+    appliedStyleRef.current = styleKey;
     armLoadTimeout();
     readyRef.current = false;
     map.stop();
-    map.setStyle(buildStyle(basemap), { diff: false });
-  }, [basemap, armLoadTimeout]);
+    map.setStyle(buildStyle(basemap, mapLayer), { diff: false });
+  }, [basemap, mapLayer, armLoadTimeout]);
 
   // Reconcile pins against the markers prop — with optional clustering. When
   // `cluster` is on, a supercluster index groups nearby points at the current
@@ -366,8 +429,13 @@ export function MapView({
           const props = feature.properties;
           if ("cluster" in props && props.cluster) {
             const count = props.point_count;
-            const el = makePinElement({ id: "c", lat, lng, badge: String(count) }, false, accent);
             const clusterId = props.cluster_id;
+            const color = dominantClusterColor(index, clusterId, count, byId, accent);
+            const el = makePinElement(
+              { id: "c", lat, lng, badge: String(count), color },
+              false,
+              accent,
+            );
             el.addEventListener("click", (event) => {
               event.stopPropagation();
               const expansion = Math.min(index.getClusterExpansionZoom(clusterId), 18);
@@ -444,8 +512,8 @@ export function MapView({
   // re-applying it after a style swap).
   useEffect(() => {
     const map = mapRef.current;
-    if (map && readyRef.current) applyRoute(map, routeLine ?? null, accent);
-  }, [routeLine, accent]);
+    if (map && readyRef.current) applyRoutes(map, routeLines, routeLine ?? null, accent);
+  }, [routeLine, routeLines, accent]);
 
   // Keep the lit-up regions in sync on live updates.
   useEffect(() => {
@@ -569,19 +637,34 @@ function applyRegions(map: MapLibreMap, regions: RegionCollection | null): void 
   });
 }
 
-/** Add / update / remove the trajectory line source + layer. */
-function applyRoute(map: MapLibreMap, line: [number, number][] | null, accent: string): void {
-  const data: GeoData = {
-    type: "Feature",
-    properties: {},
-    geometry: { type: "LineString", coordinates: line ?? [] },
-  };
+/** Add / update / remove one or more independently colored route lines. */
+function applyRoutes(
+  map: MapLibreMap,
+  routes: MapRoute[] | undefined,
+  fallbackLine: [number, number][] | null,
+  accent: string,
+): void {
+  const visibleRoutes =
+    routes ??
+    (fallbackLine
+      ? [{ id: "default", color: accent, coordinates: fallbackLine } satisfies MapRoute]
+      : []);
+  const data = {
+    type: "FeatureCollection",
+    features: visibleRoutes
+      .filter((route) => route.coordinates.length >= 2)
+      .map((route) => ({
+        type: "Feature",
+        properties: { color: route.color, id: route.id },
+        geometry: { type: "LineString", coordinates: route.coordinates },
+      })),
+  } as unknown as GeoData;
   const source = map.getSource(ROUTE_SOURCE) as GeoJSONSource | undefined;
   if (source) {
     source.setData(data);
     return;
   }
-  if (!line || line.length < 2) return;
+  if (visibleRoutes.every((route) => route.coordinates.length < 2)) return;
   map.addSource(ROUTE_SOURCE, { type: "geojson", data });
   map.addLayer({
     id: ROUTE_LAYER,
@@ -589,7 +672,7 @@ function applyRoute(map: MapLibreMap, line: [number, number][] | null, accent: s
     source: ROUTE_SOURCE,
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
-      "line-color": accent,
+      "line-color": ["coalesce", ["get", "color"], accent],
       "line-width": 3,
       "line-opacity": 0.85,
       "line-dasharray": [1.4, 1.4],

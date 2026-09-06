@@ -124,6 +124,10 @@ type StorageStatus = {
   features: FeatureDirectory[];
 };
 
+type StorageUsage = {
+  totalBytes: number;
+};
+
 type SectionMeta = {
   id: SectionId;
   label: string;
@@ -341,6 +345,20 @@ function previewStorage(): StorageStatus {
       path: `${rootPath}/${name}`,
     })),
   };
+}
+
+function formatStorageBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const units = ["KB", "MB", "GB", "TB", "PB"];
+  let value = bytes;
+  let unit = -1;
+  do {
+    value /= 1024;
+    unit += 1;
+  } while (value >= 1024 && unit < units.length - 1);
+  const fractionDigits = value < 10 ? 2 : value < 100 ? 1 : 0;
+  return `${value.toFixed(fractionDigits)} ${units[unit]}`;
 }
 
 // ── Style factory ───────────────────────────────────────────────────────────
@@ -870,8 +888,27 @@ function makeStyles(theme: Theme, accent: Accent) {
     settingsCardActions: {
       alignItems: "center",
       flexDirection: "row",
+      flexWrap: "wrap",
       gap: 8,
       marginTop: 12,
+    },
+    storageUsage: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: 6,
+      marginLeft: "auto",
+      minHeight: 32,
+      paddingHorizontal: 2,
+    },
+    storageUsageLabel: {
+      color: t.textTertiary,
+      fontSize: 11.5,
+    },
+    storageUsageValue: {
+      color: t.textPrimary,
+      fontSize: 12,
+      fontVariant: ["tabular-nums"],
+      fontWeight: "600",
     },
     directoryCard: {
       backgroundColor: t.cardSurface,
@@ -1113,6 +1150,16 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
   const activeSection = activeTab?.section ?? "chat";
   // Which tabs carry an AI-chat sidebar (finance has its own chat; settings none).
   const sidebarScope = SIDEBAR_SECTIONS.has(activeSection) ? activeSection : null;
+  const sidebarContext = useMemo(
+    () =>
+      sidebarScope === "chat" && activeTab?.conversationAssistantId && activeTab.conversationId
+        ? {
+            assistantId: activeTab.conversationAssistantId,
+            chatId: activeTab.conversationId,
+          }
+        : null,
+    [sidebarScope, activeTab],
+  );
   // Cap the sidebar so the rail + collection + a usable main column always fit.
   const sidebarMaxWidth = Math.max(
     SIDEBAR_MIN_WIDTH,
@@ -1613,6 +1660,7 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
                 />
                 <AiChatPanel
                   accent={accentFor(sidebarScope)}
+                  contextSource={sidebarContext}
                   key={sidebarScope}
                   onBalance={providers.balance}
                   providers={providers.providers}
@@ -2789,6 +2837,48 @@ function StorageSettings({
   storage: StorageStatus | null;
 }) {
   const { styles, theme } = useStyles(accent);
+  const [usage, setUsage] = useState<{
+    rootPath: string;
+    totalBytes: number | null;
+    failed: boolean;
+  } | null>(null);
+  const rootPath = storage?.rootPath ?? null;
+
+  useEffect(() => {
+    let mounted = true;
+    if (!rootPath) {
+      return () => {
+        mounted = false;
+      };
+    }
+
+    const request = isTauriRuntime()
+      ? invoke<StorageUsage>("get_storage_usage")
+      : Promise.resolve<StorageUsage>({ totalBytes: 384 * 1024 * 1024 });
+    void request
+      .then((usage) => {
+        if (!mounted) return;
+        setUsage({ rootPath, totalBytes: usage.totalBytes, failed: false });
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setUsage({ rootPath, totalBytes: null, failed: true });
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [rootPath, storage]);
+
+  const currentUsage = usage?.rootPath === rootPath ? usage : null;
+  const usageText = !rootPath
+    ? "—"
+    : !currentUsage
+      ? "计算中…"
+      : currentUsage.failed || currentUsage.totalBytes === null
+        ? "暂时无法统计"
+        : formatStorageBytes(currentUsage.totalBytes);
+
   return (
     <View style={styles.settingsContent}>
       <View style={styles.settingsCard}>
@@ -2844,6 +2934,12 @@ function StorageSettings({
             )}
             <Text style={styles.secondaryButtonText}>切换文件夹</Text>
           </Pressable>
+          <View style={styles.storageUsage}>
+            <Text style={styles.storageUsageLabel}>已占用</Text>
+            <Text selectable style={styles.storageUsageValue}>
+              {usageText}
+            </Text>
+          </View>
         </View>
       </View>
 

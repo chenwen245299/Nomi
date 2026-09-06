@@ -51,6 +51,9 @@ export interface PlanStop {
   lng: number | null;
   /** 1-based day within the trip (0 = unscheduled). */
   day: number;
+  /** Local 24-hour times (`HH:mm`); empty means unscheduled within the day. */
+  startTime: string;
+  endTime: string;
   note: string;
   done: boolean;
 }
@@ -93,7 +96,7 @@ const nowSec = () => Math.floor(Date.now() / 1000);
 const previewId = (prefix: string) => `${prefix}${Math.random().toString(36).slice(2, 10)}`;
 
 // ── Browser-preview in-memory store ──────────────────────────────────────────
-const DEFAULT_CATEGORIES = ["城市", "自然", "美食", "住宿", "文化", "购物", "海岛", "其他"];
+const DEFAULT_CATEGORIES = ["美食", "文化", "购物", "其他"];
 
 const preview: {
   notes: TravelNote[];
@@ -134,7 +137,7 @@ const preview: {
   ]),
   images: new Map(),
   plans: [],
-  settings: { schemaVersion: 1, basemap: "online", categories: DEFAULT_CATEGORIES },
+  settings: { schemaVersion: 2, basemap: "online", categories: DEFAULT_CATEGORIES },
 };
 
 // ── Notes ─────────────────────────────────────────────────────────────────────
@@ -294,7 +297,7 @@ export async function getSettings(): Promise<TravelSettings> {
 
 export async function setSettings(settings: TravelSettings): Promise<TravelSettings> {
   if (isTauri()) return invoke<TravelSettings>("travel_set_settings", { settings });
-  preview.settings = { ...settings, schemaVersion: 1 };
+  preview.settings = { ...settings, schemaVersion: 2 };
   return preview.settings;
 }
 

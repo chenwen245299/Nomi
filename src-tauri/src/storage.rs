@@ -51,6 +51,12 @@ pub struct StorageStatus {
     features: Vec<FeatureDirectory>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageUsage {
+    total_bytes: u64,
+}
+
 #[tauri::command]
 pub fn get_storage_status(app: AppHandle) -> Result<Option<StorageStatus>, String> {
     let locator_path = locator_path(&app)?;
@@ -100,6 +106,19 @@ pub fn set_storage_root(app: AppHandle, root_path: String) -> Result<StorageStat
     .map_err(|error| format!("无法保存当前存储位置：{error}"))?;
 
     Ok(status)
+}
+
+/// Calculate the logical size of every regular file under the current Nomi
+/// data folder. The traversal runs off the async worker thread so a large photo
+/// or chat archive cannot freeze the settings UI.
+#[tauri::command]
+pub async fn get_storage_usage(app: AppHandle) -> Result<StorageUsage, String> {
+    let root = current_root(&app)?;
+    tokio::task::spawn_blocking(move || {
+        directory_size(&root).map(|total_bytes| StorageUsage { total_bytes })
+    })
+    .await
+    .map_err(|error| format!("存储空间统计任务失败：{error}"))?
 }
 
 /// Resolve the currently configured data-folder root, or an error if the user
@@ -224,6 +243,37 @@ fn feature_path(root: &Path, directory_name: &str) -> Result<PathBuf, String> {
     Ok(root.join(directory_name))
 }
 
+fn directory_size(root: &Path) -> Result<u64, String> {
+    let mut total = 0_u64;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = fs::read_dir(&directory)
+            .map_err(|error| format!("无法读取数据文件夹 {}：{error}", directory.display()))?;
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| format!("无法读取数据文件夹 {}：{error}", directory.display()))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("无法读取文件类型 {}：{error}", entry.path().display()))?;
+            if file_type.is_symlink() {
+                // Do not follow links out of the selected data folder or enter
+                // a recursive link cycle.
+                continue;
+            }
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            } else if file_type.is_file() {
+                let size = entry
+                    .metadata()
+                    .map_err(|error| format!("无法读取文件 {}：{error}", entry.path().display()))?
+                    .len();
+                total = total.saturating_add(size);
+            }
+        }
+    }
+    Ok(total)
+}
+
 fn default_config() -> StorageConfig {
     StorageConfig {
         schema_version: SCHEMA_VERSION,
@@ -295,6 +345,20 @@ mod tests {
         assert!(status.reused_existing_data);
         assert_eq!(fs::read_to_string(existing_file).unwrap(), "{}\n");
         assert!(root.join(".nomi/config.json").is_file());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn totals_every_file_in_the_data_folder() {
+        let root = test_root("usage");
+        fs::create_dir_all(root.join("chat/assets")).unwrap();
+        fs::create_dir_all(root.join("notes")).unwrap();
+        fs::write(root.join("chat/messages.json"), b"12345").unwrap();
+        fs::write(root.join("chat/assets/photo.png"), b"1234567").unwrap();
+        fs::write(root.join("notes/note.md"), b"123").unwrap();
+
+        assert_eq!(directory_size(&root).unwrap(), 15);
 
         fs::remove_dir_all(root).unwrap();
     }

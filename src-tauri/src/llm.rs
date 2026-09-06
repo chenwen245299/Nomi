@@ -192,7 +192,11 @@ pub async fn stream_chat(
 
     let mut turn = AssistantTurn::default();
     let mut started: Vec<bool> = Vec::new();
-    let mut buf = String::new();
+    // Keep incomplete SSE data as bytes. A network chunk may end in the middle
+    // of a multi-byte UTF-8 scalar (very common for CJK text); decoding each
+    // chunk independently would replace both halves with U+FFFD and permanently
+    // save visible `�` characters into the conversation.
+    let mut buf: Vec<u8> = Vec::new();
     let mut stream = resp.bytes_stream();
     let mut done = false;
 
@@ -202,13 +206,21 @@ pub async fn stream_chat(
             break;
         }
         let bytes = chunk.map_err(|e| format!("读取模型响应失败：{e}"))?;
-        buf.push_str(&String::from_utf8_lossy(&bytes));
+        buf.extend_from_slice(&bytes);
 
         // SSE frames are newline-delimited; process every complete line and keep
-        // the trailing partial one in `buf` for the next chunk.
-        while let Some(pos) = buf.find('\n') {
-            let line = buf[..pos].trim().to_string();
-            buf.drain(..=pos);
+        // the trailing partial bytes in `buf` for the next chunk. Only decode
+        // after a full line has been assembled, so split UTF-8 characters remain
+        // intact across arbitrary transport boundaries.
+        while let Some(pos) = buf.iter().position(|byte| *byte == b'\n') {
+            let mut line_bytes: Vec<u8> = buf.drain(..=pos).collect();
+            line_bytes.pop(); // `\n`
+            if line_bytes.last() == Some(&b'\r') {
+                line_bytes.pop();
+            }
+            let line = std::str::from_utf8(&line_bytes)
+                .map_err(|e| format!("模型响应包含无效 UTF-8 数据：{e}"))?
+                .trim();
             let Some(data) = line.strip_prefix("data:") else {
                 continue;
             };
@@ -380,7 +392,7 @@ mod tests {
     /// streaming (SSE) body. `first`/`rest` are written as two TCP writes with a
     /// pause between them, so the parser's cross-chunk buffering is exercised and
     /// a mid-stream cancel has a window to fire. Returns the bound port.
-    async fn mock_sse(first: &'static str, rest: &'static str, gap_ms: u64) -> u16 {
+    async fn mock_sse_bytes(first: Vec<u8>, rest: Vec<u8>, gap_ms: u64) -> u16 {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -392,16 +404,20 @@ mod tests {
             let header =
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
             let _ = socket.write_all(header.as_bytes()).await;
-            let _ = socket.write_all(first.as_bytes()).await;
+            let _ = socket.write_all(&first).await;
             let _ = socket.flush().await;
             if !rest.is_empty() {
                 tokio::time::sleep(std::time::Duration::from_millis(gap_ms)).await;
-                let _ = socket.write_all(rest.as_bytes()).await;
+                let _ = socket.write_all(&rest).await;
                 let _ = socket.flush().await;
             }
             // Dropping the socket closes the connection → reqwest sees EOF.
         });
         port
+    }
+
+    async fn mock_sse(first: &'static str, rest: &'static str, gap_ms: u64) -> u16 {
+        mock_sse_bytes(first.as_bytes().to_vec(), rest.as_bytes().to_vec(), gap_ms).await
     }
 
     fn target(port: u16) -> ChatTarget {
@@ -448,6 +464,31 @@ mod tests {
         assert_eq!(turn.content, "Hello, world");
         assert_eq!(turn.finish_reason.as_deref(), Some("stop"));
         assert!(!turn.cancelled);
+    }
+
+    #[tokio::test]
+    async fn preserves_utf8_when_a_character_is_split_between_network_chunks() {
+        let mut response = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"与最小最大熵原理\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let entropy_start = response
+            .windows("熵".len())
+            .position(|window| window == "熵".as_bytes())
+            .expect("the Chinese character should be present in the fixture");
+        let rest = response.split_off(entropy_start + 1);
+        let port = mock_sse_bytes(response, rest, 20).await;
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let turn = stream_chat(&target(port), &[], None, None, &sink(), &cancel)
+            .await
+            .expect("split UTF-8 should be reassembled before decoding");
+
+        assert_eq!(turn.content, "与最小最大熵原理");
+        assert!(!turn.content.contains('\u{fffd}'));
     }
 
     #[tokio::test]

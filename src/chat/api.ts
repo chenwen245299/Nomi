@@ -915,6 +915,9 @@ export interface SendMessageParams {
   requestId: string;
   text: string;
   attachments: Attachment[];
+  /** Optional main-chat transcript supplied as read-only context to an AI sidebar. */
+  contextAssistantId?: string | null;
+  contextChatId?: string | null;
   reasoningEffort?: string | null;
 }
 
@@ -1015,6 +1018,9 @@ export interface GenerateMessageVariantParams {
   providerId: string;
   modelId: string;
   replace: boolean;
+  /** Optional main-chat transcript supplied as read-only context to an AI sidebar. */
+  contextAssistantId?: string | null;
+  contextChatId?: string | null;
   /** Effort already mapped to this variant model's scale (null = thinking off). */
   reasoningEffort?: string | null;
 }

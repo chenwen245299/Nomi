@@ -39,6 +39,7 @@ export interface TravelData {
   savePlan: (plan: TravelPlan) => Promise<TravelPlan | null>;
   deletePlan: (id: string) => Promise<void>;
   setBasemap: (basemap: string) => Promise<void>;
+  addCategory: (category: string) => Promise<boolean>;
   dismissError: () => void;
 }
 
@@ -194,6 +195,26 @@ export function useTravel(enabled: boolean): TravelData {
     [settings, fail],
   );
 
+  const addCategory = useCallback(
+    async (category: string) => {
+      const normalized = category.trim().replace(/\s+/g, " ");
+      if (!settings || !normalized) return false;
+      if (settings.categories.includes(normalized)) return true;
+
+      const next = { ...settings, categories: [...settings.categories, normalized] };
+      setSettingsState(next);
+      try {
+        setSettingsState(await setSettings(next));
+        return true;
+      } catch (err) {
+        setSettingsState(settings);
+        fail(err);
+        return false;
+      }
+    },
+    [settings, fail],
+  );
+
   const dismissError = useCallback(() => setError(null), []);
 
   return {
@@ -215,6 +236,7 @@ export function useTravel(enabled: boolean): TravelData {
     savePlan,
     deletePlan,
     setBasemap,
+    addCategory,
     dismissError,
   };
 }

@@ -11,14 +11,19 @@ import {
 } from "react-native";
 import { confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
 import {
+  RiAddLine,
+  RiArrowLeftLine,
+  RiCheckLine,
+  RiCloseLine,
   RiDeleteBinLine,
   RiExternalLinkLine,
+  RiMap2Line,
   RiMapPin2Fill,
   RiMapPin2Line,
 } from "@remixicon/react";
 import { MarkdownEditor } from "../editor";
 import { enterLeft, motion, useTheme, type Accent, type Theme } from "../theme";
-import { readNote, revealTravel, saveNote, type NoteInput, type TravelNote } from "./api";
+import { readNote, saveNote, type NoteInput, type TravelNote } from "./api";
 import {
   createImageMap,
   disposeImageMap,
@@ -28,6 +33,7 @@ import {
 } from "./assetBridge";
 import { LocationPicker } from "./LocationPicker";
 import { StarRating } from "../ratings";
+import { travelCategoryColor } from "./categoryColors";
 
 type PressState = { pressed: boolean; hovered?: boolean };
 
@@ -64,6 +70,9 @@ export function TravelNoteEditor({
   categories,
   basemap,
   getMapCenter,
+  expanded = false,
+  onAddCategory,
+  onOpenFull,
   onClose,
   onSaveMeta,
   onDelete,
@@ -73,6 +82,9 @@ export function TravelNoteEditor({
   categories: string[];
   basemap: string;
   getMapCenter: () => { lat: number; lng: number };
+  expanded?: boolean;
+  onAddCategory: (category: string) => Promise<boolean>;
+  onOpenFull?: () => void;
   onClose: () => void;
   onSaveMeta: (id: string, input: NoteInput) => Promise<unknown>;
   onDelete: (id: string) => void;
@@ -91,6 +103,8 @@ export function TravelNoteEditor({
   const [bodyState, setBodyState] = useState<SaveState>("idle");
   const [picking, setPicking] = useState(false);
   const [titleFocused, setTitleFocused] = useState(false);
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [customCategory, setCustomCategory] = useState("");
 
   // ── Metadata autosave ───────────────────────────────────────────────────────
   const metaTimer = useRef<number | undefined>(undefined);
@@ -208,9 +222,11 @@ export function TravelNoteEditor({
       window.clearTimeout(bodyTimer.current);
       window.clearTimeout(metaTimer.current);
       const map = mapImg.current;
-      void flushBody().finally(() => disposeImageMap(map));
+      void Promise.all([flushBody(), onSaveMeta(note.id, latestMeta.current)]).finally(() =>
+        disposeImageMap(map),
+      );
     },
-    [flushBody],
+    [flushBody, note.id, onSaveMeta],
   );
 
   const close = useCallback(async () => {
@@ -237,11 +253,39 @@ export function TravelNoteEditor({
 
   const locationLabel =
     address || (lat != null && lng != null ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : "");
+  const categoryOptions =
+    category && !categories.includes(category) ? [...categories, category] : categories;
+
+  const commitCustomCategory = async () => {
+    const normalized = customCategory.trim().replace(/\s+/g, " ");
+    if (!normalized) return;
+    if (!(await onAddCategory(normalized))) return;
+    setCategory(normalized);
+    patchMeta({ category: normalized });
+    setCustomCategory("");
+    setAddingCategory(false);
+  };
 
   return (
-    <View style={[styles.panel, enterLeft()]}>
+    <View style={[expanded ? styles.fullPanel : styles.panel, !expanded && enterLeft()]}>
       {/* Header: title + save state + actions */}
       <View style={styles.header}>
+        {expanded ? (
+          <Pressable
+            accessibilityLabel="返回地图"
+            accessibilityRole="button"
+            onPress={() => void close()}
+            style={({ hovered }: PressState) => [
+              styles.backToMapButton,
+              motion,
+              hovered && styles.backToMapButtonHover,
+            ]}
+          >
+            <RiArrowLeftLine color={theme.t.textSecondary} size={16} />
+            <RiMap2Line color={theme.t.textSecondary} size={16} />
+            <Text style={styles.backToMapText}>返回地图</Text>
+          </Pressable>
+        ) : null}
         <TextInput
           accessibilityLabel="旅行标题"
           onBlur={() => setTitleFocused(false)}
@@ -257,11 +301,11 @@ export function TravelNoteEditor({
         />
         <View style={styles.headerActions}>
           <Text style={styles.saveHint}>{SAVE_LABELS[combinedState]}</Text>
-          {isTauriRuntime() ? (
+          {!expanded && onOpenFull ? (
             <Pressable
-              accessibilityLabel="在文件夹中显示"
+              accessibilityLabel="在右侧完整打开"
               accessibilityRole="button"
-              onPress={() => void revealTravel(note.id)}
+              onPress={onOpenFull}
               style={({ hovered }: PressState) => [
                 styles.iconButton,
                 motion,
@@ -334,8 +378,9 @@ export function TravelNoteEditor({
 
         <Text style={styles.metaLabel}>分类</Text>
         <View style={styles.chipWrap}>
-          {categories.map((cat) => {
+          {categoryOptions.map((cat) => {
             const active = category === cat;
+            const categoryColor = travelCategoryColor(cat);
             return (
               <Pressable
                 accessibilityRole="button"
@@ -351,11 +396,11 @@ export function TravelNoteEditor({
                   motion,
                   {
                     backgroundColor: active
-                      ? accent.accent
+                      ? categoryColor
                       : hovered
                         ? theme.t.controlHover
                         : theme.t.controlIdle,
-                    borderColor: active ? accent.accent : theme.t.controlBorder,
+                    borderColor: active ? categoryColor : theme.t.controlBorder,
                   } as ViewStyle,
                 ]}
               >
@@ -370,6 +415,62 @@ export function TravelNoteEditor({
               </Pressable>
             );
           })}
+          {addingCategory ? (
+            <View style={styles.customCategoryEditor}>
+              <TextInput
+                accessibilityLabel="自定义旅行分类"
+                autoFocus
+                maxLength={20}
+                onChangeText={setCustomCategory}
+                onSubmitEditing={() => void commitCustomCategory()}
+                placeholder="输入分类名称"
+                placeholderTextColor={theme.t.textTertiary}
+                style={styles.customCategoryInput}
+                value={customCategory}
+              />
+              <Pressable
+                accessibilityLabel="保存自定义分类"
+                accessibilityRole="button"
+                disabled={!customCategory.trim()}
+                onPress={() => void commitCustomCategory()}
+                style={({ hovered }: PressState) => [
+                  styles.customCategoryAction,
+                  hovered && styles.iconButtonHover,
+                  !customCategory.trim() && styles.customCategoryActionDisabled,
+                ]}
+              >
+                <RiCheckLine color={accent.accentText} size={14} />
+              </Pressable>
+              <Pressable
+                accessibilityLabel="取消自定义分类"
+                accessibilityRole="button"
+                onPress={() => {
+                  setCustomCategory("");
+                  setAddingCategory(false);
+                }}
+                style={({ hovered }: PressState) => [
+                  styles.customCategoryAction,
+                  hovered && styles.iconButtonHover,
+                ]}
+              >
+                <RiCloseLine color={theme.t.textTertiary} size={14} />
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              accessibilityLabel="添加自定义旅行分类"
+              accessibilityRole="button"
+              onPress={() => setAddingCategory(true)}
+              style={({ hovered }: PressState) => [
+                styles.addCategoryButton,
+                motion,
+                hovered && styles.addCategoryButtonHover,
+              ]}
+            >
+              <RiAddLine color={accent.accentText} size={14} />
+              <Text style={styles.addCategoryText}>自定义</Text>
+            </Pressable>
+          )}
         </View>
 
         <Text style={styles.metaLabel}>位置</Text>
@@ -482,6 +583,20 @@ function makeStyles(theme: Theme, accent: Accent) {
       width: 420,
       zIndex: 11,
     },
+    fullPanel: {
+      backgroundColor: t.mainSolid,
+      bottom: 0,
+      display: "flex",
+      flexDirection: "column",
+      height: "100%",
+      left: 0,
+      overflow: "hidden",
+      position: "absolute",
+      right: 0,
+      top: 0,
+      width: "100%",
+      zIndex: 30,
+    },
     header: {
       alignItems: "center",
       borderBottomColor: t.separator,
@@ -512,6 +627,16 @@ function makeStyles(theme: Theme, accent: Accent) {
       boxShadow: `0 0 0 3px rgba(${accent.rgb},0.16)`,
     },
     headerActions: { alignItems: "center", flexDirection: "row", gap: 4 },
+    backToMapButton: {
+      alignItems: "center",
+      borderRadius: 9,
+      flexDirection: "row",
+      gap: 6,
+      height: 32,
+      paddingHorizontal: 9,
+    },
+    backToMapButtonHover: { backgroundColor: t.controlHover },
+    backToMapText: { color: t.textSecondary, fontSize: 12.5, fontWeight: "600" },
     saveHint: { color: t.textTertiary, fontSize: 10.5, minWidth: 36, textAlign: "right" },
     iconButton: {
       alignItems: "center",
@@ -554,6 +679,45 @@ function makeStyles(theme: Theme, accent: Accent) {
       paddingHorizontal: 11,
     },
     chipText: { fontSize: 11.5, fontWeight: "600" },
+    addCategoryButton: {
+      alignItems: "center",
+      backgroundColor: accent.selectedFill,
+      borderColor: `rgba(${accent.rgb},0.24)`,
+      borderRadius: 999,
+      borderWidth: 1,
+      flexDirection: "row",
+      gap: 4,
+      height: 26,
+      justifyContent: "center",
+      paddingHorizontal: 10,
+    },
+    addCategoryButtonHover: { backgroundColor: `rgba(${accent.rgb},0.18)` },
+    addCategoryText: { color: accent.accentText, fontSize: 11.5, fontWeight: "600" },
+    customCategoryEditor: {
+      alignItems: "center",
+      backgroundColor: t.cardSurface,
+      borderColor: accent.accent,
+      borderRadius: 9,
+      borderWidth: 1,
+      flexDirection: "row",
+      height: 30,
+      overflow: "hidden",
+    },
+    customCategoryInput: {
+      color: t.textPrimary,
+      fontSize: 11.5,
+      minWidth: 100,
+      paddingHorizontal: 9,
+      paddingVertical: 5,
+      width: 128,
+    },
+    customCategoryAction: {
+      alignItems: "center",
+      height: 28,
+      justifyContent: "center",
+      width: 28,
+    },
+    customCategoryActionDisabled: { opacity: 0.35 },
     locationRow: { alignItems: "center", flexDirection: "row", gap: 8 },
     locationButton: {
       alignItems: "center",

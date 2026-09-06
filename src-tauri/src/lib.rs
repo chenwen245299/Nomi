@@ -51,7 +51,7 @@ use providers::{
     provider_has_key, set_default_model, set_provider_enabled, set_provider_key, test_provider,
     update_provider,
 };
-use storage::{get_storage_status, set_storage_root};
+use storage::{get_storage_status, get_storage_usage, set_storage_root};
 use todos::{
     clear_done_todos, create_todo, delete_todo, reorder_todos, todo_reveal_path, todos_list,
     update_todo,
@@ -88,6 +88,7 @@ pub fn run() {
         .manage(PendingTabs::default())
         .invoke_handler(tauri::generate_handler![
             get_storage_status,
+            get_storage_usage,
             set_storage_root,
             list_assistants,
             create_assistant,
