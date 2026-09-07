@@ -40,6 +40,7 @@ import {
   RiGraduationCapFill,
   RiGraduationCapLine,
   RiHardDrive2Line,
+  RiLayoutLeftLine,
   RiLayoutRightLine,
   RiNodeTree,
   RiRobot2Line,
@@ -232,6 +233,7 @@ const SIDEBAR_MIN_WIDTH = 300;
 const SIDEBAR_MAX_WIDTH = 720;
 const SIDEBAR_DEFAULT_WIDTH = 384;
 const SIDEBAR_WIDTH_KEY = "nomi.sidebarWidth";
+const COLLECTION_OPEN_KEY = "nomi.collectionOpen";
 
 const clampSidebarWidth = (value: number) =>
   Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(value)));
@@ -244,6 +246,15 @@ function readStoredSidebarWidth(): number {
     // localStorage may be unavailable (e.g. private mode) — fall back to default.
   }
   return SIDEBAR_DEFAULT_WIDTH;
+}
+
+function readStoredCollectionOpen(): boolean {
+  try {
+    return window.localStorage.getItem(COLLECTION_OPEN_KEY) !== "false";
+  } catch {
+    // localStorage may be unavailable — keep the familiar expanded layout.
+    return true;
+  }
 }
 
 // Make the whole titlebar draggable. Tauri v2's "deep" mode drags on clicks
@@ -1137,6 +1148,7 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
   const [storage, setStorage] = useState<StorageStatus | null | undefined>(undefined);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [isChoosingFolder, setIsChoosingFolder] = useState(false);
+  const [collectionOpen, setCollectionOpen] = useState(readStoredCollectionOpen);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(readStoredSidebarWidth);
   const [assistantEditor, setAssistantEditor] = useState<
@@ -1166,6 +1178,7 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
     Math.min(SIDEBAR_MAX_WIDTH, width - (compact ? 380 : 540)),
   );
   const effectiveSidebarWidth = Math.min(sidebarWidth, sidebarMaxWidth);
+  const collectionWidth = compact ? 212 : 240;
   const accent = useMemo(() => accentFor(activeSection), [activeSection]);
   const activeMeta = useMemo(() => metaFor(activeSection), [activeSection]);
   const chat = useChat(activeSection === "chat");
@@ -1182,6 +1195,30 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
   const todos = useTodos(Boolean(storage) && activeSection === "todo");
   const finance = useFinance(Boolean(storage) && activeSection === "finance");
   const travel = useTravel(Boolean(storage) && activeSection === "travel");
+
+  // Canvas-backed views (maps and the paper graph) need an explicit resize tick
+  // while the shared collection column animates, especially in the macOS webview.
+  useEffect(() => {
+    const notify = () => window.dispatchEvent(new Event("resize"));
+    const frame = window.requestAnimationFrame(notify);
+    const timer = window.setTimeout(notify, theme.reduceMotion ? 0 : 300);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [collectionOpen, theme.reduceMotion]);
+
+  const toggleCollection = () => {
+    setCollectionOpen((open) => {
+      const next = !open;
+      try {
+        window.localStorage.setItem(COLLECTION_OPEN_KEY, String(next));
+      } catch {
+        // Keep the in-memory toggle working when persistence is unavailable.
+      }
+      return next;
+    });
+  };
 
   // Patch the currently-active tab's view state.
   const patchActiveTab = (patch: Partial<Tab>) => {
@@ -1532,12 +1569,14 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
         <TitleBar
           accent={accent}
           activeId={activeId}
+          collectionOpen={collectionOpen}
           labelFor={tabLabel}
           onAdd={addTab}
           onClose={closeTab}
           onDetach={detachTab}
           onReorder={reorderTabs}
           onSelect={setActiveId}
+          onToggleCollection={toggleCollection}
           onToggleSidebar={() => setSidebarOpen((open) => !open)}
           sidebarAvailable={sidebarScope !== null}
           sidebarOpen={sidebarOpen}
@@ -1555,33 +1594,65 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
             onSelect={openSection}
           />
 
-          <CollectionColumn
-            accent={accent}
-            activeSection={activeSection}
-            chat={chat}
-            compact={compact}
-            finance={finance}
-            meta={activeMeta}
-            notes={notes}
-            onDeleteConversation={deleteConversation}
-            onEditAssistant={editAssistant}
-            onEditDefaultConversation={editDefaultConversation}
-            onNewAssistant={newAssistant}
-            onNewConversation={newConversation}
-            onNotePathChanged={reconcileNotePath}
-            onOpenPaper={openPaper}
-            onSelectAssistant={selectAssistant}
-            onSelectConversation={selectConversation}
-            onSelectNote={selectNote}
-            onSelectSettingsTab={setSettingsTab}
-            onSelectTodoScope={selectTodoScope}
-            onSelectTravelNote={selectTravelNote}
-            papers={papers}
-            settingsTab={activeTab?.settingsTab ?? "storage"}
-            tab={activeTab}
-            todos={todos}
-            travel={travel}
-          />
+          <div
+            aria-hidden={!collectionOpen}
+            inert={!collectionOpen}
+            style={{
+              flexShrink: 0,
+              height: "100%",
+              overflow: "hidden",
+              pointerEvents: collectionOpen ? "auto" : "none",
+              position: "relative",
+              transitionDuration: theme.reduceMotion ? "0ms" : "240ms",
+              transitionProperty: "width",
+              transitionTimingFunction: "cubic-bezier(0.32,0.72,0,1)",
+              width: collectionOpen ? collectionWidth : 0,
+            }}
+          >
+            <View
+              style={
+                {
+                  bottom: 0,
+                  left: 0,
+                  opacity: collectionOpen ? 1 : 0,
+                  position: "absolute",
+                  top: 0,
+                  transitionDuration: theme.reduceMotion ? "0ms" : "180ms",
+                  transitionProperty: "opacity",
+                  transitionTimingFunction: "ease",
+                  width: collectionWidth,
+                } as ViewStyle
+              }
+            >
+              <CollectionColumn
+                accent={accent}
+                activeSection={activeSection}
+                chat={chat}
+                compact={compact}
+                finance={finance}
+                meta={activeMeta}
+                notes={notes}
+                onDeleteConversation={deleteConversation}
+                onEditAssistant={editAssistant}
+                onEditDefaultConversation={editDefaultConversation}
+                onNewAssistant={newAssistant}
+                onNewConversation={newConversation}
+                onNotePathChanged={reconcileNotePath}
+                onOpenPaper={openPaper}
+                onSelectAssistant={selectAssistant}
+                onSelectConversation={selectConversation}
+                onSelectNote={selectNote}
+                onSelectSettingsTab={setSettingsTab}
+                onSelectTodoScope={selectTodoScope}
+                onSelectTravelNote={selectTravelNote}
+                papers={papers}
+                settingsTab={activeTab?.settingsTab ?? "storage"}
+                tab={activeTab}
+                todos={todos}
+                travel={travel}
+              />
+            </View>
+          </div>
 
           <MainColumn
             accent={accent}
@@ -1791,12 +1862,14 @@ function SidebarResizeHandle({
 function TitleBar({
   accent,
   activeId,
+  collectionOpen,
   labelFor,
   onAdd,
   onClose,
   onDetach,
   onReorder,
   onSelect,
+  onToggleCollection,
   sidebarAvailable,
   sidebarOpen,
   onToggleSidebar,
@@ -1804,12 +1877,14 @@ function TitleBar({
 }: {
   accent: Accent;
   activeId: number;
+  collectionOpen: boolean;
   labelFor: (tab: Tab) => string;
   onAdd: () => void;
   onClose: (id: number) => void;
   onDetach: (id: number, at: { x: number; y: number }) => void;
   onReorder: (sourceId: number, targetId: number, position: TabDropPosition) => void;
   onSelect: (id: number) => void;
+  onToggleCollection: () => void;
   sidebarAvailable: boolean;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
@@ -2042,6 +2117,23 @@ function TitleBar({
         </Pressable>
       </View>
       <View style={styles.tbFlex} {...SPACER_DRAG} />
+      <Pressable
+        accessibilityLabel={collectionOpen ? "折叠左侧列表" : "展开左侧列表"}
+        accessibilityRole="button"
+        onPress={onToggleCollection}
+        style={({ hovered, pressed }: PressState) => [
+          styles.tabAdd,
+          motion,
+          collectionOpen && { backgroundColor: accent.selectedFill },
+          hovered && !collectionOpen && styles.tabAddHover,
+          pressed && styles.primaryButtonPressed,
+        ]}
+      >
+        <RiLayoutLeftLine
+          color={collectionOpen ? accent.accentText : theme.t.textTertiary}
+          size={17}
+        />
+      </Pressable>
       {sidebarAvailable ? (
         <Pressable
           accessibilityLabel={sidebarOpen ? "隐藏 AI 侧边栏" : "显示 AI 侧边栏"}

@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import {
@@ -51,6 +52,7 @@ import {
   RiToolsFill,
 } from "@remixicon/react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import Vditor from "vditor";
 import { AttachmentPreviewModal, type AttachmentPreviewKind } from "../AttachmentPreviewModal";
 import { VDITOR_CDN } from "../editor/vditorAssets";
@@ -250,6 +252,32 @@ function updatePreservingScrollPosition(target: unknown, update: () => void) {
 }
 
 // ── Markdown (raw DOM, like the <select> used elsewhere in the app) ────────────
+const CHAT_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
+
+function normaliseChatExternalHref(anchor: HTMLAnchorElement): string | null {
+  const rawHref = anchor.getAttribute("href")?.trim();
+  if (!rawHref || rawHref.startsWith("#")) return null;
+
+  let candidate = rawHref;
+  if (candidate.startsWith("//")) candidate = `https:${candidate}`;
+  else if (/^www\./i.test(candidate)) candidate = `https://${candidate}`;
+
+  try {
+    const url = new URL(candidate);
+    return CHAT_EXTERNAL_PROTOCOLS.has(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+async function openChatExternalHref(href: string): Promise<void> {
+  if ("__TAURI_INTERNALS__" in window) {
+    await openUrl(href);
+    return;
+  }
+  window.open(href, "_blank", "noopener,noreferrer");
+}
+
 function MarkdownView({ content, color }: { content: string; color: string }) {
   const html = useMemo(() => renderMarkdown(content), [content]);
   const elementRef = useRef<HTMLDivElement | null>(null);
@@ -263,9 +291,23 @@ function MarkdownView({ content, color }: { content: string; color: string }) {
     });
   }, [html]);
 
+  const handleLinkClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.defaultPrevented || event.button !== 0) return;
+    const target = event.target;
+    const anchor = target instanceof Element ? target.closest<HTMLAnchorElement>("a[href]") : null;
+    if (!anchor || !event.currentTarget.contains(anchor)) return;
+
+    // Never let an untrusted model-authored link navigate Nomi's own webview.
+    event.preventDefault();
+    event.stopPropagation();
+    const href = normaliseChatExternalHref(anchor);
+    if (href) void openChatExternalHref(href);
+  };
+
   return (
     <div
       className="nomi-chat-selectable nomi-md"
+      onClick={handleLinkClick}
       ref={elementRef}
       style={{ color, lineHeight: 1.65, wordBreak: "break-word" }}
       dangerouslySetInnerHTML={{ __html: html }}

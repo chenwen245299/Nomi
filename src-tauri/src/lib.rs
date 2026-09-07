@@ -15,12 +15,13 @@ mod travel;
 mod windowing;
 
 use chat::{
-    add_context_marker, create_assistant, create_conversation, create_default_conversation,
-    delete_assistant, delete_chat_message, delete_conversation, edit_chat_message,
-    get_chat_settings, list_all_conversations, list_assistants, list_conversations, list_messages,
-    rename_conversation, reveal_conversation, set_chat_message_feedback, set_chat_settings,
-    set_conversation_assistant, set_conversation_model, set_default_conversation_settings,
-    set_response_group_state, update_assistant,
+    add_context_marker, create_assistant, create_chat_group, create_conversation,
+    create_default_conversation, delete_assistant, delete_chat_message, delete_conversation,
+    edit_chat_message, get_chat_settings, list_all_conversations, list_assistants,
+    list_chat_groups, list_conversations, list_messages, rename_chat_group, rename_conversation,
+    reveal_conversation, set_chat_group_collapsed, set_chat_message_feedback, set_chat_settings,
+    set_conversation_assistant, set_conversation_model, set_conversations_chat_group,
+    set_default_conversation_settings, set_response_group_state, update_assistant,
 };
 use chat_agent::{
     ChatCancels, RenderJobs, generate_message_variant, read_chat_attachment_data,
@@ -96,6 +97,11 @@ pub fn run() {
             delete_assistant,
             list_conversations,
             list_all_conversations,
+            list_chat_groups,
+            create_chat_group,
+            rename_chat_group,
+            set_chat_group_collapsed,
+            set_conversations_chat_group,
             create_conversation,
             create_default_conversation,
             get_chat_settings,

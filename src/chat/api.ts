@@ -60,6 +60,7 @@ export interface Conversation {
   title: string;
   providerId?: string | null;
   modelId?: string | null;
+  groupId?: string | null;
   createdAt: number;
   updatedAt: number;
   /** Timestamp of the newest persisted user/assistant message. */
@@ -72,6 +73,19 @@ export interface ConversationSummary extends Conversation {
   assistantName: string;
   /** Model that produced the first persisted assistant reply, when known. */
   firstResponseModel?: string | null;
+}
+
+export interface ChatGroup {
+  id: string;
+  name: string;
+  collapsed: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ConversationRef {
+  assistantId: string;
+  id: string;
 }
 
 /** Reserved id of the implicit default assistant (empty system prompt). */
@@ -186,9 +200,10 @@ const nowSec = () => Math.floor(Date.now() / 1000);
 const preview: {
   assistants: Assistant[];
   conversations: Record<string, Conversation[]>;
+  groups: ChatGroup[];
   messages: Record<string, ChatMessage[]>;
   seq: number;
-} = { assistants: [], conversations: {}, messages: {}, seq: 1 };
+} = { assistants: [], conversations: {}, groups: [], messages: {}, seq: 1 };
 const previewAttachmentDataUrls = new Map<string, string>();
 let previewChatSettings: ChatSettings = {
   titleProviderId: null,
@@ -397,6 +412,66 @@ export async function listAllConversations(): Promise<ConversationSummary[]> {
     }
   }
   return rows.sort((a, b) => conversationActivityAt(b) - conversationActivityAt(a));
+}
+
+export async function listChatGroups(): Promise<ChatGroup[]> {
+  if (isTauri()) return invoke<ChatGroup[]>("list_chat_groups");
+  return [...preview.groups].sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export async function createChatGroup(
+  name: string,
+  conversations: ConversationRef[],
+): Promise<ChatGroup> {
+  if (isTauri()) return invoke<ChatGroup>("create_chat_group", { name, conversations });
+  const timestamp = nowSec();
+  const group: ChatGroup = {
+    id: previewId("group"),
+    name: name.trim() || "新分组",
+    collapsed: false,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  preview.groups.push(group);
+  await setConversationsChatGroup(conversations, group.id);
+  return { ...group };
+}
+
+export async function renameChatGroup(id: string, name: string): Promise<ChatGroup> {
+  if (isTauri()) return invoke<ChatGroup>("rename_chat_group", { id, name });
+  const group = preview.groups.find((item) => item.id === id);
+  if (!group) throw new Error("对话分组不存在");
+  group.name = name.trim() || "新分组";
+  group.updatedAt = nowSec();
+  return { ...group };
+}
+
+export async function setChatGroupCollapsed(id: string, collapsed: boolean): Promise<ChatGroup> {
+  if (isTauri()) return invoke<ChatGroup>("set_chat_group_collapsed", { id, collapsed });
+  const group = preview.groups.find((item) => item.id === id);
+  if (!group) throw new Error("对话分组不存在");
+  group.collapsed = collapsed;
+  group.updatedAt = nowSec();
+  return { ...group };
+}
+
+export async function setConversationsChatGroup(
+  conversations: ConversationRef[],
+  groupId: string | null,
+): Promise<void> {
+  if (isTauri()) {
+    await invoke("set_conversations_chat_group", { conversations, groupId });
+    return;
+  }
+  if (groupId && !preview.groups.some((group) => group.id === groupId)) {
+    throw new Error("对话分组不存在");
+  }
+  for (const conversationRef of conversations) {
+    const conversation = (preview.conversations[conversationRef.assistantId] ?? []).find(
+      (item) => item.id === conversationRef.id,
+    );
+    if (conversation) conversation.groupId = groupId;
+  }
 }
 
 /** Create a conversation under the implicit default assistant (empty prompt). */

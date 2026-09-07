@@ -142,8 +142,59 @@ function planDayDate(plan: TravelPlan, day: number): string {
   return `${String(start.getMonth() + 1).padStart(2, "0")}/${String(start.getDate()).padStart(2, "0")}`;
 }
 
-function stopTimeValue(stop: PlanStop): string {
-  return stop.startTime || "99:99";
+function parsePlanTime(value: string): number | null {
+  const normalized = value.trim().replace(/：/g, ":");
+  if (!normalized) return null;
+
+  const localized = /^(上午|下午|凌晨|中午|晚上)\s*(\d{1,2}):(\d{2})$/.exec(normalized);
+  const english = /^(\d{1,2}):(\d{2})\s*(am|pm)$/i.exec(normalized);
+  const compact = /^(\d{1,2})(\d{2})$/.exec(normalized);
+  const clock = /^(\d{1,2}):(\d{2})$/.exec(normalized);
+
+  let hours: number;
+  let minutes: number;
+  if (localized) {
+    hours = Number(localized[2]);
+    minutes = Number(localized[3]);
+    if (hours < 1 || hours > 12) return null;
+    if (localized[1] === "下午" || localized[1] === "晚上" || localized[1] === "中午") {
+      hours = (hours % 12) + 12;
+    } else {
+      hours %= 12;
+    }
+  } else if (english) {
+    hours = Number(english[1]);
+    minutes = Number(english[2]);
+    if (hours < 1 || hours > 12) return null;
+    hours = (hours % 12) + (english[3].toLowerCase() === "pm" ? 12 : 0);
+  } else if (compact || clock) {
+    const match = compact ?? clock;
+    hours = Number(match?.[1]);
+    minutes = Number(match?.[2]);
+  } else {
+    return null;
+  }
+
+  return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59 ? hours * 60 + minutes : null;
+}
+
+function formatPlanTime(value: string): string {
+  const minutes = parsePlanTime(value);
+  if (minutes == null) return value.trim();
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+function comparePlanStopTimes(left: PlanStop, right: PlanStop): number {
+  const leftMinutes = parsePlanTime(left.startTime) ?? Number.POSITIVE_INFINITY;
+  const rightMinutes = parsePlanTime(right.startTime) ?? Number.POSITIVE_INFINITY;
+  return leftMinutes - rightMinutes;
+}
+
+function sortPlanStops(stops: PlanStop[]): PlanStop[] {
+  return [...stops].sort((left, right) => {
+    const dayDifference = Math.max(1, left.day || 1) - Math.max(1, right.day || 1);
+    return dayDifference || comparePlanStopTimes(left, right);
+  });
 }
 
 const REGION_LEVELS: { level: RegionLevel; label: string; unit: string }[] = [
@@ -964,7 +1015,7 @@ export function TravelMainColumn({
         .filter(
           (stop) => Math.max(1, stop.day || 1) === day && stop.lat != null && stop.lng != null,
         )
-        .sort((left, right) => stopTimeValue(left).localeCompare(stopTimeValue(right)))
+        .sort(comparePlanStopTimes)
         .map((stop, index) => ({
           id: stop.id,
           lat: stop.lat as number,
@@ -987,7 +1038,7 @@ export function TravelMainColumn({
         .filter(
           (stop) => Math.max(1, stop.day || 1) === day && stop.lat != null && stop.lng != null,
         )
-        .sort((left, right) => stopTimeValue(left).localeCompare(stopTimeValue(right)))
+        .sort(comparePlanStopTimes)
         .map((stop) => [stop.lng as number, stop.lat as number] as [number, number]);
       return coordinates.length >= 2
         ? [{ id: `plan-day-${day}`, color: planDayColor(day), coordinates }]
@@ -1558,6 +1609,67 @@ function MapLayersControl({
   );
 }
 
+function PlanTimeInput({
+  label,
+  onChange,
+  primary,
+  theme,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  primary: boolean;
+  theme: Theme;
+  value: string;
+}) {
+  const displayValue = formatPlanTime(value);
+  const [draft, setDraft] = useState(displayValue);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      setDraft("");
+      if (value) onChange("");
+      return;
+    }
+
+    const minutes = parsePlanTime(trimmed);
+    if (minutes == null) {
+      setDraft(displayValue);
+      return;
+    }
+
+    const next = formatPlanTime(trimmed);
+    setDraft(next);
+    if (next !== value) onChange(next);
+  };
+
+  return (
+    <input
+      aria-label={`${label}，24 小时制`}
+      autoComplete="off"
+      inputMode="numeric"
+      maxLength={5}
+      onBlur={commit}
+      onChange={(event) => setDraft(event.target.value)}
+      onFocus={(event) => event.currentTarget.select()}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          setDraft(displayValue);
+          event.currentTarget.blur();
+        }
+      }}
+      placeholder="--:--"
+      spellCheck={false}
+      style={timeInputStyle(theme, primary)}
+      title="24 小时制，例如 09:30 或 18:45"
+      type="text"
+      value={draft}
+    />
+  );
+}
+
 // ── Planning panel ─────────────────────────────────────────────────────────────
 function PlanningPanel({
   accent,
@@ -1586,6 +1698,8 @@ function PlanningPanel({
 }) {
   const [draft, setDraft] = useState<TravelPlan | null>(activePlan);
   const [syncedPlanId, setSyncedPlanId] = useState<string | null>(activePlan?.id ?? null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(activePlan?.title ?? "");
   const [pickingStop, setPickingStop] = useState<string | null>(null);
   const saveTimer = useRef<number | undefined>(undefined);
 
@@ -1596,14 +1710,26 @@ function PlanningPanel({
   if ((activePlan?.id ?? null) !== syncedPlanId) {
     setSyncedPlanId(activePlan?.id ?? null);
     setDraft(activePlan);
+    setEditingTitle(false);
+    setTitleDraft(activePlan?.title ?? "");
   }
 
   const scheduleSave = useCallback(
     (next: TravelPlan) => {
-      setDraft(next);
-      onPreviewPlan(next);
+      const normalized = {
+        ...next,
+        stops: sortPlanStops(
+          next.stops.map((stop) => ({
+            ...stop,
+            startTime: formatPlanTime(stop.startTime),
+            endTime: formatPlanTime(stop.endTime),
+          })),
+        ),
+      };
+      setDraft(normalized);
+      onPreviewPlan(normalized);
       window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(() => void travel.savePlan(next), 500);
+      saveTimer.current = window.setTimeout(() => void travel.savePlan(normalized), 500);
     },
     [onPreviewPlan, travel],
   );
@@ -1715,6 +1841,16 @@ function PlanningPanel({
   };
   const removeStop = (id: string) =>
     scheduleSave({ ...draft, stops: draft.stops.filter((stop) => stop.id !== id) });
+  const beginTitleEdit = () => {
+    setTitleDraft(draft.title);
+    setEditingTitle(true);
+  };
+  const commitTitleEdit = () => {
+    const title = titleDraft.trim() || "未命名行程";
+    setEditingTitle(false);
+    setTitleDraft(title);
+    if (title !== draft.title) scheduleSave({ ...draft, title });
+  };
 
   const pickStop = draft.stops.find((stop) => stop.id === pickingStop) ?? null;
   const days = Array.from({ length: planDayCount(draft) }, (_, index) => index + 1);
@@ -1736,9 +1872,41 @@ function PlanningPanel({
           >
             <RiArrowLeftLine color={theme.t.textSecondary} size={16} />
           </Pressable>
-          <Text numberOfLines={1} style={styles.planHeaderTitle}>
-            {draft.title || "未命名行程"}
-          </Text>
+          {editingTitle ? (
+            <input
+              aria-label="行程标题"
+              autoFocus
+              maxLength={120}
+              onBlur={commitTitleEdit}
+              onChange={(event) => setTitleDraft(event.target.value)}
+              onFocus={(event) => event.currentTarget.select()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+                if (event.key === "Escape") {
+                  setTitleDraft(draft.title);
+                  setEditingTitle(false);
+                }
+              }}
+              style={planHeaderTitleInputStyle(theme, accent)}
+              value={titleDraft}
+            />
+          ) : (
+            <div
+              aria-label="行程标题，双击修改"
+              onDoubleClick={beginTitleEdit}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === "F2") beginTitleEdit();
+              }}
+              role="button"
+              style={{ cursor: "text", flex: 1, minWidth: 0 }}
+              tabIndex={0}
+              title="双击修改行程标题"
+            >
+              <Text numberOfLines={1} style={styles.planHeaderTitle}>
+                {draft.title || "未命名行程"}
+              </Text>
+            </div>
+          )}
         </View>
         <Pressable
           accessibilityLabel="删除行程"
@@ -1754,14 +1922,6 @@ function PlanningPanel({
       </View>
 
       <ScrollView contentContainerStyle={styles.planBody} style={{ minHeight: 0 }}>
-        <TextInput
-          accessibilityLabel="行程标题"
-          onChangeText={(title) => scheduleSave({ ...draft, title })}
-          placeholder="行程名称"
-          placeholderTextColor={theme.t.textTertiary}
-          style={styles.planTitleInput}
-          value={draft.title}
-        />
         <View style={styles.planDates}>
           <input
             aria-label="开始日期"
@@ -1869,7 +2029,7 @@ function PlanningPanel({
         {visibleDays.map((day) => {
           const dayStops = draft.stops
             .filter((stop) => (stop.day || 1) === day)
-            .sort((left, right) => stopTimeValue(left).localeCompare(stopTimeValue(right)));
+            .sort(comparePlanStopTimes);
           const color = planDayColor(day);
           return (
             <View key={day} style={styles.planDaySection}>
@@ -1907,19 +2067,19 @@ function PlanningPanel({
                 dayStops.map((stop, index) => (
                   <View key={stop.id} style={styles.timelineRow}>
                     <View style={styles.timelineTimeColumn}>
-                      <input
-                        aria-label="开始时间"
-                        onChange={(event) => updateStop(stop.id, { startTime: event.target.value })}
-                        style={timeInputStyle(theme, true)}
-                        type="time"
-                        value={stop.startTime || ""}
+                      <PlanTimeInput
+                        label="开始时间"
+                        onChange={(startTime) => updateStop(stop.id, { startTime })}
+                        primary
+                        theme={theme}
+                        value={stop.startTime}
                       />
-                      <input
-                        aria-label="结束时间"
-                        onChange={(event) => updateStop(stop.id, { endTime: event.target.value })}
-                        style={timeInputStyle(theme, false)}
-                        type="time"
-                        value={stop.endTime || ""}
+                      <PlanTimeInput
+                        label="结束时间"
+                        onChange={(endTime) => updateStop(stop.id, { endTime })}
+                        primary={false}
+                        theme={theme}
+                        value={stop.endTime}
                       />
                     </View>
                     <View style={styles.timelineRail}>
@@ -2058,6 +2218,23 @@ function dateInputStyle(theme: Theme): React.CSSProperties {
     minWidth: 0,
     outline: "none",
     padding: "6px 8px",
+  };
+}
+
+function planHeaderTitleInputStyle(theme: Theme, accent: Accent): React.CSSProperties {
+  return {
+    background: "transparent",
+    border: 0,
+    borderBottom: `1px solid ${accent.accentText}`,
+    boxSizing: "border-box",
+    color: theme.t.textPrimary,
+    flex: 1,
+    fontFamily: "inherit",
+    fontSize: 14,
+    fontWeight: 700,
+    minWidth: 0,
+    outline: "none",
+    padding: "3px 2px",
   };
 }
 
@@ -2627,12 +2804,6 @@ function makeStyles(theme: Theme, accent: Accent) {
       paddingHorizontal: 24,
       paddingVertical: 20,
       width: "100%",
-    },
-    planTitleInput: {
-      color: t.textPrimary,
-      fontSize: 15,
-      fontWeight: "700",
-      paddingVertical: 2,
     },
     planDates: { alignItems: "center", flexDirection: "row", gap: 8 },
     planDayTabs: {

@@ -18,6 +18,7 @@ const ASSISTANT_FILE: &str = "assistant.json";
 const CONVERSATION_FILE: &str = "conversation.json";
 const ASSETS_DIR: &str = "assets";
 const CHAT_SETTINGS_FILE: &str = "chat-settings.json";
+const CHAT_GROUPS_FILE: &str = "groups.json";
 const UNTITLED_CONVERSATION: &str = "新对话";
 const ASSISTANT_EMOJIS: [&str; 16] = [
     "✨", "🌟", "🧠", "🪄", "🦉", "🐳", "🦊", "🐼", "🌈", "🚀", "🎯", "📝", "🔭", "🎨", "🌿", "💡",
@@ -81,12 +82,40 @@ pub struct Conversation {
     provider_id: Option<String>,
     #[serde(default)]
     model_id: Option<String>,
+    /// Optional user-defined group in the main conversation collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    group_id: Option<String>,
     created_at: u64,
     updated_at: u64,
     /// Timestamp of the newest persisted user/assistant message. Kept separate
     /// from `updated_at`, which also changes for metadata edits.
     #[serde(default)]
     last_message_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatGroup {
+    id: String,
+    name: String,
+    #[serde(default)]
+    collapsed: bool,
+    created_at: u64,
+    updated_at: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatGroupsDoc {
+    #[serde(default)]
+    groups: Vec<ChatGroup>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationRef {
+    assistant_id: String,
+    id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +225,33 @@ fn chat_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = storage::current_root(app)?.join(".nomi");
     fs::create_dir_all(&dir).map_err(|error| format!("无法创建配置目录：{error}"))?;
     Ok(dir.join(CHAT_SETTINGS_FILE))
+}
+
+fn chat_groups_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(chat_root(app, None)?.join(CHAT_GROUPS_FILE))
+}
+
+fn read_chat_groups_doc(app: &AppHandle) -> Result<ChatGroupsDoc, String> {
+    let path = chat_groups_path(app)?;
+    if !path.exists() {
+        return Ok(ChatGroupsDoc::default());
+    }
+    read_json(&path).map_err(|error| format!("无法读取对话分组：{error}"))
+}
+
+fn write_chat_groups_doc(app: &AppHandle, groups: &ChatGroupsDoc) -> Result<(), String> {
+    write_json(&chat_groups_path(app)?, groups)
+        .map_err(|error| format!("无法保存对话分组：{error}"))
+}
+
+fn clean_group_name(name: &str) -> String {
+    let trimmed = name.trim();
+    let limited: String = trimmed.chars().take(48).collect();
+    if limited.trim().is_empty() {
+        "新分组".to_string()
+    } else {
+        limited
+    }
 }
 
 pub(crate) fn read_chat_settings(app: &AppHandle) -> Result<ChatSettings, String> {
@@ -545,6 +601,112 @@ pub fn list_all_conversations(app: AppHandle) -> Result<Vec<ConversationSummary>
     Ok(out)
 }
 
+#[tauri::command]
+pub fn list_chat_groups(app: AppHandle) -> Result<Vec<ChatGroup>, String> {
+    let mut groups = read_chat_groups_doc(&app)?.groups;
+    groups.sort_by_key(|group| group.created_at);
+    Ok(groups)
+}
+
+fn set_conversation_groups(
+    app: &AppHandle,
+    conversations: &[ConversationRef],
+    group_id: Option<&str>,
+) -> Result<(), String> {
+    if let Some(group_id) = group_id {
+        safe_id(group_id)?;
+        let exists = read_chat_groups_doc(app)?
+            .groups
+            .iter()
+            .any(|group| group.id == group_id);
+        if !exists {
+            return Err("对话分组不存在。".into());
+        }
+    }
+
+    let mut updates = Vec::with_capacity(conversations.len());
+    for conversation_ref in conversations {
+        let config = assistant_dir(app, None, &conversation_ref.assistant_id)?
+            .join(safe_id(&conversation_ref.id)?)
+            .join(CONVERSATION_FILE);
+        let mut conversation: Conversation = read_json(&config)?;
+        conversation.group_id = group_id.map(str::to_owned);
+        updates.push((config, conversation));
+    }
+    for (config, conversation) in updates {
+        write_json(&config, &conversation)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn create_chat_group(
+    app: AppHandle,
+    name: String,
+    conversations: Vec<ConversationRef>,
+) -> Result<ChatGroup, String> {
+    let mut doc = read_chat_groups_doc(&app)?;
+    let timestamp = now();
+    let group = ChatGroup {
+        id: format!("group-{}", uuid::Uuid::new_v4()),
+        name: clean_group_name(&name),
+        collapsed: false,
+        created_at: timestamp,
+        updated_at: timestamp,
+    };
+    doc.groups.push(group.clone());
+    write_chat_groups_doc(&app, &doc)?;
+    if let Err(error) = set_conversation_groups(&app, &conversations, Some(&group.id)) {
+        doc.groups.retain(|item| item.id != group.id);
+        let _ = write_chat_groups_doc(&app, &doc);
+        return Err(error);
+    }
+    Ok(group)
+}
+
+#[tauri::command]
+pub fn rename_chat_group(app: AppHandle, id: String, name: String) -> Result<ChatGroup, String> {
+    let mut doc = read_chat_groups_doc(&app)?;
+    let group = doc
+        .groups
+        .iter_mut()
+        .find(|group| group.id == id)
+        .ok_or_else(|| "对话分组不存在。".to_string())?;
+    group.name = clean_group_name(&name);
+    group.updated_at = now();
+    let updated = group.clone();
+    write_chat_groups_doc(&app, &doc)?;
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn set_chat_group_collapsed(
+    app: AppHandle,
+    id: String,
+    collapsed: bool,
+) -> Result<ChatGroup, String> {
+    let mut doc = read_chat_groups_doc(&app)?;
+    let group = doc
+        .groups
+        .iter_mut()
+        .find(|group| group.id == id)
+        .ok_or_else(|| "对话分组不存在。".to_string())?;
+    group.collapsed = collapsed;
+    group.updated_at = now();
+    let updated = group.clone();
+    write_chat_groups_doc(&app, &doc)?;
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn set_conversations_chat_group(
+    app: AppHandle,
+    conversations: Vec<ConversationRef>,
+    group_id: Option<String>,
+) -> Result<(), String> {
+    set_conversation_groups(&app, &conversations, group_id.as_deref())
+}
+
 /// Create (if missing) the reserved default assistant and return its folder.
 fn ensure_default_assistant(app: &AppHandle, scope: Option<&str>) -> Result<PathBuf, String> {
     let dir = chat_root(app, scope)?.join(DEFAULT_ASSISTANT_ID);
@@ -646,6 +808,7 @@ pub fn create_conversation(
         title: title.trim().to_string(),
         provider_id,
         model_id,
+        group_id: None,
         created_at: timestamp,
         updated_at: timestamp,
         last_message_at: None,
@@ -1243,6 +1406,7 @@ mod tests {
             title: "Chat".into(),
             provider_id: None,
             model_id: None,
+            group_id: None,
             created_at: 100,
             updated_at: 500,
             last_message_at: None,

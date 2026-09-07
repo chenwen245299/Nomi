@@ -2,20 +2,27 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   createAssistant,
+  createChatGroup as apiCreateChatGroup,
   createConversation,
   createDefaultConversation,
   deleteAssistant,
   deleteConversation,
   listAllConversations,
   listAssistants,
+  listChatGroups,
+  renameChatGroup as apiRenameChatGroup,
   renameConversation,
   revealConversation,
+  setChatGroupCollapsed as apiSetChatGroupCollapsed,
   setConversationAssistant,
+  setConversationsChatGroup,
   setDefaultConversationSettings,
   setConversationModel,
   updateAssistant,
   DEFAULT_ASSISTANT_ID,
   type Assistant,
+  type ChatGroup,
+  type ConversationRef,
   type ConversationSummary,
 } from "./api";
 import { subscribeConversationActivity } from "./chatRuntime";
@@ -30,6 +37,7 @@ import { assistantEmoji } from "./emoji";
 export interface ChatData {
   assistants: Assistant[]; // named assistants (the implicit default is hidden)
   conversations: ConversationSummary[]; // every conversation, newest first
+  groups: ChatGroup[];
   defaultConversationProviderId: string | null;
   defaultConversationModelId: string | null;
   defaultConversationSystemPrompt: string;
@@ -86,6 +94,13 @@ export interface ChatData {
     id: string,
     targetAssistantId: string,
   ) => Promise<ConversationSummary>;
+  createGroup: (name: string, conversations: ConversationRef[]) => Promise<ChatGroup | null>;
+  renameGroup: (id: string, name: string) => Promise<void>;
+  setGroupCollapsed: (id: string, collapsed: boolean) => Promise<void>;
+  moveConversationsToGroup: (
+    conversations: ConversationRef[],
+    groupId: string | null,
+  ) => Promise<void>;
   removeConversation: (assistantId: string, id: string) => Promise<void>;
   revealConversation: (assistantId: string, id: string) => Promise<void>;
 }
@@ -106,6 +121,7 @@ const sortByLastMessage = (conversations: ConversationSummary[]) =>
 export function useChat(active: boolean): ChatData {
   const [assistants, setAssistants] = useState<Assistant[]>([]);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [groups, setGroups] = useState<ChatGroup[]>([]);
   const [defaultConversationProviderId, setDefaultConversationProviderId] = useState<string | null>(
     null,
   );
@@ -124,9 +140,10 @@ export function useChat(active: boolean): ChatData {
     setLoading(true);
     setError(null);
     try {
-      const [rawAssistants, allConversations] = await Promise.all([
+      const [rawAssistants, allConversations, chatGroups] = await Promise.all([
         listAssistants(),
         listAllConversations(),
+        listChatGroups(),
       ]);
       const defaultAssistant = rawAssistants.find(
         (assistant) => assistant.id === DEFAULT_ASSISTANT_ID,
@@ -141,6 +158,7 @@ export function useChat(active: boolean): ChatData {
       // conversations still surface in the flat list under "默认助手".
       setAssistants(rawAssistants.filter((a) => a.id !== DEFAULT_ASSISTANT_ID));
       setConversations(allConversations);
+      setGroups(chatGroups);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -401,6 +419,66 @@ export function useChat(active: boolean): ChatData {
     [refresh],
   );
 
+  const createGroup = useCallback(
+    async (name: string, conversationRefs: ConversationRef[]) => {
+      try {
+        const group = await apiCreateChatGroup(name, conversationRefs);
+        await refresh();
+        return group;
+      } catch (err) {
+        setError(String(err));
+        return null;
+      }
+    },
+    [refresh],
+  );
+
+  const renameGroup = useCallback(async (id: string, name: string) => {
+    try {
+      const updated = await apiRenameChatGroup(id, name);
+      setGroups((current) => current.map((group) => (group.id === id ? updated : group)));
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    }
+  }, []);
+
+  const setGroupCollapsed = useCallback(
+    async (id: string, collapsed: boolean) => {
+      setGroups((current) =>
+        current.map((group) => (group.id === id ? { ...group, collapsed } : group)),
+      );
+      try {
+        const updated = await apiSetChatGroupCollapsed(id, collapsed);
+        setGroups((current) => current.map((group) => (group.id === id ? updated : group)));
+      } catch (err) {
+        setError(String(err));
+        void refresh();
+      }
+    },
+    [refresh],
+  );
+
+  const moveConversationsToGroup = useCallback(
+    async (conversationRefs: ConversationRef[], groupId: string | null) => {
+      const keys = new Set(conversationRefs.map((item) => `${item.assistantId}/${item.id}`));
+      setConversations((current) =>
+        current.map((conversation) =>
+          keys.has(`${conversation.assistantId}/${conversation.id}`)
+            ? { ...conversation, groupId }
+            : conversation,
+        ),
+      );
+      try {
+        await setConversationsChatGroup(conversationRefs, groupId);
+      } catch (err) {
+        setError(String(err));
+        await refresh();
+      }
+    },
+    [refresh],
+  );
+
   const removeConversation = useCallback(
     async (assistantId: string, id: string) => {
       try {
@@ -427,6 +505,7 @@ export function useChat(active: boolean): ChatData {
     () => ({
       assistants,
       conversations,
+      groups,
       defaultConversationProviderId,
       defaultConversationModelId,
       defaultConversationSystemPrompt,
@@ -448,12 +527,17 @@ export function useChat(active: boolean): ChatData {
       renameConversationTitle,
       setConversationAssistant: setConversationAssistantChoice,
       setConversationModel: setConversationModelChoice,
+      createGroup,
+      renameGroup,
+      setGroupCollapsed,
+      moveConversationsToGroup,
       removeConversation,
       revealConversation: revealConversationFolder,
     }),
     [
       assistants,
       conversations,
+      groups,
       defaultConversationProviderId,
       defaultConversationModelId,
       defaultConversationSystemPrompt,
@@ -475,6 +559,10 @@ export function useChat(active: boolean): ChatData {
       renameConversationTitle,
       setConversationAssistantChoice,
       setConversationModelChoice,
+      createGroup,
+      renameGroup,
+      setGroupCollapsed,
+      moveConversationsToGroup,
       removeConversation,
       revealConversationFolder,
     ],

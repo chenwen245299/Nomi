@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
 import {
@@ -18,7 +18,10 @@ import {
   RiDeleteBinLine,
   RiEditBoxLine,
   RiEditLine,
+  RiFolderAddLine,
+  RiFolderLine,
   RiFolderOpenLine,
+  RiInboxLine,
   RiRefreshLine,
 } from "@remixicon/react";
 import {
@@ -42,6 +45,8 @@ import {
   CHAT_TOOLS,
   DEFAULT_ASSISTANT_ID,
   type Assistant,
+  type ChatGroup,
+  type ConversationRef,
   type ConversationSummary,
 } from "./api";
 import { ASSISTANT_EMOJIS, assistantEmoji, badgeForEmoji, randomAssistantEmoji } from "./emoji";
@@ -188,6 +193,53 @@ function makeChatStyles(theme: Theme, accent: Accent) {
       paddingTop: 2,
       paddingBottom: 12,
     },
+    groupSection: {
+      borderColor: "transparent",
+      borderRadius: 10,
+      borderWidth: 1,
+      marginBottom: 4,
+      overflow: "hidden",
+    },
+    groupSectionDrop: {
+      backgroundColor: accent.wash,
+      borderColor: accent.accent,
+    },
+    groupHeader: {
+      alignItems: "center",
+      borderRadius: 8,
+      flexDirection: "row",
+      gap: 6,
+      minHeight: 32,
+      paddingHorizontal: 7,
+    },
+    groupHeaderHover: { backgroundColor: t.controlHover },
+    groupChevron: {
+      alignItems: "center",
+      flexShrink: 0,
+      height: 24,
+      justifyContent: "center",
+      width: 18,
+    },
+    groupName: {
+      color: t.textSecondary,
+      flex: 1,
+      fontSize: 11.5,
+      fontWeight: "700",
+      minWidth: 0,
+    },
+    groupCount: { color: t.textTertiary, flexShrink: 0, fontSize: 10.5 },
+    groupEmpty: {
+      color: t.textTertiary,
+      fontSize: 10.5,
+      paddingBottom: 9,
+      paddingHorizontal: 31,
+    },
+    ungroupedDropHint: {
+      color: accent.accentText,
+      fontSize: 10.5,
+      paddingBottom: 8,
+      paddingHorizontal: 31,
+    },
     hint: {
       alignItems: "center",
       flex: 1,
@@ -271,6 +323,43 @@ function makeChatStyles(theme: Theme, accent: Accent) {
       marginHorizontal: 8,
       marginVertical: 4,
     },
+    groupDialog: {
+      backgroundColor: t.overlaySolid,
+      borderColor: t.separatorStrong,
+      borderRadius: 14,
+      borderWidth: 1,
+      boxShadow: "0 20px 52px rgba(16,24,36,0.24)",
+      gap: 12,
+      padding: 16,
+      width: 320,
+    },
+    groupDialogTitle: { color: t.textPrimary, fontSize: 15, fontWeight: "700" },
+    groupDialogHint: { color: t.textTertiary, fontSize: 11.5, lineHeight: 17 },
+    groupNameInput: {
+      backgroundColor: t.cardSurfaceAlt,
+      borderColor: t.controlBorder,
+      borderRadius: 9,
+      borderWidth: 1,
+      color: t.textPrimary,
+      fontSize: 13,
+      minHeight: 38,
+      paddingHorizontal: 11,
+      paddingVertical: 8,
+    },
+    groupDialogActions: { flexDirection: "row", gap: 8, justifyContent: "flex-end" },
+    groupDialogCancel: {
+      borderRadius: 8,
+      paddingHorizontal: 13,
+      paddingVertical: 8,
+    },
+    groupDialogCancelText: { color: t.textSecondary, fontSize: 12, fontWeight: "600" },
+    groupDialogCreate: {
+      backgroundColor: accent.accent,
+      borderRadius: 8,
+      paddingHorizontal: 13,
+      paddingVertical: 8,
+    },
+    groupDialogCreateText: { color: t.onAccent, fontSize: 12, fontWeight: "700" },
     // ── Main body: assistant editor ──
     body: { gap: 16, maxWidth: 640, width: "100%" },
     card: {
@@ -805,6 +894,9 @@ export function ChatCollection({
   // Multi-select: ⌘/Ctrl-click toggles a row, Shift-click extends a range from the
   // last-clicked anchor. Keyed by `${assistantId}/${id}`. A plain click clears it.
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [groupDialog, setGroupDialog] = useState<ConversationSummary[] | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const draggingRef = useRef<ConversationRef[]>([]);
   const anchorRef = useRef<string | null>(null);
 
   const keyOf = (c: ConversationSummary) => `${c.assistantId}/${c.id}`;
@@ -816,6 +908,22 @@ export function ChatCollection({
         (c) => c.title.toLowerCase().includes(q) || c.assistantName.toLowerCase().includes(q),
       )
     : all;
+  const knownGroupIds = new Set(chat.groups.map((group) => group.id));
+  const groupedSections = chat.groups
+    .map((group) => ({
+      group,
+      conversations: filtered.filter((conversation) => conversation.groupId === group.id),
+    }))
+    .filter(({ conversations }) => conversations.length > 0 || !q);
+  const ungrouped = filtered.filter(
+    (conversation) => !conversation.groupId || !knownGroupIds.has(conversation.groupId),
+  );
+  const orderedVisible = [
+    ...groupedSections.flatMap(({ group, conversations }) =>
+      group.collapsed ? [] : conversations,
+    ),
+    ...ungrouped,
+  ];
 
   // Resolve each assistant's displayed emoji so the badge tint can pair with it.
   const emojiByAssistant = useMemo(() => {
@@ -852,7 +960,7 @@ export function ChatCollection({
       return;
     }
     if (mods.shift && anchorRef.current) {
-      const keys = filtered.map(keyOf);
+      const keys = orderedVisible.map(keyOf);
       const a = keys.indexOf(anchorRef.current);
       const b = keys.indexOf(key);
       if (a !== -1 && b !== -1) {
@@ -888,7 +996,7 @@ export function ChatCollection({
   // Only the currently-visible selected rows count: a row hidden by the search
   // filter (or a stale key left over from another assistant) is inert, so a batch
   // delete can never silently catch something off-screen.
-  const visibleSelected = filtered.filter((c) => selected.has(keyOf(c)));
+  const visibleSelected = orderedVisible.filter((c) => selected.has(keyOf(c)));
 
   // The right-clicked row's delete target(s): the whole visible selection when the
   // row is part of a multi-selection, otherwise just that row.
@@ -899,6 +1007,65 @@ export function ChatCollection({
       ? visibleSelected
       : [menu.conversation]
     : [];
+
+  const beginPointerDragging = (conversation: ConversationSummary) => {
+    const targets = selected.has(keyOf(conversation)) ? visibleSelected : [conversation];
+    const refs = targets.map(({ assistantId, id }) => ({ assistantId, id }));
+    draggingRef.current = refs;
+  };
+
+  const groupDropAt = (x: number, y: number): string | null => {
+    const element = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-chat-group-drop]");
+    return element?.dataset.chatGroupDrop ?? null;
+  };
+
+  const moveDraggingTo = (groupId: string | null) => {
+    const targets = draggingRef.current;
+    if (targets.length === 0) return;
+    void chat.moveConversationsToGroup(targets, groupId);
+    draggingRef.current = [];
+    setDropTarget(null);
+    setSelected(new Set());
+    anchorRef.current = null;
+  };
+
+  const finishPointerDragging = (x: number, y: number) => {
+    const target = groupDropAt(x, y);
+    if (target) {
+      moveDraggingTo(target === "__ungrouped__" ? null : target);
+      return;
+    }
+    draggingRef.current = [];
+    setDropTarget(null);
+  };
+
+  const renderConversation = (conversation: ConversationSummary) => (
+    <ConversationRow
+      accent={accent}
+      active={
+        conversation.assistantId === conversationAssistantId && conversation.id === conversationId
+      }
+      conversation={conversation}
+      emoji={emojiByAssistant.get(conversation.assistantId)}
+      key={`${conversation.assistantId}/${conversation.id}`}
+      onActivate={(mods) => activate(conversation, mods)}
+      onContextMenu={(x, y) => {
+        const key = keyOf(conversation);
+        // Right-clicking outside the current selection collapses it to this row.
+        if (!selected.has(key)) {
+          setSelected(new Set());
+          anchorRef.current = key;
+        }
+        setMenu({ conversation, x, y });
+      }}
+      onPointerDragEnd={finishPointerDragging}
+      onPointerDragMove={(x, y) => setDropTarget(groupDropAt(x, y))}
+      onPointerDragStart={() => beginPointerDragging(conversation)}
+      selected={selected.has(keyOf(conversation))}
+      selectionActive={visibleSelected.length > 0}
+      showAssistant={assistantId === null}
+    />
+  );
 
   if (filtered.length === 0) {
     return (
@@ -914,31 +1081,31 @@ export function ChatCollection({
   return (
     <>
       <ScrollView contentContainerStyle={styles.list} style={{ flex: 1 } as ViewStyle}>
-        {filtered.map((conversation) => (
-          <ConversationRow
+        {groupedSections.map(({ group, conversations }) => (
+          <ConversationGroupSection
             accent={accent}
-            active={
-              conversation.assistantId === conversationAssistantId &&
-              conversation.id === conversationId
-            }
-            conversation={conversation}
-            emoji={emojiByAssistant.get(conversation.assistantId)}
-            key={`${conversation.assistantId}/${conversation.id}`}
-            onActivate={(mods) => activate(conversation, mods)}
-            onContextMenu={(x, y) => {
-              const key = keyOf(conversation);
-              // Right-clicking outside the current selection collapses it to this row.
-              if (!selected.has(key)) {
-                setSelected(new Set());
-                anchorRef.current = key;
-              }
-              setMenu({ conversation, x, y });
-            }}
-            selected={selected.has(keyOf(conversation))}
-            selectionActive={visibleSelected.length > 0}
-            showAssistant={assistantId === null}
+            conversations={conversations}
+            dropActive={dropTarget === group.id}
+            group={group}
+            key={group.id}
+            onRename={(name) => chat.renameGroup(group.id, name)}
+            onToggle={() => void chat.setGroupCollapsed(group.id, !group.collapsed)}
+            renderConversation={renderConversation}
+            styles={styles}
+            theme={theme}
           />
         ))}
+        {chat.groups.length > 0 ? (
+          <UngroupedConversationSection
+            conversations={ungrouped}
+            dropActive={dropTarget === "__ungrouped__"}
+            renderConversation={renderConversation}
+            styles={styles}
+            theme={theme}
+          />
+        ) : (
+          ungrouped.map(renderConversation)
+        )}
       </ScrollView>
       {menu ? (
         <ConversationContextMenu
@@ -946,6 +1113,11 @@ export function ChatCollection({
           count={menuTargets.length}
           menu={menu}
           onClose={() => setMenu(null)}
+          onCreateGroup={() => {
+            const targets = menuTargets;
+            setMenu(null);
+            setGroupDialog(targets);
+          }}
           onDelete={() => {
             const targets = menuTargets;
             setMenu(null);
@@ -960,8 +1132,277 @@ export function ChatCollection({
           theme={theme}
         />
       ) : null}
+      {groupDialog ? (
+        <CreateConversationGroupDialog
+          accent={accent}
+          count={groupDialog.length}
+          onClose={() => setGroupDialog(null)}
+          onSubmit={async (name) => {
+            const refs = groupDialog.map(({ assistantId, id }) => ({ assistantId, id }));
+            const created = await chat.createGroup(name, refs);
+            if (!created) return;
+            setGroupDialog(null);
+            setSelected(new Set());
+            anchorRef.current = null;
+          }}
+          styles={styles}
+          theme={theme}
+        />
+      ) : null}
     </>
   );
+}
+
+function ConversationGroupSection({
+  accent,
+  conversations,
+  dropActive,
+  group,
+  onRename,
+  onToggle,
+  renderConversation,
+  styles,
+  theme,
+}: {
+  accent: Accent;
+  conversations: ConversationSummary[];
+  dropActive: boolean;
+  group: ChatGroup;
+  onRename: (name: string) => void | Promise<void>;
+  onToggle: () => void;
+  renderConversation: (conversation: ConversationSummary) => ReactNode;
+  styles: ReturnType<typeof makeChatStyles>;
+  theme: Theme;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(group.name);
+
+  const beginRename = () => {
+    setName(group.name);
+    setEditing(true);
+  };
+  const commitRename = () => {
+    const next = name.trim() || "新分组";
+    setName(next);
+    setEditing(false);
+    if (next !== group.name) void onRename(next);
+  };
+
+  return (
+    <div data-chat-group-drop={group.id} style={{ display: "flex", flexDirection: "column" }}>
+      <View style={[styles.groupSection, dropActive && styles.groupSectionDrop]}>
+        <View style={styles.groupHeader}>
+          <Pressable
+            accessibilityLabel={
+              group.collapsed ? `展开分组 ${group.name}` : `折叠分组 ${group.name}`
+            }
+            accessibilityRole="button"
+            onPress={onToggle}
+            style={({ hovered }: PressState) => [
+              styles.groupChevron,
+              hovered && styles.groupHeaderHover,
+            ]}
+          >
+            <RiArrowDownSLine
+              color={theme.t.textTertiary}
+              size={15}
+              style={{ transform: group.collapsed ? "rotate(-90deg)" : "none" }}
+            />
+          </Pressable>
+          <RiFolderLine color={accent.accentText} size={14} />
+          {editing ? (
+            <input
+              aria-label="分组名称"
+              autoFocus
+              maxLength={48}
+              onBlur={commitRename}
+              onChange={(event) => setName(event.target.value)}
+              onFocus={(event) => event.currentTarget.select()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+                if (event.key === "Escape") {
+                  setName(group.name);
+                  setEditing(false);
+                }
+              }}
+              style={groupHeaderInputStyle(theme, accent)}
+              value={name}
+            />
+          ) : (
+            <div
+              aria-label={`分组 ${group.name}，双击重命名`}
+              onDoubleClick={beginRename}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === "F2") beginRename();
+              }}
+              role="button"
+              style={{ cursor: "text", flex: 1, minWidth: 0 }}
+              tabIndex={0}
+              title="双击重命名分组"
+            >
+              <Text numberOfLines={1} style={styles.groupName}>
+                {group.name}
+              </Text>
+            </div>
+          )}
+          <Text style={styles.groupCount}>{conversations.length}</Text>
+        </View>
+        {group.collapsed ? null : conversations.length > 0 ? (
+          conversations.map(renderConversation)
+        ) : (
+          <Text style={styles.groupEmpty}>{dropActive ? "松开即可加入此分组" : "暂无对话"}</Text>
+        )}
+      </View>
+    </div>
+  );
+}
+
+function UngroupedConversationSection({
+  conversations,
+  dropActive,
+  renderConversation,
+  styles,
+  theme,
+}: {
+  conversations: ConversationSummary[];
+  dropActive: boolean;
+  renderConversation: (conversation: ConversationSummary) => ReactNode;
+  styles: ReturnType<typeof makeChatStyles>;
+  theme: Theme;
+}) {
+  return (
+    <div data-chat-group-drop="__ungrouped__" style={{ display: "flex", flexDirection: "column" }}>
+      <View style={[styles.groupSection, dropActive && styles.groupSectionDrop]}>
+        <View style={styles.groupHeader}>
+          <View style={styles.groupChevron} />
+          <RiInboxLine color={theme.t.textTertiary} size={14} />
+          <Text numberOfLines={1} style={styles.groupName}>
+            未分组
+          </Text>
+          <Text style={styles.groupCount}>{conversations.length}</Text>
+        </View>
+        {conversations.length > 0 ? (
+          conversations.map(renderConversation)
+        ) : (
+          <Text style={dropActive ? styles.ungroupedDropHint : styles.groupEmpty}>
+            {dropActive ? "松开即可移出当前分组" : "暂无未分组对话"}
+          </Text>
+        )}
+      </View>
+    </div>
+  );
+}
+
+function CreateConversationGroupDialog({
+  count,
+  onClose,
+  onSubmit,
+  styles,
+  theme,
+}: {
+  accent: Accent;
+  count: number;
+  onClose: () => void;
+  onSubmit: (name: string) => void | Promise<void>;
+  styles: ReturnType<typeof makeChatStyles>;
+  theme: Theme;
+}) {
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !saving) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, saving]);
+
+  const submit = async () => {
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    await onSubmit(name.trim());
+    setSaving(false);
+  };
+
+  return createPortal(
+    <div
+      aria-label="创建对话分组"
+      aria-modal="true"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !saving) onClose();
+      }}
+      role="dialog"
+      style={{
+        alignItems: "center",
+        background: "rgba(20, 27, 38, 0.30)",
+        display: "flex",
+        inset: 0,
+        justifyContent: "center",
+        position: "fixed",
+        zIndex: 2200,
+      }}
+    >
+      <View style={styles.groupDialog}>
+        <Text style={styles.groupDialogTitle}>创建对话分组</Text>
+        <Text style={styles.groupDialogHint}>为选中的 {count} 个对话设置一个分组名称。</Text>
+        <TextInput
+          accessibilityLabel="新分组名称"
+          autoFocus
+          editable={!saving}
+          maxLength={48}
+          onChangeText={setName}
+          onSubmitEditing={() => void submit()}
+          placeholder="例如：论文阅读"
+          placeholderTextColor={theme.t.textTertiary}
+          style={styles.groupNameInput}
+          value={name}
+        />
+        <View style={styles.groupDialogActions}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={saving}
+            onPress={onClose}
+            style={({ hovered }: PressState) => [
+              styles.groupDialogCancel,
+              hovered && styles.groupHeaderHover,
+            ]}
+          >
+            <Text style={styles.groupDialogCancelText}>取消</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={!name.trim() || saving}
+            onPress={() => void submit()}
+            style={({ hovered }: PressState) => [
+              styles.groupDialogCreate,
+              (!name.trim() || saving) && { opacity: 0.45 },
+              hovered && name.trim() && !saving && ({ filter: "brightness(1.06)" } as ViewStyle),
+            ]}
+          >
+            <Text style={styles.groupDialogCreateText}>{saving ? "创建中…" : "创建"}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </div>,
+    document.body,
+  );
+}
+
+function groupHeaderInputStyle(theme: Theme, accent: Accent): CSSProperties {
+  return {
+    background: "transparent",
+    border: 0,
+    borderBottom: `1px solid ${accent.accentText}`,
+    color: theme.t.textPrimary,
+    flex: 1,
+    fontFamily: "inherit",
+    fontSize: 11.5,
+    fontWeight: 700,
+    minWidth: 0,
+    outline: "none",
+    padding: "2px 0",
+  };
 }
 
 function ConversationContextMenu({
@@ -969,6 +1410,7 @@ function ConversationContextMenu({
   count,
   menu,
   onClose,
+  onCreateGroup,
   onDelete,
   onReveal,
   styles,
@@ -978,6 +1420,7 @@ function ConversationContextMenu({
   count: number;
   menu: { conversation: ConversationSummary; x: number; y: number };
   onClose: () => void;
+  onCreateGroup: () => void;
   onDelete: () => void;
   onReveal: () => void;
   styles: ReturnType<typeof makeChatStyles>;
@@ -985,7 +1428,7 @@ function ConversationContextMenu({
 }) {
   const batch = count > 1;
   const left = Math.max(8, Math.min(menu.x, window.innerWidth - 200));
-  const top = Math.max(8, Math.min(menu.y, window.innerHeight - 104));
+  const top = Math.max(8, Math.min(menu.y, window.innerHeight - 152));
   return createPortal(
     <div
       onClick={onClose}
@@ -996,12 +1439,32 @@ function ConversationContextMenu({
       style={{ inset: 0, position: "fixed", zIndex: 2000 }}
     >
       <div
-        aria-label={batch ? `批量对话菜单：${count} 个对话` : `对话菜单：${menu.conversation.title || "新对话"}`}
+        aria-label={
+          batch
+            ? `批量对话菜单：${count} 个对话`
+            : `对话菜单：${menu.conversation.title || "新对话"}`
+        }
         onClick={(event) => event.stopPropagation()}
         role="menu"
         style={{ left, position: "fixed", top }}
       >
         <View style={styles.convContextMenu}>
+          <Pressable
+            accessibilityLabel={batch ? `将选中的 ${count} 个对话创建分组` : "将对话创建分组"}
+            accessibilityRole="button"
+            onPress={onCreateGroup}
+            style={({ hovered, pressed }: PressState) => [
+              styles.convContextMenuItem,
+              motion,
+              (hovered || pressed) && styles.convContextMenuItemHover,
+            ]}
+          >
+            <RiFolderAddLine color={accent.accentText} size={15} />
+            <Text style={styles.convContextMenuText}>
+              {batch ? `创建分组（${count}）` : "创建分组"}
+            </Text>
+          </Pressable>
+          <View style={styles.convContextMenuDivider} />
           {/* Revealing in Finder only makes sense for a single conversation folder. */}
           {batch ? null : (
             <>
@@ -1050,6 +1513,9 @@ function ConversationRow({
   emoji,
   onActivate,
   onContextMenu,
+  onPointerDragEnd,
+  onPointerDragMove,
+  onPointerDragStart,
   selected,
   selectionActive,
   showAssistant,
@@ -1060,6 +1526,9 @@ function ConversationRow({
   emoji?: string;
   onActivate: (mods: { meta: boolean; shift: boolean }) => void;
   onContextMenu: (x: number, y: number) => void;
+  onPointerDragEnd: (x: number, y: number) => void;
+  onPointerDragMove: (x: number, y: number) => void;
+  onPointerDragStart: () => void;
   selected: boolean;
   selectionActive: boolean;
   showAssistant: boolean;
@@ -1072,6 +1541,7 @@ function ConversationRow({
   // Modifier keys of the click that becomes Pressable's onPress. Captured on the
   // wrapping div's pointerdown, which fires before the press resolves.
   const modRef = useRef<{ meta: boolean; shift: boolean }>({ meta: false, shift: false });
+  const suppressPressRef = useRef(false);
   return (
     <div
       data-conversation-row
@@ -1084,13 +1554,70 @@ function ConversationRow({
           meta: event.metaKey || event.ctrlKey,
           shift: event.shiftKey,
         };
+
+        if (event.button !== 0 || modRef.current.meta || modRef.current.shift) return;
+        const pointerId = event.pointerId;
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const previousUserSelect = document.body.style.userSelect;
+        const previousCursor = document.body.style.cursor;
+        let started = false;
+
+        const cleanup = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", finish);
+          window.removeEventListener("pointercancel", cancel);
+          document.body.style.userSelect = previousUserSelect;
+          document.body.style.cursor = previousCursor;
+        };
+        const move = (moveEvent: PointerEvent) => {
+          if (moveEvent.pointerId !== pointerId) return;
+          if (!started && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 7) {
+            return;
+          }
+          if (!started) {
+            started = true;
+            suppressPressRef.current = true;
+            document.body.style.userSelect = "none";
+            document.body.style.cursor = "grabbing";
+            onPointerDragStart();
+          }
+          moveEvent.preventDefault();
+          onPointerDragMove(moveEvent.clientX, moveEvent.clientY);
+        };
+        const finish = (upEvent: PointerEvent) => {
+          if (upEvent.pointerId !== pointerId) return;
+          cleanup();
+          if (!started) return;
+          upEvent.preventDefault();
+          onPointerDragEnd(upEvent.clientX, upEvent.clientY);
+          window.setTimeout(() => {
+            suppressPressRef.current = false;
+          }, 0);
+        };
+        const cancel = (cancelEvent: PointerEvent) => {
+          if (cancelEvent.pointerId !== pointerId) return;
+          cleanup();
+          suppressPressRef.current = false;
+          onPointerDragEnd(-1, -1);
+        };
+
+        window.addEventListener("pointermove", move, { passive: false });
+        window.addEventListener("pointerup", finish);
+        window.addEventListener("pointercancel", cancel);
       }}
-      style={{ display: "flex", flexDirection: "column" }}
+      style={{ cursor: "grab", display: "flex", flexDirection: "column" }}
     >
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ selected: active || selected }}
-        onPress={() => onActivate(modRef.current)}
+        onPress={() => {
+          if (suppressPressRef.current) {
+            suppressPressRef.current = false;
+            return;
+          }
+          onActivate(modRef.current);
+        }}
         style={({ hovered, pressed }: PressState) => [
           styles.convRow,
           motion,
