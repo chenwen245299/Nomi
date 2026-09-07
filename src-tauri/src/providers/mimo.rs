@@ -105,6 +105,7 @@ mod tests {
             model_id: "mimo-v2.5".into(),
             supports_tools: false,
             supports_vision: false,
+            supports_video: false,
             input_price: None,
             output_price: None,
             cache_hit_input_price: None,

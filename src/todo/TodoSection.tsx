@@ -29,9 +29,20 @@ import {
   RiListCheck2,
   RiPencilLine,
   RiSearch2Line,
+  RiStickyNoteLine,
   RiTimeLine,
 } from "@remixicon/react";
-import { motion, SHELL_HEADER_HEIGHT, useTheme, type Accent, type Theme } from "../theme";
+import {
+  enterFade,
+  enterModal,
+  glass,
+  modalShadow,
+  motion,
+  SHELL_HEADER_HEIGHT,
+  useTheme,
+  type Accent,
+  type Theme,
+} from "../theme";
 import { revealTodoData, type Quadrant, type Todo, type TodoPatch } from "./api";
 import {
   daysBetween,
@@ -69,8 +80,17 @@ type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
 type RemixIcon = typeof RiAddLine;
 
 const QUADRANT_IDS: Quadrant[] = [1, 2, 3, 4];
+const TODO_SHOW_DONE_KEY = "nomi.todo.showDone";
 
 const isTauriRuntime = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+function readShowDone(): boolean {
+  try {
+    return window.localStorage.getItem(TODO_SHOW_DONE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 async function confirmAction(message: string, title: string): Promise<boolean> {
   try {
@@ -385,6 +405,14 @@ function makeTodoStyles(theme: Theme, accent: Accent) {
       justifyContent: "center",
       width: 22,
     },
+    noteBadge: {
+      alignItems: "center",
+      backgroundColor: accent.selectedFill,
+      borderRadius: 6,
+      height: 22,
+      justifyContent: "center",
+      width: 22,
+    },
     dropLine: { backgroundColor: accent.accent, borderRadius: 999, height: 2, marginVertical: 1 },
     addRow: {
       alignItems: "center",
@@ -419,6 +447,112 @@ function makeTodoStyles(theme: Theme, accent: Accent) {
       maxWidth: 340,
       textAlign: "center",
     },
+
+    // Lightweight todo details
+    detailScrim: {
+      alignItems: "center",
+      backgroundColor: t.scrim,
+      bottom: 0,
+      justifyContent: "center",
+      left: 0,
+      padding: 20,
+      position: "absolute",
+      right: 0,
+      top: 0,
+      zIndex: 2400,
+    },
+    detailScrimHit: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
+    detailCard: {
+      backgroundColor: t.overlaySolid,
+      borderColor: t.separator,
+      borderRadius: 16,
+      borderWidth: 1,
+      boxShadow: modalShadow(t),
+      maxWidth: 520,
+      overflow: "hidden",
+      width: "100%",
+    },
+    detailHeader: {
+      alignItems: "center",
+      borderBottomColor: t.separator,
+      borderBottomWidth: 1,
+      flexDirection: "row",
+      gap: 10,
+      paddingHorizontal: 16,
+      paddingVertical: 13,
+    },
+    detailHeaderText: { flex: 1, minWidth: 0 },
+    detailEyebrow: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: 6,
+      marginBottom: 5,
+    },
+    detailEyebrowText: { color: t.textTertiary, fontSize: 10.5, fontWeight: "600" },
+    detailTitleInput: {
+      color: t.textPrimary,
+      fontSize: 16,
+      fontWeight: "700",
+      letterSpacing: -0.2,
+      minWidth: 0,
+      padding: 0,
+    },
+    detailClose: {
+      alignItems: "center",
+      borderRadius: 8,
+      height: 30,
+      justifyContent: "center",
+      width: 30,
+    },
+    detailBody: { gap: 8, padding: 16 },
+    detailLabel: { color: t.textSecondary, fontSize: 12, fontWeight: "700" },
+    detailNotes: {
+      backgroundColor: t.cardSurfaceAlt,
+      borderColor: t.separator,
+      borderRadius: 11,
+      borderWidth: 1,
+      color: t.textPrimary,
+      fontSize: 13.5,
+      lineHeight: 21,
+      minHeight: 190,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      textAlignVertical: "top",
+    },
+    detailHintRow: { alignItems: "center", flexDirection: "row", gap: 8 },
+    detailHint: { color: t.textTertiary, flex: 1, fontSize: 11, lineHeight: 16 },
+    detailCount: { color: t.textTertiary, fontSize: 10.5 },
+    detailError: { color: t.errorText, fontSize: 11.5, lineHeight: 16 },
+    detailFooter: {
+      alignItems: "center",
+      borderTopColor: t.separator,
+      borderTopWidth: 1,
+      flexDirection: "row",
+      gap: 10,
+      justifyContent: "flex-end",
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+    },
+    detailStatusButton: {
+      alignItems: "center",
+      borderRadius: 8,
+      flexDirection: "row",
+      gap: 6,
+      height: 32,
+      marginRight: "auto",
+      paddingHorizontal: 10,
+    },
+    detailStatusText: { fontSize: 12, fontWeight: "600" },
+    detailDoneButton: {
+      alignItems: "center",
+      backgroundColor: accent.accent,
+      borderRadius: 9,
+      height: 34,
+      justifyContent: "center",
+      minWidth: 76,
+      paddingHorizontal: 16,
+    },
+    detailDoneText: { color: "#FFFFFF", fontSize: 12.5, fontWeight: "700" },
   });
 }
 
@@ -660,8 +794,9 @@ export function TodoMainColumn({
   const today = useToday();
   const [query, setQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
-  const [showDone, setShowDone] = useState(true);
+  const [showDone, setShowDone] = useState(readShowDone);
   const [menu, setMenu] = useState<{ todo: Todo; x: number; y: number } | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
   // Which row is in inline-rename mode. Held here (not in the row) so the context
   // menu can start an edit on a row it does not own.
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -688,6 +823,12 @@ export function TodoMainColumn({
   }, [query, scope, showDone, today, todos.todos]);
 
   const openMenu = useCallback((todo: Todo, x: number, y: number) => setMenu({ todo, x, y }), []);
+  const openDetail = useCallback((id: string) => {
+    setEditingId(null);
+    setMenu(null);
+    setDetailId(id);
+  }, []);
+  const detailTodo = detailId ? (todos.todos.find((todo) => todo.id === detailId) ?? null) : null;
 
   const clearDone = async () => {
     const finished = todos.todos.filter((todo) => todo.done).length;
@@ -697,6 +838,18 @@ export function TodoMainColumn({
     if (await confirmAction(`确定要删除 ${finished} 条已完成的待办吗？`, "清空已完成")) {
       await todos.clearDone();
     }
+  };
+
+  const toggleShowDone = () => {
+    setShowDone((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(TODO_SHOW_DONE_KEY, String(next));
+      } catch {
+        // A restricted preview can reject storage; the session state still works.
+      }
+      return next;
+    });
   };
 
   return (
@@ -729,19 +882,22 @@ export function TodoMainColumn({
             <Pressable
               accessibilityLabel={showDone ? "隐藏已完成" : "显示已完成"}
               accessibilityRole="button"
-              onPress={() => setShowDone((value) => !value)}
+              onPress={toggleShowDone}
               style={({ hovered }: PressState) => [
-                styles.iconButton,
+                styles.ghostButton,
                 motion,
-                { height: 28, width: 28 } as ViewStyle,
-                hovered && styles.iconButtonHover,
+                hovered && styles.ghostButtonHover,
+                !showDone && ({ backgroundColor: accent.selectedFill } as ViewStyle),
               ]}
             >
               {showDone ? (
-                <RiEyeLine color={theme.t.textTertiary} size={16} />
+                <RiEyeOffLine color={theme.t.textTertiary} size={15} />
               ) : (
-                <RiEyeOffLine color={accent.accentText} size={16} />
+                <RiEyeLine color={accent.accentText} size={15} />
               )}
+              <Text style={[styles.ghostButtonText, !showDone && { color: accent.accentText }]}>
+                {showDone ? "隐藏已完成" : "显示已完成"}
+              </Text>
             </Pressable>
           )}
 
@@ -814,8 +970,8 @@ export function TodoMainColumn({
           dueDefault={dueDefault}
           editingId={editingId}
           onEndEdit={() => setEditingId(null)}
+          onOpenDetail={openDetail}
           onMenu={openMenu}
-          onStartEdit={setEditingId}
           styles={styles}
           today={today}
           todos={todos}
@@ -827,8 +983,8 @@ export function TodoMainColumn({
           dueDefault={dueDefault}
           editingId={editingId}
           onEndEdit={() => setEditingId(null)}
+          onOpenDetail={openDetail}
           onMenu={openMenu}
-          onStartEdit={setEditingId}
           quadrantDefault={quadrantDefault}
           scope={scope}
           styles={styles}
@@ -843,12 +999,23 @@ export function TodoMainColumn({
           accent={accent}
           onClose={() => setMenu(null)}
           onEdit={setEditingId}
+          onOpenDetail={openDetail}
           theme={theme}
           today={today}
           todo={menu.todo}
           todos={todos}
           x={menu.x}
           y={menu.y}
+        />
+      ) : null}
+
+      {detailTodo ? (
+        <TodoDetailDialog
+          key={detailTodo.id}
+          onClose={() => setDetailId(null)}
+          styles={styles}
+          todo={detailTodo}
+          todos={todos}
         />
       ) : null}
     </View>
@@ -893,8 +1060,8 @@ function SegmentButton({
 // Cards are dragged with pointer events rather than HTML5 drag-and-drop: the app
 // shell deliberately cancels native drags (see App's `preventBrowserDrag` and the
 // global `-webkit-user-drag: none`), and this mirrors how the titlebar reorders
-// tabs. A press only becomes a drag after 5px of movement, so a click on the
-// checkbox or a double-click on the title still behaves normally.
+// tabs. A press only becomes a drag after 5px of movement, so clicking a title
+// can still open its detail note without making card dragging feel sticky.
 const DROP_MARKER = " drop";
 
 type DropTarget = { quadrant: Quadrant; index: number };
@@ -913,8 +1080,8 @@ function TodoBoard({
   dueDefault,
   editingId,
   onEndEdit,
+  onOpenDetail,
   onMenu,
-  onStartEdit,
   styles,
   today,
   todos,
@@ -924,8 +1091,8 @@ function TodoBoard({
   dueDefault: string | null;
   editingId: string | null;
   onEndEdit: () => void;
+  onOpenDetail: (id: string) => void;
   onMenu: (todo: Todo, x: number, y: number) => void;
-  onStartEdit: (id: string) => void;
   styles: TodoStyles;
   today: string;
   todos: TodosData;
@@ -1125,8 +1292,8 @@ function TodoBoard({
       key={quadrant}
       meta={quadrantStyle(quadrant)}
       onEndEdit={onEndEdit}
+      onOpenDetail={onOpenDetail}
       onMenu={onMenu}
-      onStartEdit={onStartEdit}
       registerPanel={registerPanel}
       styles={styles}
       today={today}
@@ -1158,8 +1325,8 @@ function QuadrantPanel({
   editingId,
   meta,
   onEndEdit,
+  onOpenDetail,
   onMenu,
-  onStartEdit,
   registerPanel,
   styles,
   today,
@@ -1174,8 +1341,8 @@ function QuadrantPanel({
   editingId: string | null;
   meta: QuadrantStyle;
   onEndEdit: () => void;
+  onOpenDetail: (id: string) => void;
   onMenu: (todo: Todo, x: number, y: number) => void;
-  onStartEdit: (id: string) => void;
   registerPanel: (quadrant: Quadrant, node: HTMLDivElement | null) => void;
   styles: TodoStyles;
   today: string;
@@ -1228,8 +1395,8 @@ function QuadrantPanel({
                 dragging={dragId === todo.id}
                 editing={editingId === todo.id}
                 onEndEdit={onEndEdit}
+                onOpenDetail={() => onOpenDetail(todo.id)}
                 onMenu={onMenu}
-                onStartEdit={() => onStartEdit(todo.id)}
                 styles={styles}
                 today={today}
                 todo={todo}
@@ -1261,8 +1428,8 @@ function TodoListView({
   dueDefault,
   editingId,
   onEndEdit,
+  onOpenDetail,
   onMenu,
-  onStartEdit,
   quadrantDefault,
   scope,
   styles,
@@ -1274,8 +1441,8 @@ function TodoListView({
   dueDefault: string | null;
   editingId: string | null;
   onEndEdit: () => void;
+  onOpenDetail: (id: string) => void;
   onMenu: (todo: Todo, x: number, y: number) => void;
-  onStartEdit: (id: string) => void;
   quadrantDefault: Quadrant;
   scope: TodoScope;
   styles: TodoStyles;
@@ -1323,8 +1490,8 @@ function TodoListView({
                   editing={editingId === todo.id}
                   key={todo.id}
                   onEndEdit={onEndEdit}
+                  onOpenDetail={() => onOpenDetail(todo.id)}
                   onMenu={onMenu}
-                  onStartEdit={() => onStartEdit(todo.id)}
                   // The week view keys its sections by date, so that key is the
                   // day this row stands for. Other sections ("已逾期", "未安排
                   // 日期") are not days and fall back to today.
@@ -1353,8 +1520,8 @@ function TodoRow({
   dragging,
   editing,
   onEndEdit,
+  onOpenDetail,
   onMenu,
-  onStartEdit,
   refDay,
   showQuadrant,
   styles,
@@ -1368,8 +1535,8 @@ function TodoRow({
   dragging?: boolean;
   editing: boolean;
   onEndEdit: () => void;
+  onOpenDetail: () => void;
   onMenu: (todo: Todo, x: number, y: number) => void;
-  onStartEdit: () => void;
   /** Which day this row stands for. A multi-day task is listed under each day it
    *  runs, so its progress must count from that day rather than from today —
    *  otherwise every copy reads "第 1/3 天". Defaults to today elsewhere. */
@@ -1402,7 +1569,6 @@ function TodoRow({
         event.stopPropagation();
         onMenu(todo, event.clientX, event.clientY);
       }}
-      onDoubleClick={drag && !editing ? onStartEdit : undefined}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onPointerCancel={drag?.onPointerCancel}
@@ -1447,18 +1613,12 @@ function TodoRow({
             styles={styles}
             title={todo.title}
           />
-        ) : drag ? (
-          // On the board a single click starts a drag, so editing is a
-          // double-click (or the context menu) instead.
-          <Text numberOfLines={1} style={[styles.rowTitle, todo.done && styles.rowTitleDone]}>
-            {todo.title}
-          </Text>
         ) : (
-          <div data-todo-nodrag="true" style={{ display: "flex", flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", flex: 1, minWidth: 0 }}>
             <Pressable
-              accessibilityLabel={`编辑：${todo.title}`}
+              accessibilityLabel={`打开待办详情：${todo.title}`}
               accessibilityRole="button"
-              onPress={onStartEdit}
+              onPress={onOpenDetail}
               style={{ flex: 1, minWidth: 0 } as ViewStyle}
             >
               <Text numberOfLines={1} style={[styles.rowTitle, todo.done && styles.rowTitleDone]}>
@@ -1472,7 +1632,24 @@ function TodoRow({
         {todo.endDate && !todo.done ? (
           <SpanProgressChip day={refDay ?? today} styles={styles} todo={todo} />
         ) : null}
-        {todo.startTime ? <TimeChip styles={styles} todo={todo} /> : null}
+        <TimeChip styles={styles} todo={todo} />
+
+        {todo.notes.trim() ? (
+          <div data-todo-nodrag="true" style={{ display: "flex" }}>
+            <Pressable
+              accessibilityLabel="打开待办备注"
+              accessibilityRole="button"
+              onPress={onOpenDetail}
+              style={({ hovered: over }: PressState) => [
+                styles.noteBadge,
+                motion,
+                over && ({ backgroundColor: meta.tint } as ViewStyle),
+              ]}
+            >
+              <RiStickyNoteLine color={accent.accentText} size={13} />
+            </Pressable>
+          </div>
+        ) : null}
 
         {showQuadrant ? (
           <View
@@ -1548,6 +1725,179 @@ function RowTitleInput({
   );
 }
 
+function TodoDetailDialog({
+  onClose,
+  styles,
+  todo,
+  todos,
+}: {
+  onClose: () => void;
+  styles: TodoStyles;
+  todo: Todo;
+  todos: TodosData;
+}) {
+  const theme = useTheme();
+  const meta = quadrantStyle(todo.quadrant);
+  const [title, setTitle] = useState(todo.title);
+  const [notes, setNotes] = useState(todo.notes);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+
+  const saveAndClose = useCallback(async () => {
+    if (savingRef.current) {
+      return;
+    }
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      setError("待办标题不能为空。");
+      return;
+    }
+
+    const patch: TodoPatch = {};
+    if (nextTitle !== todo.title) {
+      patch.title = nextTitle;
+    }
+    // Do not trim notes: blank lines and indentation are meaningful in a small
+    // notebook, and the storage layer already enforces the 4,000-character cap.
+    if (notes !== todo.notes) {
+      patch.notes = notes;
+    }
+    if (Object.keys(patch).length === 0) {
+      onClose();
+      return;
+    }
+
+    savingRef.current = true;
+    setSaving(true);
+    setError(null);
+    const updated = await todos.patchTodo(todo.id, patch);
+    savingRef.current = false;
+    setSaving(false);
+    if (updated) {
+      onClose();
+    } else {
+      setError("暂时无法保存，请稍后再试。");
+    }
+  }, [notes, onClose, title, todo.id, todo.notes, todo.title, todos]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        void saveAndClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [saveAndClose]);
+
+  return createPortal(
+    <View style={[styles.detailScrim, glass(8, 115), enterFade()]}>
+      <Pressable
+        accessibilityLabel="保存并关闭待办详情"
+        onPress={() => void saveAndClose()}
+        style={styles.detailScrimHit}
+      />
+      <View accessibilityViewIsModal style={[styles.detailCard, glass(36, 175), enterModal()]}>
+        <View style={styles.detailHeader}>
+          <View style={styles.detailHeaderText}>
+            <View style={styles.detailEyebrow}>
+              <View style={[styles.dot, { backgroundColor: meta.color } as ViewStyle]} />
+              <Text style={styles.detailEyebrowText}>{meta.label}</Text>
+            </View>
+            <TextInput
+              accessibilityLabel="待办标题"
+              maxLength={200}
+              onChangeText={(value) => {
+                setTitle(value);
+                setError(null);
+              }}
+              onSubmitEditing={() => void saveAndClose()}
+              selectTextOnFocus
+              style={styles.detailTitleInput}
+              value={title}
+            />
+          </View>
+          <Pressable
+            accessibilityLabel="保存并关闭"
+            accessibilityRole="button"
+            disabled={saving}
+            onPress={() => void saveAndClose()}
+            style={({ hovered }: PressState) => [
+              styles.detailClose,
+              motion,
+              hovered && styles.iconButtonHover,
+            ]}
+          >
+            <RiCloseLine color={theme.t.textSecondary} size={17} />
+          </Pressable>
+        </View>
+
+        <View style={styles.detailBody}>
+          <Text style={styles.detailLabel}>详情备注</Text>
+          <TextInput
+            accessibilityLabel="待办详情备注"
+            autoFocus
+            maxLength={4000}
+            multiline
+            onChangeText={(value) => {
+              setNotes(value);
+              setError(null);
+            }}
+            placeholder="记录会议号、密码、链接，或其他需要随手查看的信息…"
+            placeholderTextColor={theme.t.textTertiary}
+            style={styles.detailNotes}
+            value={notes}
+          />
+          <View style={styles.detailHintRow}>
+            <Text style={styles.detailHint}>这里的换行会原样保留。</Text>
+            <Text style={styles.detailCount}>{notes.length}/4000</Text>
+          </View>
+          {error ? <Text style={styles.detailError}>{error}</Text> : null}
+        </View>
+
+        <View style={styles.detailFooter}>
+          <Pressable
+            accessibilityLabel={todo.done ? "标记为未完成" : "标记为已完成"}
+            accessibilityRole="button"
+            onPress={() => void todos.patchTodo(todo.id, { done: !todo.done })}
+            style={({ hovered }: PressState) => [
+              styles.detailStatusButton,
+              motion,
+              {
+                backgroundColor: hovered ? meta.tint : theme.t.controlIdle,
+              } as ViewStyle,
+            ]}
+          >
+            {todo.done ? (
+              <RiCheckboxCircleLine color={meta.color} size={15} />
+            ) : (
+              <View style={[styles.checkbox, { borderColor: meta.color } as ViewStyle]} />
+            )}
+            <Text style={[styles.detailStatusText, { color: meta.text } as ViewStyle]}>
+              {todo.done ? "已完成" : "标记完成"}
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={saving}
+            onPress={() => void saveAndClose()}
+            style={({ pressed }: PressState) => [
+              styles.detailDoneButton,
+              motion,
+              pressed && ({ transform: [{ scale: 0.98 }] } as ViewStyle),
+              saving && ({ opacity: 0.65 } as ViewStyle),
+            ]}
+          >
+            <Text style={styles.detailDoneText}>{saving ? "保存中…" : "完成"}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </View>,
+    document.body,
+  );
+}
+
 function DueChip({ styles, today, todo }: { styles: TodoStyles; today: string; todo: Todo }) {
   const theme = useTheme();
   // Overdue tracks the END of the span: a task running until Friday is not late
@@ -1586,14 +1936,22 @@ function SpanProgressChip({ day, styles, todo }: { day: string; styles: TodoStyl
   );
 }
 
-/** A small clock chip showing the task's time block on its due date. */
+/** A small clock chip showing the task's 24-hour time block. Keep the unset
+ * state explicit so it is never ambiguous whether a card has a hidden time. */
 function TimeChip({ styles, todo }: { styles: TodoStyles; todo: Todo }) {
   const theme = useTheme();
-  const label = todo.endTime ? `${todo.startTime}–${todo.endTime}` : todo.startTime;
+  const label = todo.startTime
+    ? todo.endTime
+      ? `${todo.startTime}–${todo.endTime}`
+      : todo.startTime
+    : todo.endTime
+      ? `截至 ${todo.endTime}`
+      : "未设时间";
+  const color = todo.startTime || todo.endTime ? theme.t.textSecondary : theme.t.textTertiary;
   return (
     <View style={[styles.chip, { backgroundColor: theme.t.controlIdle } as ViewStyle]}>
-      <RiTimeLine color={theme.t.textSecondary} size={10} />
-      <Text style={[styles.chipText, { color: theme.t.textSecondary } as ViewStyle]}>{label}</Text>
+      <RiTimeLine color={color} size={10} />
+      <Text style={[styles.chipText, { color } as ViewStyle]}>{label}</Text>
     </View>
   );
 }
@@ -1926,6 +2284,31 @@ function TimeRangeEditor({
   const { t } = theme;
   const [start, setStart] = useState(todo.startTime ?? "");
   const [end, setEnd] = useState(todo.endTime ?? "");
+  const skipBlur = useRef<"start" | "end" | null>(null);
+  const normalize = (value: string): string | null => {
+    const cleaned = value.trim().replace(/：/g, ":");
+    const match = /^(\d{1,2}):(\d{2})$/.exec(cleaned) ?? /^(\d{1,2})(\d{2})$/.exec(cleaned);
+    if (!match) return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (hour > 23 || minute > 59) return null;
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  };
+  const commit = (kind: "start" | "end", value: string) => {
+    const current = kind === "start" ? todo.startTime : todo.endTime;
+    if (!value.trim()) {
+      if (kind === "start") setStart("");
+      else setEnd("");
+      onPatch(kind === "start" ? { startTime: null } : { endTime: null });
+      return;
+    }
+    const normalized = normalize(value);
+    if (kind === "start") setStart(normalized ?? current ?? "");
+    else setEnd(normalized ?? current ?? "");
+    if (normalized && normalized !== current) {
+      onPatch(kind === "start" ? { startTime: normalized } : { endTime: normalized });
+    }
+  };
   const inputStyle: React.CSSProperties = {
     background: t.cardSurfaceAlt,
     border: `1px solid ${t.separator}`,
@@ -1935,28 +2318,67 @@ function TimeRangeEditor({
     fontSize: 12.5,
     outline: "none",
     padding: "5px 7px",
+    width: 72,
   };
   return (
     <div style={{ alignItems: "center", display: "flex", gap: 6, padding: "2px 10px 6px" }}>
       <input
-        aria-label="开始时间"
-        onChange={(event) => {
-          setStart(event.target.value);
-          onPatch({ startTime: event.target.value || null });
+        aria-label="开始时间，24 小时制"
+        autoComplete="off"
+        inputMode="numeric"
+        maxLength={5}
+        onBlur={() => {
+          if (skipBlur.current === "start") {
+            skipBlur.current = null;
+          } else {
+            commit("start", start);
+          }
         }}
+        onChange={(event) => setStart(event.target.value)}
+        onFocus={(event) => event.currentTarget.select()}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Escape") {
+            skipBlur.current = "start";
+            setStart(todo.startTime ?? "");
+            event.currentTarget.blur();
+          }
+        }}
+        placeholder="HH:MM"
+        spellCheck={false}
         style={inputStyle}
-        type="time"
+        title="24 小时制，例如 09:30 或 18:45"
+        type="text"
         value={start}
       />
       <span style={{ color: t.textTertiary, fontSize: 12 }}>→</span>
       <input
-        aria-label="结束时间"
-        onChange={(event) => {
-          setEnd(event.target.value);
-          onPatch({ endTime: event.target.value || null });
+        aria-label="结束时间，24 小时制"
+        autoComplete="off"
+        inputMode="numeric"
+        maxLength={5}
+        onBlur={() => {
+          if (skipBlur.current === "end") {
+            skipBlur.current = null;
+          } else {
+            commit("end", end);
+          }
         }}
+        onChange={(event) => setEnd(event.target.value)}
+        onFocus={(event) => event.currentTarget.select()}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Escape") {
+            skipBlur.current = "end";
+            setEnd(todo.endTime ?? "");
+            event.currentTarget.blur();
+          }
+        }}
+        placeholder="HH:MM"
+        spellCheck={false}
         style={inputStyle}
-        type="time"
+        title="24 小时制，例如 09:30 或 18:45"
+        type="text"
         value={end}
       />
       {start || end ? (
@@ -1967,6 +2389,7 @@ function TimeRangeEditor({
             setEnd("");
             onPatch({ startTime: null, endTime: null });
           }}
+          onMouseDown={(event) => event.preventDefault()}
           onMouseEnter={(event) => {
             event.currentTarget.style.background = `rgba(${accent.rgb},0.12)`;
           }}
@@ -1997,6 +2420,7 @@ function TodoContextMenu({
   accent,
   onClose,
   onEdit,
+  onOpenDetail,
   theme,
   today,
   todo,
@@ -2007,6 +2431,7 @@ function TodoContextMenu({
   accent: Accent;
   onClose: () => void;
   onEdit: (id: string) => void;
+  onOpenDetail: (id: string) => void;
   theme: Theme;
   today: string;
   todo: Todo;
@@ -2055,8 +2480,15 @@ function TodoContextMenu({
     },
     {
       kind: "item",
-      key: "edit",
-      label: "编辑内容",
+      key: "detail",
+      label: "打开详情",
+      icon: <RiStickyNoteLine color={iconColor} size={15} />,
+      run: () => onOpenDetail(todo.id),
+    },
+    {
+      kind: "item",
+      key: "rename",
+      label: "重命名",
       icon: <RiPencilLine color={iconColor} size={15} />,
       run: () => onEdit(todo.id),
     },

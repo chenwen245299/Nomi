@@ -124,6 +124,8 @@ export const PROVIDER_KINDS: { value: string; label: string }[] = [
   { value: "deepseek", label: "DeepSeek" },
   { value: "openrouter", label: "OpenRouter" },
   { value: "qwen", label: "千问 / DashScope" },
+  { value: "zhipu", label: "智谱 / BigModel" },
+  { value: "minimax", label: "MiniMax" },
   { value: "mimo", label: "小米 MiMo" },
   { value: "kimi", label: "Kimi / Moonshot" },
   { value: "ollama", label: "Ollama" },
@@ -177,7 +179,7 @@ export function isChatModel(model: ProviderModel): boolean {
 export function supportsVision(model: ProviderModel): boolean {
   return (
     normalizeCategory(model.category) === "vision" ||
-    (model.inputModalities ?? []).some((modality) => ["image", "video"].includes(modality)) ||
+    (model.inputModalities ?? []).includes("image") ||
     model.capabilities.some((capability) => capability === "image" || capability === "vision")
   );
 }
@@ -192,7 +194,11 @@ export function inferModelCategory(id: string): string {
   }
   // Note: no bare "-v" version-suffix rule — it never matches "-v1/-v2" (word
   // boundary) yet false-positives ids ending in "-v", wrongly flagging vision.
-  if (/vision|-vl|vl-|vl$|multimodal|omni|gpt-4o|pixtral|glm-4v|internvl/.test(s)) {
+  if (
+    /vision|-vl|vl-|vl$|multimodal|omni|gpt-4o|pixtral|glm-(?:4v|5\.3-flash)|internvl|minimax-m3/.test(
+      s,
+    )
+  ) {
     return "vision";
   }
   return "text";
@@ -211,8 +217,24 @@ export function inferModelCapabilities(id: string): string[] {
   if (/video|sora|veo|kling|cogvideo|hunyuanvideo|wan2(?:\.|-)/.test(s)) {
     capabilities.push("video");
   }
-  if (/vision|-vl|vl-|vl$|multimodal|omni|gpt-4o|pixtral|glm-4v|internvl/.test(s)) {
+  if (
+    /vision|-vl|vl-|vl$|multimodal|omni|gpt-4o|pixtral|glm-(?:4v|5\.3-flash)|internvl|minimax-m3/.test(
+      s,
+    )
+  ) {
     capabilities.push("image");
+  }
+  if (/glm-5\.3(?:-flash)?/.test(s)) {
+    capabilities.push("tool", "reasoning");
+  }
+  if (/glm-5\.3-flash/.test(s)) {
+    capabilities.push("video");
+  }
+  if (/minimax-m(?:2(?:\.|$)|3(?:$|-))/.test(s)) {
+    capabilities.push("tool", "reasoning");
+  }
+  if (/minimax-m3(?:$|-)/.test(s)) {
+    capabilities.push("video");
   }
   if (
     /reasoning|thinking|deepseek-r1|(?:^|[-_/])r1(?:$|[-_/])|qwq|(?:^|[-_/])o[134](?:$|[-_/])/.test(
@@ -233,6 +255,15 @@ const KIND_KEYWORDS: [string, string][] = [
   ["千问", "qwen"],
   ["通义", "qwen"],
   ["dashscope", "qwen"],
+  ["zhipu", "zhipu"],
+  ["智谱", "zhipu"],
+  ["bigmodel", "zhipu"],
+  ["chatglm", "zhipu"],
+  ["glm", "zhipu"],
+  ["z.ai", "zhipu"],
+  ["z-ai", "zhipu"],
+  ["minimax", "minimax"],
+  ["稀宇", "minimax"],
   ["mimo", "mimo"],
   ["xiaomi", "mimo"],
   ["小米", "mimo"],
@@ -272,9 +303,71 @@ export const DEEPSEEK_PEAK_TIME_RANGES: PricingTimeRange[] = [
   { startHour: 14, endHour: 18 },
 ];
 
-// Model parameter sizes come straight from the vendor (no name-parsing): flash is
-// 284B, pro is 1.6T. The vision model is flash-based (also 284B).
 export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
+  minimax: {
+    baseUrl: "https://api.minimax.cn/v1",
+    models: [
+      {
+        id: "MiniMax-M3",
+        name: "MiniMax-M3",
+        capabilities: ["image", "video", "tool", "reasoning"],
+        category: "vision",
+        size: "",
+        starred: true,
+        contextLength: 1_000_000,
+        inputModalities: ["text", "image", "video"],
+        outputModalities: ["text"],
+      },
+      ...[
+        "MiniMax-M2.7",
+        "MiniMax-M2.7-highspeed",
+        "MiniMax-M2.5",
+        "MiniMax-M2.5-highspeed",
+        "MiniMax-M2.1",
+        "MiniMax-M2.1-highspeed",
+        "MiniMax-M2",
+      ].map((id) => ({
+        id,
+        name: id,
+        capabilities: ["tool", "reasoning"],
+        category: "text",
+        size: "",
+        starred: false,
+        contextLength: 204_800,
+        inputModalities: ["text"],
+        outputModalities: ["text"],
+      })),
+    ],
+  },
+  zhipu: {
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    models: [
+      {
+        id: "glm-5.3-flash",
+        name: "GLM-5.3-Flash",
+        capabilities: ["image", "video", "tool", "reasoning"],
+        category: "vision",
+        size: "320B / 18B activated",
+        starred: true,
+        contextLength: 1_000_000,
+        inputModalities: ["text", "image", "video", "file"],
+        outputModalities: ["text"],
+      },
+      {
+        id: "glm-5.3",
+        name: "GLM-5.3",
+        capabilities: ["tool", "reasoning"],
+        category: "text",
+        size: "",
+        starred: false,
+        contextLength: 1_000_000,
+        inputModalities: ["text"],
+        outputModalities: ["text"],
+      },
+    ],
+  },
+  // DeepSeek model sizes come straight from the vendor (no name-parsing): flash
+  // is 284B, pro is 1.6T, and the vision model is flash-based (also 284B).
   deepseek: {
     baseUrl: "https://api.deepseek.com",
     models: [

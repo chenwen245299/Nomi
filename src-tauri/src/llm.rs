@@ -126,6 +126,9 @@ pub struct AccumulatedToolCall {
 pub struct AssistantTurn {
     pub content: String,
     pub reasoning: String,
+    /// Provider-native structured reasoning. MiniMax requires the exact value
+    /// to be replayed when an assistant tool call is followed by tool results.
+    pub reasoning_details: Option<Value>,
     pub tool_calls: Vec<AccumulatedToolCall>,
     /// The provider's `finish_reason` ("stop", "tool_calls", "length", …).
     pub finish_reason: Option<String>,
@@ -251,6 +254,8 @@ pub async fn stream_chat(
                 &mut started,
                 channel,
                 spec.reasoning_fields(),
+                spec.streaming_text_is_cumulative(),
+                spec.streaming_reasoning_is_cumulative(),
             );
         }
         if done {
@@ -268,6 +273,8 @@ fn apply_chunk(
     started: &mut Vec<bool>,
     channel: &tauri::ipc::Channel<StreamEvent>,
     reasoning_fields: &[&str],
+    text_is_cumulative: bool,
+    reasoning_is_cumulative: bool,
 ) {
     let choice = &json["choices"][0];
     if let Some(fr) = choice["finish_reason"].as_str() {
@@ -278,23 +285,63 @@ fn apply_chunk(
     if let Some(text) = delta["content"].as_str()
         && !text.is_empty()
     {
-        turn.content.push_str(text);
-        let _ = channel.send(StreamEvent::Text {
-            delta: text.to_string(),
-        });
+        let addition = if text_is_cumulative {
+            text.strip_prefix(&turn.content).unwrap_or(text)
+        } else {
+            text
+        };
+        if !addition.is_empty() {
+            turn.content.push_str(addition);
+            let _ = channel.send(StreamEvent::Text {
+                delta: addition.to_string(),
+            });
+        }
     }
 
     // Reasoning delta key varies by provider (DeepSeek `reasoning_content`, some
     // gateways `reasoning`); the spec supplies the keys to try, in order.
-    if let Some(r) = reasoning_fields
+    let direct_reasoning = reasoning_fields
         .iter()
         .find_map(|field| delta[*field].as_str())
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty());
+    if let Some(r) = direct_reasoning {
+        let addition = if reasoning_is_cumulative {
+            r.strip_prefix(&turn.reasoning).unwrap_or(r)
+        } else {
+            r
+        };
+        if !addition.is_empty() {
+            turn.reasoning.push_str(addition);
+            let _ = channel.send(StreamEvent::Reasoning {
+                delta: addition.to_string(),
+            });
+        }
+    }
+
+    // MiniMax can return structured reasoning alongside interleaved tool use.
+    // Keep the native object for exact replay. When it is the only reasoning
+    // field, derive the visible text by taking the suffix of its cumulative
+    // textual representation, avoiding duplicate UI deltas.
+    if let Some(details) = delta
+        .get("reasoning_details")
+        .filter(|value| !value.is_null())
     {
-        turn.reasoning.push_str(r);
-        let _ = channel.send(StreamEvent::Reasoning {
-            delta: r.to_string(),
-        });
+        turn.reasoning_details = Some(details.clone());
+        if direct_reasoning.is_none() {
+            let text = details
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.get("text").and_then(Value::as_str))
+                .collect::<String>();
+            let addition = text.strip_prefix(&turn.reasoning).unwrap_or(&text);
+            if !addition.is_empty() {
+                turn.reasoning.push_str(addition);
+                let _ = channel.send(StreamEvent::Reasoning {
+                    delta: addition.to_string(),
+                });
+            }
+        }
     }
 
     if let Some(tool_calls) = delta["tool_calls"].as_array() {
@@ -388,6 +435,36 @@ mod tests {
         assert_eq!(done["messageId"], "msg1");
     }
 
+    #[test]
+    fn cumulative_minimax_chunks_only_append_the_new_suffix() {
+        let mut turn = AssistantTurn::default();
+        let mut started = Vec::new();
+        for (content, reasoning) in [("你", "先"), ("你好", "先想"), ("你好。", "先想好")]
+        {
+            apply_chunk(
+                &serde_json::json!({
+                    "choices": [{
+                        "delta": {
+                            "content": content,
+                            "reasoning_content": reasoning,
+                            "reasoning_details": [{ "type": "reasoning.text", "text": reasoning }]
+                        },
+                        "finish_reason": null
+                    }]
+                }),
+                &mut turn,
+                &mut started,
+                &sink(),
+                &["reasoning_content"],
+                true,
+                true,
+            );
+        }
+        assert_eq!(turn.content, "你好。");
+        assert_eq!(turn.reasoning, "先想好");
+        assert_eq!(turn.reasoning_details.unwrap()[0]["text"], "先想好");
+    }
+
     /// A throwaway HTTP server that answers exactly one request with an OpenAI
     /// streaming (SSE) body. `first`/`rest` are written as two TCP writes with a
     /// pause between them, so the parser's cross-chunk buffering is exercised and
@@ -429,6 +506,7 @@ mod tests {
             model_id: "mock-model".into(),
             supports_tools: false,
             supports_vision: false,
+            supports_video: false,
             input_price: None,
             output_price: None,
             cache_hit_input_price: None,

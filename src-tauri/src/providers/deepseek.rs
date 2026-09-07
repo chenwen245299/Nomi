@@ -456,6 +456,7 @@ mod tests {
             model_id: "deepseek-v4-flash-vision-exp".into(),
             supports_tools: false,
             supports_vision: true,
+            supports_video: false,
             input_price: None,
             output_price: None,
             cache_hit_input_price: None,

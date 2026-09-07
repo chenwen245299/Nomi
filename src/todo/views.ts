@@ -62,20 +62,18 @@ function completedOn(todo: Todo, day: string): boolean {
 }
 
 /**
- * Whether a todo belongs to `scope`. The dated scopes reach backwards without a
- * bound — an overdue task keeps showing up in 今天 until it is dealt with, which
- * is the whole point of a due date — and also keep whatever was finished today,
- * so the day's list still shows the work that got done.
+ * Whether a todo belongs to `scope`. Open overdue work remains visible until it
+ * is dealt with. A completed task only remains in 今天 / 未来七天 when it was
+ * actually completed today; older completed work belongs in 已完成 instead.
  */
 export function inScope(todo: Todo, scope: TodoScope, today: string): boolean {
   switch (scope) {
     case "today":
-      // Started (or overdue) — a span that began last week is still today's work.
-      return (todo.dueDate !== null && todo.dueDate <= today) || completedOn(todo, today);
+      return todo.done ? completedOn(todo, today) : todo.dueDate !== null && todo.dueDate <= today;
     case "week":
-      return (
-        (todo.dueDate !== null && todo.dueDate <= shiftKey(today, 6)) || completedOn(todo, today)
-      );
+      return todo.done
+        ? completedOn(todo, today)
+        : todo.dueDate !== null && todo.dueDate <= shiftKey(today, 6);
     case "all":
       return true;
     case "done":
@@ -89,24 +87,47 @@ export function todosInScope(todos: Todo[], scope: TodoScope, today: string): To
   return todos.filter((todo) => inScope(todo, scope, today));
 }
 
-/** Board order inside one quadrant: unfinished first, then the manual order. */
+function clockKey(todo: Todo): string {
+  return todo.startTime ?? todo.endTime ?? "99:99";
+}
+
+/** Board order inside one quadrant: date first, then the day's 24-hour timeline.
+ * Tasks without a time sit after timed tasks on the same date. */
 export function sortForBoard(todos: Todo[]): Todo[] {
   return [...todos].sort(
-    (a, b) => Number(a.done) - Number(b.done) || a.order - b.order || a.createdAt - b.createdAt,
+    (a, b) =>
+      (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99") ||
+      clockKey(a).localeCompare(clockKey(b)) ||
+      Number(a.done) - Number(b.done) ||
+      a.order - b.order ||
+      a.createdAt - b.createdAt,
   );
 }
 
 /**
- * List order: unfinished first, then by due date (undated last), then by
- * quadrant so the most important work floats to the top of an equal day.
+ * List order: due date and 24-hour timeline first, then completion state and
+ * quadrant. Untimed work sits after timed work on the same date.
  */
 export function sortForList(todos: Todo[]): Todo[] {
   return [...todos].sort(
     (a, b) =>
-      Number(a.done) - Number(b.done) ||
       (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99") ||
+      clockKey(a).localeCompare(clockKey(b)) ||
+      Number(a.done) - Number(b.done) ||
       a.quadrant - b.quadrant ||
       a.order - b.order,
+  );
+}
+
+/** Order rows that already share one displayed day by their clock time. */
+export function sortForDay(todos: Todo[]): Todo[] {
+  return [...todos].sort(
+    (a, b) =>
+      clockKey(a).localeCompare(clockKey(b)) ||
+      Number(a.done) - Number(b.done) ||
+      a.quadrant - b.quadrant ||
+      a.order - b.order ||
+      a.createdAt - b.createdAt,
   );
 }
 
@@ -117,14 +138,19 @@ export interface TodoGroup {
   todos: Todo[];
 }
 
-function group(key: string, title: string, todos: Todo[]): TodoGroup[] {
-  return todos.length > 0 ? [{ key, title, todos: sortForList(todos) }] : [];
+function group(
+  key: string,
+  title: string,
+  todos: Todo[],
+  sort: (items: Todo[]) => Todo[] = sortForList,
+): TodoGroup[] {
+  return todos.length > 0 ? [{ key, title, todos: sort(todos) }] : [];
 }
 
 /**
  * Split a scope's todos into the sections the list layout renders. Sections are
- * ordered by urgency (overdue first) and each is internally sorted by
- * `sortForList`, so finished items sink to the bottom of their own section.
+ * ordered by urgency (overdue first). Dated day sections follow the 24-hour
+ * timeline; broader sections follow date, time, completion state and quadrant.
  */
 export function groupForList(todos: Todo[], scope: TodoScope, today: string): TodoGroup[] {
   const overdue = todos.filter((todo) => isOverdue(todo, today));
@@ -147,7 +173,7 @@ export function groupForList(todos: Todo[], scope: TodoScope, today: string): To
   }
 
   if (scope === "today") {
-    return [...group("overdue", "已逾期", overdue), ...group("today", "今天", rest)];
+    return [...group("overdue", "已逾期", overdue), ...group("today", "今天", rest, sortForDay)];
   }
 
   if (scope === "week") {
@@ -179,7 +205,7 @@ export function groupForList(todos: Todo[], scope: TodoScope, today: string): To
         .map(([day, items]) => ({
           key: day,
           title: dayHeading(day, today),
-          todos: sortForList(items),
+          todos: sortForDay(items),
         })),
       ...group("undated", "未安排日期", undated),
     ];
@@ -192,6 +218,7 @@ export function groupForList(todos: Todo[], scope: TodoScope, today: string): To
         "today",
         "今天",
         rest.filter((todo) => occupiesDay(todo, today)),
+        sortForDay,
       ),
       ...group(
         "upcoming",
@@ -206,8 +233,8 @@ export function groupForList(todos: Todo[], scope: TodoScope, today: string): To
     ];
   }
 
-  // A single quadrant keeps the manual board order — that ordering is the user's
-  // own ranking of the quadrant, and re-sorting it here would throw it away.
+  // A single quadrant still follows date and clock time; manual order resolves
+  // ties between tasks scheduled for the same moment.
   return [{ key: scope, title: "", todos: sortForBoard(todos) }];
 }
 

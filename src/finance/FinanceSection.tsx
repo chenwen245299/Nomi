@@ -60,6 +60,19 @@ import type { FinanceData } from "./useFinance";
 type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
 
 const isTauriRuntime = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const localDateTime24 = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+function formatCaptureTimestamp(seconds: number): string {
+  return localDateTime24.format(new Date(seconds * 1000));
+}
 
 /** Receipts are read on demand and kept for the session — the same picture shows
  *  up in the chat, in the confirm dialog and behind several records. */
@@ -1163,7 +1176,7 @@ function UserTurn({ message, styles }: { message: CaptureMessage; styles: Financ
         ) : null}
         {message.text ? <Text style={styles.bubbleNote}>{message.text}</Text> : null}
       </View>
-      <Text style={styles.timestamp}>{new Date(message.createdAt * 1000).toLocaleString()}</Text>
+      <Text style={styles.timestamp}>{formatCaptureTimestamp(message.createdAt)}</Text>
       {previewing && url ? (
         <AttachmentPreviewModal
           kind="image"
@@ -1328,7 +1341,7 @@ function AssistantTurn({
           ) : null}
         </View>
       </View>
-      <Text style={styles.timestamp}>{new Date(message.createdAt * 1000).toLocaleString()}</Text>
+      <Text style={styles.timestamp}>{formatCaptureTimestamp(message.createdAt)}</Text>
     </View>
   );
 }

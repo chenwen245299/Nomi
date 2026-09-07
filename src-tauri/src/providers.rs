@@ -23,8 +23,10 @@ pub(crate) mod spec;
 mod deepseek;
 mod generic;
 mod mimo;
+mod minimax;
 mod openrouter;
 mod qwen;
+mod zhipu;
 
 pub(crate) use spec::{ProviderBalance, ProviderSpec, spec_for};
 
@@ -423,6 +425,7 @@ pub(crate) struct ChatTarget {
     pub model_id: String,
     pub supports_tools: bool,
     pub supports_vision: bool,
+    pub supports_video: bool,
     pub input_price: Option<f64>,
     pub output_price: Option<f64>,
     pub cache_hit_input_price: Option<f64>,
@@ -487,7 +490,7 @@ pub(crate) fn resolve_chat_target(
         return Err("该服务商未填写 API 地址。".into());
     }
     let model = provider.models.iter().find(|m| m.id == model_id);
-    let (supports_tools, supports_vision) = model
+    let (supports_tools, supports_vision, supports_video) = model
         .map(|m| {
             (
                 m.capabilities.iter().any(|c| c == "tool"),
@@ -496,11 +499,15 @@ pub(crate) fn resolve_chat_target(
                 m.category == "vision"
                     || m.input_modalities
                         .iter()
-                        .any(|modality| modality == "image" || modality == "video")
+                        .any(|modality| modality == "image")
                     || m.capabilities.iter().any(|c| c == "image" || c == "vision"),
+                m.input_modalities
+                    .iter()
+                    .any(|modality| modality == "video")
+                    || m.capabilities.iter().any(|c| c == "video"),
             )
         })
-        .unwrap_or((false, false));
+        .unwrap_or((false, false, false));
     Ok(ChatTarget {
         base_url: provider.base_url.clone(),
         provider_name: provider.name.clone(),
@@ -509,6 +516,7 @@ pub(crate) fn resolve_chat_target(
         model_id: model_id.to_string(),
         supports_tools,
         supports_vision,
+        supports_video,
         input_price: model.and_then(|m| m.input_price),
         output_price: model.and_then(|m| m.output_price),
         cache_hit_input_price: model.and_then(|m| m.cache_hit_input_price),

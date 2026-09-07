@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { RiCloseLine, RiDownload2Line } from "@remixicon/react";
 
-export type AttachmentPreviewKind = "image" | "pdf";
+export type AttachmentPreviewKind = "image" | "pdf" | "video";
 
 /** Shared full-window preview used by chat attachments and finance receipts. */
 export function AttachmentPreviewModal({
@@ -28,7 +28,7 @@ export function AttachmentPreviewModal({
 
   return createPortal(
     <div
-      aria-label={kind === "pdf" ? "PDF 预览" : "图片预览"}
+      aria-label={kind === "pdf" ? "PDF 预览" : kind === "video" ? "视频预览" : "图片预览"}
       aria-modal="true"
       onClick={onClose}
       role="dialog"
@@ -121,6 +121,19 @@ export function AttachmentPreviewModal({
               width: "100%",
             }}
             title={`PDF 预览：${name}`}
+          />
+        ) : kind === "video" ? (
+          <video
+            autoPlay
+            controls
+            src={url}
+            style={{
+              background: "#000000",
+              borderRadius: 12,
+              boxShadow: "0 28px 80px rgba(0,0,0,0.42)",
+              maxHeight: "88vh",
+              maxWidth: "92vw",
+            }}
           />
         ) : (
           <img

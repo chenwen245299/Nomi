@@ -35,8 +35,6 @@ use crate::chat::{self, Attachment, ChatMessage, ToolCallRecord};
 use crate::llm::{self, StreamEvent};
 use crate::{exa, pdf, providers};
 
-/// Safety cap on tool-calling rounds so a misbehaving model can't loop forever.
-const MAX_TOOL_ROUNDS: usize = 8;
 /// Hard ceiling on characters returned per `get_pdf_fulltext` call.
 const PDF_FULLTEXT_MAX: usize = 15_000;
 /// Max pages `render_pdf_pages` will rasterise in one call.
@@ -235,6 +233,9 @@ fn mime_from_ext(name: &str) -> String {
         "mp3" => "audio/mpeg",
         "wav" => "audio/wav",
         "mp4" => "video/mp4",
+        "avi" => "video/x-msvideo",
+        "mov" => "video/quicktime",
+        "mkv" => "video/x-matroska",
         _ => "application/octet-stream",
     }
     .to_string()
@@ -826,6 +827,7 @@ async fn run_variant(
         &system_prompt,
         &history,
         target.supports_vision,
+        target.supports_video,
         &conv_dir,
         target.spec(),
         reference
@@ -968,6 +970,7 @@ async fn run_chat(
         &system_prompt,
         &messages,
         target.supports_vision,
+        target.supports_video,
         &conv_dir,
         target.spec(),
         reference
@@ -1040,7 +1043,10 @@ async fn generate_assistant(
     let mut have_usage = false;
     let generation_started = Instant::now();
 
-    for _round in 0..MAX_TOOL_ROUNDS {
+    // Keep following tool requests until the model produces a final response.
+    // Cancellation and provider errors are the stopping safeguards; there is no
+    // application-level round limit that can truncate a legitimate workflow.
+    loop {
         let turn = llm::stream_chat(
             target,
             &oa_messages,
@@ -1085,7 +1091,7 @@ async fn generate_assistant(
             break;
         }
 
-        oa_messages.push(json!({
+        let mut assistant_tool_message = json!({
             "role": "assistant",
             "content": turn.content,
             "tool_calls": turn.tool_calls.iter().map(|tc| json!({
@@ -1093,7 +1099,13 @@ async fn generate_assistant(
                 "type": "function",
                 "function": { "name": tc.name, "arguments": tc.arguments },
             })).collect::<Vec<_>>(),
-        }));
+        });
+        target.spec().attach_reasoning_to_assistant_message(
+            &mut assistant_tool_message,
+            &turn.reasoning,
+            turn.reasoning_details.as_ref(),
+        );
+        oa_messages.push(assistant_tool_message);
 
         let mut pending_images: Vec<String> = Vec::new();
         for tc in &turn.tool_calls {
@@ -1199,6 +1211,7 @@ fn build_oa_messages(
     system_prompt: &str,
     messages: &[ChatMessage],
     supports_vision: bool,
+    supports_video: bool,
     conv_dir: &Path,
     spec: &dyn providers::ProviderSpec,
 ) -> Vec<Value> {
@@ -1206,6 +1219,7 @@ fn build_oa_messages(
         system_prompt,
         messages,
         supports_vision,
+        supports_video,
         conv_dir,
         spec,
         None,
@@ -1216,6 +1230,7 @@ fn build_oa_messages_with_reference(
     system_prompt: &str,
     messages: &[ChatMessage],
     supports_vision: bool,
+    supports_video: bool,
     conv_dir: &Path,
     spec: &dyn providers::ProviderSpec,
     reference: Option<(&[ChatMessage], &Path)>,
@@ -1240,6 +1255,7 @@ fn build_oa_messages_with_reference(
             &mut out,
             reference_messages.iter(),
             supports_vision,
+            supports_video,
             reference_dir,
             spec,
             true,
@@ -1249,6 +1265,7 @@ fn build_oa_messages_with_reference(
         &mut out,
         active_context(messages).iter(),
         supports_vision,
+        supports_video,
         conv_dir,
         spec,
         false,
@@ -1260,6 +1277,7 @@ fn append_oa_history<'a>(
     out: &mut Vec<Value>,
     messages: impl IntoIterator<Item = &'a ChatMessage>,
     supports_vision: bool,
+    supports_video: bool,
     conv_dir: &Path,
     spec: &dyn providers::ProviderSpec,
     reference: bool,
@@ -1272,10 +1290,13 @@ fn append_oa_history<'a>(
                 } else {
                     msg.content.clone()
                 };
-                out.push(json!({ "role": "assistant", "content": content }));
+                let mut message = json!({ "role": "assistant", "content": content });
+                spec.attach_reasoning_to_assistant_message(&mut message, &msg.reasoning, None);
+                out.push(message);
             }
             "user" => {
-                let mut message = user_message_json(msg, supports_vision, conv_dir, spec);
+                let mut message =
+                    user_message_json(msg, supports_vision, supports_video, conv_dir, spec);
                 if reference {
                     prefix_message_content(&mut message, "[左侧对话·用户]");
                 }
@@ -1313,6 +1334,7 @@ fn active_context(messages: &[ChatMessage]) -> &[ChatMessage] {
 fn user_message_json(
     msg: &ChatMessage,
     supports_vision: bool,
+    supports_video: bool,
     conv_dir: &Path,
     spec: &dyn providers::ProviderSpec,
 ) -> Value {
@@ -1327,6 +1349,13 @@ fn user_message_json(
         if att.kind == "image"
             && supports_vision
             && let Some(part) = spec.image_part(&conv_dir.join(&att.path), &att.mime_type)
+        {
+            parts.push(part);
+            continue;
+        }
+        if att.kind == "video"
+            && supports_video
+            && let Some(part) = spec.video_part(&conv_dir.join(&att.path), &att.mime_type)
         {
             parts.push(part);
             continue;
@@ -2901,6 +2930,7 @@ mod tests {
             model_id: "priced-model".into(),
             supports_tools: false,
             supports_vision: false,
+            supports_video: false,
             input_price: Some(1.0),
             output_price: Some(2.0),
             cache_hit_input_price: Some(0.02),
@@ -2964,12 +2994,38 @@ mod tests {
             "",
             &[user, old_answer, selected_answer],
             false,
+            false,
             Path::new("."),
             providers::spec_for("openai"),
         );
         assert_eq!(history.len(), 2);
         assert_eq!(history[0]["content"], "question");
         assert_eq!(history[1]["content"], "selected answer");
+    }
+
+    #[test]
+    fn minimax_video_attachment_becomes_a_native_provider_part() {
+        let mut user = text_message("user", "user", "请概括视频");
+        user.attachments.push(chat::Attachment {
+            id: "video-1".into(),
+            kind: "video".into(),
+            name: "clip.mp4".into(),
+            mime_type: "video/mp4".into(),
+            path: "assets/clip.mp4".into(),
+            size: Some(12),
+            text_status: None,
+        });
+        let history = build_oa_messages(
+            "",
+            &[user],
+            true,
+            true,
+            Path::new("/tmp/conversation"),
+            providers::spec_for("minimax"),
+        );
+        assert_eq!(history[0]["content"][0]["type"], "text");
+        assert_eq!(history[0]["content"][1]["type"], "_nomi_minimax_video_file");
+        assert_eq!(history[0]["content"][1]["mime"], "video/mp4");
     }
 
     #[test]
@@ -2992,6 +3048,7 @@ mod tests {
                 current_user,
             ],
             false,
+            false,
             Path::new("."),
             providers::spec_for("openai"),
         );
@@ -3011,6 +3068,7 @@ mod tests {
         let history = build_oa_messages_with_reference(
             "",
             &[sidebar_question],
+            false,
             false,
             Path::new("."),
             providers::spec_for("openai"),
@@ -3213,7 +3271,8 @@ mod tests {
         );
         assert_eq!(std::fs::read_dir(&assets).unwrap().count(), 1);
 
-        let history = build_oa_messages("", &[], false, &conv, providers::spec_for("openai"));
+        let history =
+            build_oa_messages("", &[], false, false, &conv, providers::spec_for("openai"));
         assert_eq!(history.len(), 1);
         assert_eq!(history[0]["role"], "system");
         assert!(

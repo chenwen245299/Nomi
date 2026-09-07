@@ -377,6 +377,16 @@
   background: rgba(var(--nomi-editor-accent), 0.18);
 }
 
+/* A checked Markdown task is complete, so strike the text that follows its
+   checkbox in both editable and read-only surfaces. This is deliberately visual
+   only: unchecking the item restores the text without rewriting the Markdown. */
+.nomi-editor .vditor-reset li.vditor-task:has(> input[type="checkbox"]:checked),
+.nomi-md-preview.vditor-reset li.vditor-task:has(> input[type="checkbox"]:checked) {
+  text-decoration-line: line-through;
+  text-decoration-color: rgba(92, 103, 118, 0.72);
+  text-decoration-thickness: 1.4px;
+}
+
 /* Read-only Markdown render (MarkdownPreview + shared preview surfaces). */
 .nomi-md-preview {
   min-width: 0;

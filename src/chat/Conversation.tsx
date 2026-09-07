@@ -50,6 +50,7 @@ import {
   RiThumbUpFill,
   RiThumbUpLine,
   RiToolsFill,
+  RiVideoLine,
 } from "@remixicon/react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -75,11 +76,30 @@ import {
 import { useConversation, type DraftToolCall, type StreamingMessage } from "./useConversation";
 import type { ConversationContextSource } from "./chatRuntime";
 import { renderMarkdown } from "./markdown";
-import { effortScaleFor, mapEffort, THINKING_LABEL, type ThinkingEffort } from "./reasoning";
+import {
+  effortScaleFor,
+  mapEffort,
+  thinkingCanBeDisabled,
+  THINKING_LABEL,
+  type ThinkingEffort,
+} from "./reasoning";
 
 type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
 
-const ATTACH_EXTS = ["pdf", "png", "jpg", "jpeg", "webp", "gif", "txt", "md"];
+const ATTACH_EXTS = [
+  "pdf",
+  "png",
+  "jpg",
+  "jpeg",
+  "webp",
+  "gif",
+  "mp4",
+  "avi",
+  "mov",
+  "mkv",
+  "txt",
+  "md",
+];
 
 interface PendingAttachment {
   key: string;
@@ -1005,6 +1025,8 @@ function attachmentIcon(att: { mimeType?: string; kind?: string }, color: string
   if (att.mimeType === "application/pdf") return <RiFilePdf2Line color={color} size={size} />;
   if (att.kind === "image" || att.mimeType?.startsWith("image/"))
     return <RiImage2Line color={color} size={size} />;
+  if (att.kind === "video" || att.mimeType?.startsWith("video/"))
+    return <RiVideoLine color={color} size={size} />;
   return <RiFileTextLine color={color} size={size} />;
 }
 
@@ -1058,6 +1080,7 @@ function toolImageThumbnailSize(width: number, height: number) {
 function attachmentPreviewKind(att: Attachment): AttachmentPreviewKind | null {
   if (att.mimeType === "application/pdf") return "pdf";
   if (att.kind === "image" || att.mimeType.startsWith("image/")) return "image";
+  if (att.kind === "video" || att.mimeType.startsWith("video/")) return "video";
   return null;
 }
 
@@ -2814,8 +2837,13 @@ export function ConversationView({
   const hasModel = Boolean(conversation.providerId && conversation.modelId);
   const selectedProvider = providers.find((provider) => provider.id === conversation.providerId);
   const thinkingEfforts = effortScaleFor(selectedProvider, conversation.modelId);
-  const thinkingEffort =
+  const canDisableThinking = thinkingCanBeDisabled(selectedProvider, conversation.modelId);
+  const selectedThinkingEffort =
     thinkingSelection.modelKey === thinkingModelKey ? thinkingSelection.effort : "off";
+  // GLM-5.3 models reject `thinking: disabled`; show their real default instead
+  // of presenting an "off" state the API cannot honour.
+  const thinkingEffort =
+    !canDisableThinking && selectedThinkingEffort === "off" ? "max" : selectedThinkingEffort;
   const thinkingMenuOpen = thinkingMenuFor === thinkingModelKey;
   const lastContextMarker = convo.messages.reduce(
     (last, message, index) => (message.role === "context_marker" ? index : last),
@@ -3255,13 +3283,17 @@ export function ConversationView({
                             thinkingEffort,
                             effortScaleFor(targetProvider, modelId),
                           );
+                          const targetEffort =
+                            mapped === "off" && !thinkingCanBeDisabled(targetProvider, modelId)
+                              ? "max"
+                              : mapped;
                           return convo.generateVariant(
                             sourceMessageId,
                             responseGroupId,
                             providerId,
                             modelId,
                             replace,
-                            mapped === "off" ? null : mapped,
+                            targetEffort === "off" ? null : targetEffort,
                           );
                         }}
                         onSelect={convo.selectResponse}
@@ -3447,7 +3479,12 @@ export function ConversationView({
                   {thinkingMenuOpen && thinkingEfforts.length > 0 ? (
                     <View style={styles.thinkingMenu}>
                       <Text style={styles.thinkingMenuTitle}>思考强度</Text>
-                      {(["off", ...thinkingEfforts] as ThinkingEffort[]).map((effort) => {
+                      {(
+                        [
+                          ...(canDisableThinking ? (["off"] as ThinkingEffort[]) : []),
+                          ...thinkingEfforts,
+                        ] as ThinkingEffort[]
+                      ).map((effort) => {
                         const active = effort === thinkingEffort;
                         return (
                           <Pressable

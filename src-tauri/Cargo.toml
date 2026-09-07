@@ -31,7 +31,7 @@ tauri-plugin-process = "2"
 aes-gcm = "0.10"
 rand = "0.8"
 # Backend-side HTTP so provider API keys never reach the webview/frontend.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
 tokio = { version = "1", features = ["full"] }
 # MCP server exposed to external agents (Claude Code / Claude Desktop / Codex).
 # Runs as a stdio subprocess the client launches — `nomi --mcp-stdio` — and reads

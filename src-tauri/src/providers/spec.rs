@@ -26,7 +26,7 @@ use base64::Engine;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
-use super::{FetchedProviderModel, deepseek, generic, mimo, openrouter, qwen};
+use super::{FetchedProviderModel, deepseek, generic, mimo, minimax, openrouter, qwen, zhipu};
 use crate::providers::ChatTarget;
 
 // ── Balance DTO (the shape the webview renders) ──────────────────────────────
@@ -120,11 +120,41 @@ pub(crate) trait ProviderSpec: Send + Sync {
         &["reasoning_content", "reasoning"]
     }
 
+    /// Most OpenAI-compatible streams emit token deltas. A small number of
+    /// providers emit the complete text-so-far on every chunk instead.
+    fn streaming_text_is_cumulative(&self) -> bool {
+        false
+    }
+
+    fn streaming_reasoning_is_cumulative(&self) -> bool {
+        false
+    }
+
+    /// Preserve reasoning on an assistant message replayed to the provider.
+    /// Most OpenAI-compatible APIs neither require nor accept this field, so the
+    /// default is a no-op. GLM-5.3 needs it when a tool result follows an
+    /// interleaved-thinking turn.
+    fn attach_reasoning_to_assistant_message(
+        &self,
+        _message: &mut Value,
+        _reasoning: &str,
+        _reasoning_details: Option<&Value>,
+    ) {
+    }
+
     /// Turn one image attachment into an OpenAI content part at build time.
     /// Default inlines it as a `data:` URL. This is the *per-image* seam; the
     /// *request-level* one below can then rewrite the finished array.
     fn image_part(&self, abs_path: &Path, mime: &str) -> Option<Value> {
         inline_image_part(abs_path, mime)
+    }
+
+    /// Turn a local video attachment into an intermediate content part. Plain
+    /// OpenAI-compatible providers do not share one video dialect, so the
+    /// default rejects it. A provider can return a private placeholder here and
+    /// resolve it in `prepare_messages` (inline or via its Files API).
+    fn video_part(&self, _abs_path: &Path, _mime: &str) -> Option<Value> {
+        None
     }
 
     /// Rewrite the fully-assembled OpenAI `messages` array just before it is
@@ -163,8 +193,10 @@ pub(crate) trait ProviderSpec: Send + Sync {
 pub(crate) fn spec_for(kind: &str) -> &'static dyn ProviderSpec {
     match kind {
         "deepseek" => &deepseek::DeepSeek,
+        "minimax" => &minimax::MiniMax,
         "openrouter" => &openrouter::OpenRouter,
         "qwen" => &qwen::Qwen,
+        "zhipu" => &zhipu::Zhipu,
         "mimo" => &mimo::Mimo,
         _ => &generic::OpenAiCompatible,
     }

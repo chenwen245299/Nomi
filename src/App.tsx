@@ -2051,6 +2051,23 @@ function TitleBar({
     <View style={[styles.titlebar, glass(30, 180)]} {...TITLEBAR_DRAG}>
       <View style={styles.tbTrafficSpace} {...SPACER_DRAG} />
       <View style={styles.tbTabs}>
+        <Pressable
+          accessibilityLabel={collectionOpen ? "折叠左侧列表" : "展开左侧列表"}
+          accessibilityRole="button"
+          onPress={onToggleCollection}
+          style={({ hovered, pressed }: PressState) => [
+            styles.tabAdd,
+            motion,
+            collectionOpen && { backgroundColor: accent.selectedFill },
+            hovered && !collectionOpen && styles.tabAddHover,
+            pressed && styles.primaryButtonPressed,
+          ]}
+        >
+          <RiLayoutLeftLine
+            color={collectionOpen ? accent.accentText : theme.t.textTertiary}
+            size={17}
+          />
+        </Pressable>
         {tabs.map((tab) => {
           const dropPosition = dropTarget?.id === tab.id ? dropTarget.position : null;
           return (
@@ -2117,23 +2134,6 @@ function TitleBar({
         </Pressable>
       </View>
       <View style={styles.tbFlex} {...SPACER_DRAG} />
-      <Pressable
-        accessibilityLabel={collectionOpen ? "折叠左侧列表" : "展开左侧列表"}
-        accessibilityRole="button"
-        onPress={onToggleCollection}
-        style={({ hovered, pressed }: PressState) => [
-          styles.tabAdd,
-          motion,
-          collectionOpen && { backgroundColor: accent.selectedFill },
-          hovered && !collectionOpen && styles.tabAddHover,
-          pressed && styles.primaryButtonPressed,
-        ]}
-      >
-        <RiLayoutLeftLine
-          color={collectionOpen ? accent.accentText : theme.t.textTertiary}
-          size={17}
-        />
-      </Pressable>
       {sidebarAvailable ? (
         <Pressable
           accessibilityLabel={sidebarOpen ? "隐藏 AI 侧边栏" : "显示 AI 侧边栏"}

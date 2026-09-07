@@ -16,6 +16,18 @@ export const THINKING_LABEL: Record<ThinkingEffort, string> = {
   max: "Max",
 };
 
+/** GLM-5.3 and GLM-5.3-Flash reject requests that disable thinking. */
+export function thinkingCanBeDisabled(
+  provider: Provider | undefined,
+  modelId: string | null | undefined,
+): boolean {
+  const id = modelId?.trim() ?? "";
+  if (provider?.kind === "zhipu" && /^glm-5\.3(?:-flash)?$/i.test(id)) return false;
+  // M3 exposes an explicit disabled mode; M2.x always thinks.
+  if (provider?.kind === "minimax" && /^minimax-m2(?:\.|$)/i.test(id)) return false;
+  return true;
+}
+
 /**
  * The reasoning-effort tiers a model exposes, ascending. Empty when the model
  * has no reasoning capability (the composer then hides the thinking control).
@@ -28,6 +40,13 @@ export function effortScaleFor(
   const model = provider?.models.find((candidate) => candidate.id === modelId);
   if (!model?.capabilities.includes("reasoning")) return [];
   if (provider?.kind === "deepseek") return ["high", "max"];
+  if (provider?.kind === "zhipu" && /^glm-5\.3(?:-flash)?$/i.test(model.id)) {
+    return ["low", "high", "max"];
+  }
+  if (provider?.kind === "minimax") {
+    // MiniMax exposes adaptive thinking as a switch, not intensity levels.
+    return /^minimax-m2(?:\.|$)/i.test(model.id) ? ["max"] : ["high"];
+  }
   if (provider?.kind === "openai" || /(?:^|[-_])(gpt|o\d)/i.test(model.id)) {
     return ["minimal", "low", "medium", "high"];
   }

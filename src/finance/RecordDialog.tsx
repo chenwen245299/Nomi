@@ -313,6 +313,70 @@ export function RecordDialog({
   );
 }
 
+function normalizeTime24Input(value: string): string | null {
+  const normalized = value.trim().replace(/：/g, ":");
+  const match = /^(\d{1,2}):(\d{2})$/.exec(normalized) ?? /^(\d{1,2})(\d{2})$/.exec(normalized);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function Time24Input({
+  onChange,
+  style,
+  value,
+}: {
+  onChange: (value: string) => void;
+  style: React.CSSProperties;
+  value: string;
+}) {
+  const displayValue = normalizeTime24Input(value) ?? "";
+  const [draft, setDraft] = useState(displayValue);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      setDraft("");
+      if (value) onChange("");
+      return;
+    }
+    const normalized = normalizeTime24Input(trimmed);
+    if (!normalized) {
+      setDraft(displayValue);
+      return;
+    }
+    setDraft(normalized);
+    if (normalized !== value) onChange(normalized);
+  };
+
+  return (
+    <input
+      aria-label="时间，24 小时制"
+      autoComplete="off"
+      inputMode="numeric"
+      maxLength={5}
+      onBlur={commit}
+      onChange={(event) => setDraft(event.target.value)}
+      onFocus={(event) => event.currentTarget.select()}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          setDraft(displayValue);
+          event.currentTarget.blur();
+        }
+      }}
+      placeholder="HH:MM"
+      spellCheck={false}
+      style={style}
+      title="24 小时制，例如 09:30 或 18:45"
+      type="text"
+      value={draft}
+    />
+  );
+}
+
 function RecordFields({
   accent,
   categories,
@@ -446,12 +510,11 @@ function RecordFields({
           />
         </View>
         <View style={styles.field}>
-          <Text style={styles.label}>时间（可留空）</Text>
-          <input
-            aria-label="时间"
-            onChange={(event) => onChange({ time: event.target.value })}
+          <Text style={styles.label}>时间（24 小时制，可留空）</Text>
+          <Time24Input
+            key={draft.time ?? ""}
+            onChange={(time) => onChange({ time })}
             style={nativeInput}
-            type="time"
             value={draft.time ?? ""}
           />
         </View>
