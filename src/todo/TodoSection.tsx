@@ -13,6 +13,10 @@ import { createPortal } from "react-dom";
 import { confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
 import {
   RiAddLine,
+  RiArrowDownSLine,
+  RiArrowLeftSLine,
+  RiArrowRightSLine,
+  RiArrowUpSLine,
   RiCalendarLine,
   RiCalendarScheduleLine,
   RiCalendarTodoLine,
@@ -45,6 +49,7 @@ import {
 } from "../theme";
 import { revealTodoData, type Quadrant, type Todo, type TodoPatch } from "./api";
 import {
+  dateKey,
   daysBetween,
   dueLabel,
   shiftKey,
@@ -999,7 +1004,6 @@ export function TodoMainColumn({
           accent={accent}
           onClose={() => setMenu(null)}
           onEdit={setEditingId}
-          onOpenDetail={openDetail}
           theme={theme}
           today={today}
           todo={menu.todo}
@@ -1062,7 +1066,7 @@ function SegmentButton({
 // global `-webkit-user-drag: none`), and this mirrors how the titlebar reorders
 // tabs. A press only becomes a drag after 5px of movement, so clicking a title
 // can still open its detail note without making card dragging feel sticky.
-const DROP_MARKER = " drop";
+const DROP_MARKER = "__nomi_drop_marker__";
 
 type DropTarget = { quadrant: Quadrant; index: number };
 
@@ -1414,6 +1418,7 @@ function QuadrantPanel({
             placeholder="添加待办..."
             quadrant={meta.id}
             styles={styles}
+            today={today}
             todos={todos}
           />
         </View>
@@ -1462,6 +1467,7 @@ function TodoListView({
             placeholder={`添加到「${scopeLabel(scope)}」...`}
             quadrant={quadrantDefault}
             styles={styles}
+            today={today}
             todos={todos}
           />
         )}
@@ -1563,7 +1569,33 @@ function TodoRow({
     // Plain DOM wrapper: it carries the real right-click, the hover state and —
     // on the board — the pointer-drag handlers.
     <div
+      onClick={(event) => {
+        // Left-click opens the same menu as right-click, so the row is one big
+        // menu target. Only the circle (and the other data-todo-nodrag controls)
+        // acts on its own — a stray click never toggles done or opens detail.
+        if (editing) {
+          return;
+        }
+        const target = event.target;
+        if (target instanceof Element && target.closest('[data-todo-nodrag="true"]')) {
+          return;
+        }
+        onMenu(todo, event.clientX, event.clientY);
+      }}
       onClickCapture={drag?.onClickCapture}
+      onKeyDown={(event) => {
+        // Keyboard parity with the click target: Enter/Space on the focused row
+        // opens its menu, anchored under the row. Keys bubbling up from the inner
+        // controls (checkbox, delete) are left alone so they keep their behaviour.
+        if (editing || event.target !== event.currentTarget) {
+          return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          const rect = event.currentTarget.getBoundingClientRect();
+          onMenu(todo, rect.left + 24, rect.bottom);
+        }
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -1576,8 +1608,11 @@ function TodoRow({
       onPointerMove={drag?.onPointerMove}
       onPointerUp={drag?.onPointerUp}
       ref={drag ? (node) => drag.register(todo.id, node) : undefined}
+      role={editing ? undefined : "button"}
+      tabIndex={editing ? undefined : 0}
+      aria-label={editing ? undefined : `待办：${todo.title}，回车打开菜单`}
       style={{
-        cursor: drag ? (dragging ? "grabbing" : "grab") : "default",
+        cursor: drag ? (dragging ? "grabbing" : "grab") : "pointer",
         opacity: dragging ? 0.45 : 1,
         touchAction: drag ? "none" : undefined,
         transition: "opacity 140ms ease",
@@ -1614,18 +1649,11 @@ function TodoRow({
             title={todo.title}
           />
         ) : (
-          <div style={{ display: "flex", flex: 1, minWidth: 0 }}>
-            <Pressable
-              accessibilityLabel={`打开待办详情：${todo.title}`}
-              accessibilityRole="button"
-              onPress={onOpenDetail}
-              style={{ flex: 1, minWidth: 0 } as ViewStyle}
-            >
-              <Text numberOfLines={1} style={[styles.rowTitle, todo.done && styles.rowTitleDone]}>
-                {todo.title}
-              </Text>
-            </Pressable>
-          </div>
+          <View style={{ flex: 1, minWidth: 0 } as ViewStyle}>
+            <Text numberOfLines={1} style={[styles.rowTitle, todo.done && styles.rowTitleDone]}>
+              {todo.title}
+            </Text>
+          </View>
         )}
 
         {todo.dueDate ? <DueChip styles={styles} today={today} todo={todo} /> : null}
@@ -1962,6 +1990,7 @@ function InlineAdd({
   placeholder,
   quadrant,
   styles,
+  today,
   todos,
 }: {
   accent: Accent;
@@ -1969,44 +1998,313 @@ function InlineAdd({
   placeholder: string;
   quadrant: Quadrant;
   styles: TodoStyles;
+  today: string;
   todos: TodosData;
 }) {
   const theme = useTheme();
+  const { t } = theme;
   const [value, setValue] = useState("");
-  const [focused, setFocused] = useState(false);
+  // `open` = the composer is active. The schedule (date + time) shows in a
+  // floating popover below the input only while adding, so no persistent date
+  // chip clutters the row and the surrounding cards never shift.
+  const [open, setOpen] = useState(false);
+  const [calOpen, setCalOpen] = useState(false);
+  // The composer starts on the scope's default day but lets you pick another (and
+  // a time) as you type, so a todo can be scheduled the moment it is created.
+  const [span, setSpan] = useState<DateSpan>({ start: dueDate, end: null });
+  const [time, setTime] = useState<{ start: string; end: string }>({ start: "", end: "" });
+  const touched = useRef(false);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const popRef = useRef<HTMLDivElement | null>(null);
+
+  // Follow the scope's default until the user picks a date of their own; after
+  // that their choice sticks even as the scope's default shifts underneath.
+  useEffect(() => {
+    if (!touched.current) {
+      setSpan({ start: dueDate, end: null });
+    }
+  }, [dueDate]);
+
+  // Glue the popover under (or above, near the screen edge) the input row as a
+  // fixed overlay, so opening it never nudges the surrounding cards.
+  const reposition = useCallback(() => {
+    const el = popRef.current;
+    const row = rowRef.current;
+    if (!el || !row) return;
+    const r = row.getBoundingClientRect();
+    const box = el.getBoundingClientRect();
+    const below = r.bottom + 6;
+    const top =
+      below + box.height > window.innerHeight - 8 && r.top - 6 - box.height >= 8
+        ? r.top - 6 - box.height
+        : below;
+    el.style.top = `${Math.max(8, top)}px`;
+    el.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 8 - box.width))}px`;
+  }, []);
+
+  // Subscribe once per open session…
+  useLayoutEffect(() => {
+    if (!open) return;
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, reposition]);
+  // …and re-place it whenever the content height changes (calendar fold, day
+  // count, time row) or a new row shifts the anchor — without re-subscribing.
+  useLayoutEffect(() => {
+    if (open) reposition();
+  }, [open, reposition, calOpen, value, span, time]);
+
+  // Close when a pointer lands outside both the row and the popover, or on Escape
+  // — never on plain input blur, so clicking into the calendar/time keeps it open.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (rowRef.current?.contains(target) || popRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   const submit = async () => {
     const title = value.trim();
     if (!title) {
       return;
     }
-    // Clear first so the next item can be typed straight away.
+    // Clear the text but keep the chosen date/time: entering a run of items for
+    // the same slot should not mean re-picking it every line.
     setValue("");
-    await todos.addTodo(title, quadrant, dueDate);
+    const startTime = normalizeClock(time.start);
+    const endTime = normalizeClock(time.end);
+    // Reflect what was actually applied: canonicalise valid times and drop any
+    // half-typed value the user never blurred, so it isn't silently carried on.
+    setTime({ start: startTime ?? "", end: endTime ?? "" });
+    const created = await todos.addTodo(title, quadrant, span.start, span.end);
+    if (created && (startTime || endTime)) {
+      await todos.patchTodo(created.id, { startTime, endTime });
+    }
+  };
+
+  const pickDate = (next: DateSpan) => {
+    touched.current = true;
+    setSpan(next);
+  };
+  const quick: { key: string; label: string; span: DateSpan }[] = [
+    { key: "today", label: "今天", span: { start: today, end: null } },
+    { key: "tomorrow", label: "明天", span: { start: shiftKey(today, 1), end: null } },
+    { key: "weekend", label: "本周末", span: { start: weekendKey(today), end: null } },
+    { key: "none", label: "不设日期", span: { start: null, end: null } },
+  ];
+  const timeInputStyle: React.CSSProperties = {
+    background: t.cardSurfaceAlt,
+    border: `1px solid ${t.separator}`,
+    borderRadius: 7,
+    color: t.textPrimary,
+    fontFamily: "inherit",
+    fontSize: 12.5,
+    outline: "none",
+    padding: "5px 7px",
+    width: 72,
   };
 
   return (
-    <View
-      style={[
-        styles.addRow,
-        motion,
-        focused && ({ backgroundColor: theme.t.controlHover } as ViewStyle),
-      ]}
-    >
-      <RiAddLine color={focused ? accent.accentText : theme.t.textTertiary} size={14} />
-      <TextInput
-        accessibilityLabel={placeholder}
-        blurOnSubmit={false}
-        onBlur={() => setFocused(false)}
-        onChangeText={setValue}
-        onFocus={() => setFocused(true)}
-        onSubmitEditing={() => void submit()}
-        placeholder={placeholder}
-        placeholderTextColor={theme.t.textTertiary}
-        style={styles.addInput}
-        value={value}
-      />
-    </View>
+    <div ref={rowRef}>
+      <View
+        style={[styles.addRow, motion, open && ({ backgroundColor: t.controlHover } as ViewStyle)]}
+      >
+        <RiAddLine color={open ? accent.accentText : t.textTertiary} size={14} />
+        <TextInput
+          accessibilityLabel={placeholder}
+          blurOnSubmit={false}
+          onChangeText={setValue}
+          onFocus={() => setOpen(true)}
+          onSubmitEditing={() => void submit()}
+          placeholder={placeholder}
+          placeholderTextColor={t.textTertiary}
+          style={styles.addInput}
+          value={value}
+        />
+      </View>
+
+      {open
+        ? createPortal(
+            <div
+              ref={popRef}
+              style={{
+                background: t.cardSurface,
+                border: `1px solid ${t.separator}`,
+                borderRadius: 12,
+                boxShadow: "0 12px 32px rgba(16,24,36,0.18), 0 2px 8px rgba(16,24,36,0.10)",
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                left: 0,
+                // Scroll inside rather than spilling off-screen when it fits
+                // neither below nor above (small viewport / calendar open).
+                maxHeight: "calc(100vh - 16px)",
+                overflowY: "auto",
+                padding: 8,
+                position: "fixed",
+                top: 0,
+                width: 264,
+                zIndex: 2000,
+              }}
+            >
+              <DateQuickChips
+                accent={accent}
+                onChange={pickDate}
+                options={quick}
+                span={span}
+                theme={theme}
+              />
+              <button
+                aria-expanded={calOpen}
+                onClick={() => setCalOpen((prev) => !prev)}
+                onMouseEnter={(event) => {
+                  event.currentTarget.style.background = t.controlHover;
+                }}
+                onMouseLeave={(event) => {
+                  event.currentTarget.style.background = "transparent";
+                }}
+                style={{
+                  alignItems: "center",
+                  background: "transparent",
+                  border: `1px solid ${t.controlBorder}`,
+                  borderRadius: 8,
+                  color: span.start ? t.textPrimary : t.textSecondary,
+                  cursor: "pointer",
+                  display: "flex",
+                  fontFamily: "inherit",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  gap: 6,
+                  padding: "6px 8px",
+                }}
+                type="button"
+              >
+                <RiCalendarLine color={t.textSecondary} size={14} />
+                <span style={{ flex: 1, textAlign: "left" }}>
+                  {span.start ? spanLabel(span.start, span.end, today) : "选择具体日期"}
+                </span>
+                {calOpen ? (
+                  <RiArrowUpSLine color={t.textTertiary} size={16} />
+                ) : (
+                  <RiArrowDownSLine color={t.textTertiary} size={16} />
+                )}
+              </button>
+              {calOpen ? (
+                <MiniCalendar
+                  accent={accent}
+                  onChange={pickDate}
+                  span={span}
+                  theme={theme}
+                  today={today}
+                />
+              ) : null}
+              {span.start && span.end ? (
+                <span style={{ color: accent.accentText, fontSize: 11.5, fontWeight: 600 }}>
+                  共 {daysBetween(span.start, span.end) + 1} 天
+                </span>
+              ) : null}
+
+              <div style={{ background: t.separator, height: 1, margin: "1px 0" }} />
+              <div
+                style={{
+                  color: t.textTertiary,
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  letterSpacing: 0.3,
+                }}
+              >
+                时间段（当天）
+              </div>
+              <div style={{ alignItems: "center", display: "flex", gap: 6 }}>
+                <input
+                  aria-label="开始时间，24 小时制"
+                  autoComplete="off"
+                  inputMode="numeric"
+                  maxLength={5}
+                  onBlur={() =>
+                    setTime((s) => ({
+                      ...s,
+                      start: s.start.trim() ? (normalizeClock(s.start) ?? "") : "",
+                    }))
+                  }
+                  onChange={(event) =>
+                    setTime((s) => ({ ...s, start: autoFormatTimeInput(event.target.value) }))
+                  }
+                  onFocus={(event) => event.currentTarget.select()}
+                  placeholder="HH:MM"
+                  spellCheck={false}
+                  style={timeInputStyle}
+                  type="text"
+                  value={time.start}
+                />
+                <span style={{ color: t.textTertiary, fontSize: 12 }}>→</span>
+                <input
+                  aria-label="结束时间，24 小时制"
+                  autoComplete="off"
+                  inputMode="numeric"
+                  maxLength={5}
+                  onBlur={() =>
+                    setTime((s) => ({
+                      ...s,
+                      end: s.end.trim() ? (normalizeClock(s.end) ?? "") : "",
+                    }))
+                  }
+                  onChange={(event) =>
+                    setTime((s) => ({ ...s, end: autoFormatTimeInput(event.target.value) }))
+                  }
+                  onFocus={(event) => event.currentTarget.select()}
+                  placeholder="HH:MM"
+                  spellCheck={false}
+                  style={timeInputStyle}
+                  type="text"
+                  value={time.end}
+                />
+                {time.start || time.end ? (
+                  <button
+                    aria-label="清除时间"
+                    onClick={() => setTime({ start: "", end: "" })}
+                    onMouseEnter={(event) => {
+                      event.currentTarget.style.background = t.controlHover;
+                    }}
+                    onMouseLeave={(event) => {
+                      event.currentTarget.style.background = "transparent";
+                    }}
+                    style={{
+                      alignItems: "center",
+                      background: "transparent",
+                      border: "none",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      display: "flex",
+                      justifyContent: "center",
+                      padding: 4,
+                    }}
+                    type="button"
+                  >
+                    <RiCloseLine color={t.textTertiary} size={14} />
+                  </button>
+                ) : null}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </div>
   );
 }
 
@@ -2030,62 +2328,245 @@ function spanButtonLabel(span: DateSpan, today: string): string {
   return spanLabel(span.start, span.end, today);
 }
 
-/** Start → end inputs plus a day count. Emits a whole span, already ordered, so
- *  neither caller has to think about which end moved. */
-function DateSpanFields({
+/** One-tap date presets, shared by the composer popover and the row menu. Each
+ *  chip carries a whole span, so quick picks never strand a half-open range. */
+function DateQuickChips({
   accent,
   onChange,
+  options,
   span,
   theme,
 }: {
   accent: Accent;
   onChange: (span: DateSpan) => void;
+  options: { key: string; label: string; span: DateSpan }[];
   span: DateSpan;
   theme: Theme;
 }) {
   const { t } = theme;
-  // flex + minWidth:0 because a native date input sizes to its content, so an
-  // empty end field rendered visibly narrower than a filled start field.
-  const inputStyle: React.CSSProperties = {
-    background: t.cardSurfaceAlt,
-    border: `1px solid ${t.separator}`,
-    borderRadius: 7,
-    color: t.textPrimary,
-    flex: 1,
-    fontFamily: "inherit",
-    fontSize: 12.5,
-    minWidth: 0,
-    outline: "none",
-    padding: "5px 7px",
-  };
-  const days = span.start && span.end ? daysBetween(span.start, span.end) + 1 : 0;
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "2px 10px 6px" }}>
-      <div style={{ alignItems: "center", display: "flex", gap: 6 }}>
-        <input
-          aria-label="开始日期"
-          onChange={(event) => onChange({ start: event.target.value || null, end: span.end })}
-          style={inputStyle}
-          type="date"
-          value={span.start ?? ""}
-        />
-        <span style={{ color: t.textTertiary, fontSize: 12 }}>→</span>
-        <input
-          aria-label="结束日期"
-          // An end with no start has nothing to span from, so picking one first
-          // starts the task that day instead of being silently dropped.
-          disabled={span.start === null}
-          onChange={(event) => onChange({ start: span.start, end: event.target.value || null })}
-          style={{ ...inputStyle, opacity: span.start === null ? 0.5 : 1 }}
-          type="date"
-          value={span.end ?? ""}
-        />
+    <div
+      style={{
+        display: "grid",
+        gap: 4,
+        gridTemplateColumns: `repeat(${options.length <= 4 ? options.length : 3}, 1fr)`,
+      }}
+    >
+      {options.map((option) => {
+        const selected = option.span.start === span.start && option.span.end === span.end;
+        return (
+          <button
+            key={option.key}
+            onClick={() => onChange(option.span)}
+            onMouseEnter={(event) => {
+              if (!selected) event.currentTarget.style.background = t.controlHover;
+            }}
+            onMouseLeave={(event) => {
+              if (!selected) event.currentTarget.style.background = "transparent";
+            }}
+            style={{
+              background: selected ? accent.selectedFill : "transparent",
+              border: `1px solid ${selected ? accent.accent : t.controlBorder}`,
+              borderRadius: 7,
+              color: selected ? accent.accentText : t.textSecondary,
+              cursor: "pointer",
+              fontFamily: "inherit",
+              fontSize: 12,
+              fontWeight: selected ? 600 : 500,
+              padding: "5px 4px",
+              textAlign: "center",
+              transition: "background-color 120ms ease",
+              whiteSpace: "nowrap",
+            }}
+            type="button"
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const WEEKDAY_LETTERS = ["日", "一", "二", "三", "四", "五", "六"];
+
+/** The 6×7 day grid (as `YYYY-MM-DD` keys) for a month, padded so the first row
+ *  begins on a 周日 and the last row completes the final week. */
+function monthGrid(year: number, month: number): { key: string; day: number; inMonth: boolean }[] {
+  const lead = new Date(year, month - 1, 1).getDay();
+  return Array.from({ length: 42 }, (_unused, index) => {
+    const date = new Date(year, month - 1, 1 - lead + index);
+    return { key: dateKey(date), day: date.getDate(), inMonth: date.getMonth() === month - 1 };
+  });
+}
+
+/** A compact month calendar built from ordinary buttons. The first click sets a
+ *  single day, a second extends it into a span, a third starts over — so one tap
+ *  still dates a todo without ever leaving a range half-open. Deliberately not a
+ *  native `<input type="date">`: that popup dropped clicks inside the portalled
+ *  menus, which is the bug this replaces. */
+function MiniCalendar({
+  accent,
+  onChange,
+  span,
+  theme,
+  today,
+}: {
+  accent: Accent;
+  onChange: (span: DateSpan) => void;
+  span: DateSpan;
+  theme: Theme;
+  today: string;
+}) {
+  const { t } = theme;
+  const [initYear, initMonth] = (span.start ?? today).split("-").map(Number);
+  const [view, setView] = useState({ year: initYear, month: initMonth });
+  const [hover, setHover] = useState<string | null>(null);
+
+  const shiftMonth = (delta: number) => {
+    const date = new Date(view.year, view.month - 1 + delta, 1);
+    setView({ year: date.getFullYear(), month: date.getMonth() + 1 });
+  };
+
+  // A plain click sets (or moves) a single day — the common case, so it never
+  // strands a range. Shift-click extends the stored start into a span up to the
+  // clicked day. Stateless: every click derives purely from the current span, so
+  // nothing can drift out of sync when a quick chip changes the date beside us.
+  const pick = (key: string, extend: boolean) => {
+    if (extend && span.start) {
+      const [lo, hi] = key < span.start ? [key, span.start] : [span.start, key];
+      onChange({ start: lo, end: lo === hi ? null : hi });
+    } else {
+      onChange({ start: key, end: null });
+    }
+  };
+
+  // The stored span drives the paint; a single day has lo === hi.
+  const lo = span.start;
+  const hi = span.start ? (span.end ?? span.start) : null;
+
+  const navStyle: React.CSSProperties = {
+    alignItems: "center",
+    background: "transparent",
+    border: "none",
+    borderRadius: 7,
+    cursor: "pointer",
+    display: "flex",
+    height: 26,
+    justifyContent: "center",
+    width: 26,
+  };
+
+  return (
+    <div style={{ padding: "2px 4px 2px" }}>
+      <div style={{ alignItems: "center", display: "flex", marginBottom: 4 }}>
+        <button
+          aria-label="上个月"
+          onClick={() => shiftMonth(-1)}
+          onMouseEnter={(event) => (event.currentTarget.style.background = t.controlHover)}
+          onMouseLeave={(event) => (event.currentTarget.style.background = "transparent")}
+          style={navStyle}
+          type="button"
+        >
+          <RiArrowLeftSLine color={t.textSecondary} size={18} />
+        </button>
+        <button
+          onClick={() => {
+            const [ty, tm] = today.split("-").map(Number);
+            setView({ year: ty, month: tm });
+          }}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: t.textPrimary,
+            cursor: "pointer",
+            flex: 1,
+            fontFamily: "inherit",
+            fontSize: 12.5,
+            fontWeight: 700,
+            textAlign: "center",
+          }}
+          title="回到本月"
+          type="button"
+        >
+          {view.year}年{view.month}月
+        </button>
+        <button
+          aria-label="下个月"
+          onClick={() => shiftMonth(1)}
+          onMouseEnter={(event) => (event.currentTarget.style.background = t.controlHover)}
+          onMouseLeave={(event) => (event.currentTarget.style.background = "transparent")}
+          style={navStyle}
+          type="button"
+        >
+          <RiArrowRightSLine color={t.textSecondary} size={18} />
+        </button>
       </div>
-      {days > 1 ? (
-        <span style={{ color: accent.accentText, fontSize: 11.5, fontWeight: 600 }}>
-          共 {days} 天
-        </span>
-      ) : null}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
+        {WEEKDAY_LETTERS.map((label) => (
+          <div
+            key={label}
+            style={{
+              color: t.textTertiary,
+              fontSize: 10.5,
+              fontWeight: 600,
+              paddingBottom: 3,
+              textAlign: "center",
+            }}
+          >
+            {label}
+          </div>
+        ))}
+        {monthGrid(view.year, view.month).map((cell) => {
+          const selected = lo !== null && hi !== null && cell.key >= lo && cell.key <= hi;
+          const endpoint = selected && (cell.key === lo || cell.key === hi);
+          const isToday = cell.key === today;
+          const hovered = cell.key === hover;
+          const background = endpoint
+            ? accent.accent
+            : selected
+              ? accent.selectedFill
+              : hovered
+                ? t.controlHover
+                : "transparent";
+          const color = endpoint
+            ? "#FFFFFF"
+            : selected
+              ? accent.accentText
+              : cell.inMonth
+                ? t.textPrimary
+                : t.textTertiary;
+          return (
+            <button
+              key={cell.key}
+              onClick={(event) => pick(cell.key, event.shiftKey)}
+              onMouseEnter={() => setHover(cell.key)}
+              onMouseLeave={() => setHover((current) => (current === cell.key ? null : current))}
+              style={{
+                background,
+                border: `1px solid ${isToday && !endpoint ? accent.accent : "transparent"}`,
+                borderRadius: 7,
+                color,
+                cursor: "pointer",
+                fontFamily: "inherit",
+                fontSize: 12,
+                fontWeight: endpoint || isToday ? 700 : 500,
+                height: 28,
+                margin: 1,
+                opacity: cell.inMonth ? 1 : 0.45,
+                padding: 0,
+                transition: "background-color 100ms ease",
+              }}
+              type="button"
+            >
+              {cell.day}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ color: t.textTertiary, fontSize: 10.5, paddingTop: 5, textAlign: "center" }}>
+        单击选日期 · 按住 Shift 选区间
+      </div>
     </div>
   );
 }
@@ -2196,53 +2677,38 @@ function DateSpanPicker({
                   width: 300,
                 }}
               >
-                <div
-                  style={{
-                    display: "grid",
-                    gap: 4,
-                    gridTemplateColumns: "repeat(3, 1fr)",
-                    padding: "2px 4px 6px",
-                  }}
-                >
-                  {quick.map((option) => {
-                    const selected =
-                      option.span.start === span.start && option.span.end === span.end;
-                    return (
-                      <button
-                        key={option.key}
-                        onClick={() => {
-                          onChange(option.span);
-                          setOpen(false);
-                        }}
-                        onMouseEnter={(event) => {
-                          if (!selected) event.currentTarget.style.background = t.controlHover;
-                        }}
-                        onMouseLeave={(event) => {
-                          if (!selected) event.currentTarget.style.background = "transparent";
-                        }}
-                        style={{
-                          background: selected ? accent.selectedFill : "transparent",
-                          border: `1px solid ${selected ? accent.accent : t.controlBorder}`,
-                          borderRadius: 7,
-                          color: selected ? accent.accentText : t.textSecondary,
-                          cursor: "pointer",
-                          fontFamily: "inherit",
-                          fontSize: 12,
-                          fontWeight: selected ? 600 : 500,
-                          padding: "5px 4px",
-                          textAlign: "center",
-                          transition: "background-color 120ms ease",
-                          whiteSpace: "nowrap",
-                        }}
-                        type="button"
-                      >
-                        {option.label}
-                      </button>
-                    );
-                  })}
+                <div style={{ padding: "2px 4px 0" }}>
+                  <DateQuickChips
+                    accent={accent}
+                    onChange={(next) => {
+                      onChange(next);
+                      setOpen(false);
+                    }}
+                    options={quick}
+                    span={span}
+                    theme={theme}
+                  />
                 </div>
-                <div style={{ background: t.separator, height: 1, margin: "2px 4px 6px" }} />
-                <DateSpanFields accent={accent} onChange={onChange} span={span} theme={theme} />
+                <div style={{ background: t.separator, height: 1, margin: "8px 4px 6px" }} />
+                <MiniCalendar
+                  accent={accent}
+                  onChange={onChange}
+                  span={span}
+                  theme={theme}
+                  today={today}
+                />
+                {span.start && span.end ? (
+                  <div
+                    style={{
+                      color: accent.accentText,
+                      fontSize: 11.5,
+                      fontWeight: 600,
+                      padding: "2px 6px 4px",
+                    }}
+                  >
+                    共 {daysBetween(span.start, span.end) + 1} 天
+                  </div>
+                ) : null}
               </div>
             </div>,
             document.body,
@@ -2268,6 +2734,31 @@ type MenuRow =
       run: () => void;
     };
 
+/** Insert the `HH:MM` colon live as digits are typed, so the separator appears
+ *  while typing instead of only after the field is complete. A leading 3–9 is a
+ *  single-digit hour ("9" → "9:30"); 0–2 begins a two-digit hour ("14" →
+ *  "14:30"). Only digits are kept, so backspacing past the colon simply drops
+ *  it. `normalize()` on blur still gives the field its final canonical form. */
+function autoFormatTimeInput(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 4);
+  if (digits.length === 0) return "";
+  const hourLen = Number(digits[0]) >= 3 ? 1 : 2;
+  if (digits.length <= hourLen) return digits;
+  return `${digits.slice(0, hourLen)}:${digits.slice(hourLen, hourLen + 2)}`;
+}
+
+/** Canonicalise a typed clock string to `HH:MM`, or null if it isn't a valid
+ *  24-hour time. Accepts "9:30", "0930" and full-width colons. */
+function normalizeClock(value: string): string | null {
+  const cleaned = value.trim().replace(/：/g, ":");
+  const match = /^(\d{1,2}):(\d{2})$/.exec(cleaned) ?? /^(\d{1,2})(\d{2})$/.exec(cleaned);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
 /** Two `HH:MM` inputs (start → end) for a task's time block. Keeps local state
  *  (the menu holds a snapshot todo) and patches on every change. */
 function TimeRangeEditor({
@@ -2285,15 +2776,7 @@ function TimeRangeEditor({
   const [start, setStart] = useState(todo.startTime ?? "");
   const [end, setEnd] = useState(todo.endTime ?? "");
   const skipBlur = useRef<"start" | "end" | null>(null);
-  const normalize = (value: string): string | null => {
-    const cleaned = value.trim().replace(/：/g, ":");
-    const match = /^(\d{1,2}):(\d{2})$/.exec(cleaned) ?? /^(\d{1,2})(\d{2})$/.exec(cleaned);
-    if (!match) return null;
-    const hour = Number(match[1]);
-    const minute = Number(match[2]);
-    if (hour > 23 || minute > 59) return null;
-    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-  };
+  const normalize = normalizeClock;
   const commit = (kind: "start" | "end", value: string) => {
     const current = kind === "start" ? todo.startTime : todo.endTime;
     if (!value.trim()) {
@@ -2334,7 +2817,7 @@ function TimeRangeEditor({
             commit("start", start);
           }
         }}
-        onChange={(event) => setStart(event.target.value)}
+        onChange={(event) => setStart(autoFormatTimeInput(event.target.value))}
         onFocus={(event) => event.currentTarget.select()}
         onKeyDown={(event) => {
           if (event.key === "Enter") event.currentTarget.blur();
@@ -2364,7 +2847,7 @@ function TimeRangeEditor({
             commit("end", end);
           }
         }}
-        onChange={(event) => setEnd(event.target.value)}
+        onChange={(event) => setEnd(autoFormatTimeInput(event.target.value))}
         onFocus={(event) => event.currentTarget.select()}
         onKeyDown={(event) => {
           if (event.key === "Enter") event.currentTarget.blur();
@@ -2416,11 +2899,75 @@ function TimeRangeEditor({
   );
 }
 
+/** Inline "详情" (notes) editor shown in the context menu, right below the time
+ *  block — replaces the old "打开详情" button + separate dialog. Saves on blur and
+ *  when the menu closes (unmount), so a quick note never needs a popup. */
+function ContextNotesEditor({
+  theme,
+  todo,
+  todos,
+}: {
+  theme: Theme;
+  todo: Todo;
+  todos: TodosData;
+}) {
+  const { t } = theme;
+  const [notes, setNotes] = useState(todo.notes);
+  // notesRef mirrors the textarea (written only in the change handler); savedRef
+  // is the last value persisted. Both are read in flush, never during render.
+  const notesRef = useRef(todo.notes);
+  const savedRef = useRef(todo.notes);
+
+  const flush = useCallback(() => {
+    if (notesRef.current === savedRef.current) return;
+    savedRef.current = notesRef.current;
+    void todos.patchTodo(todo.id, { notes: notesRef.current });
+  }, [todo.id, todos]);
+  // Keep a stable handle to the latest flush so the unmount-only effect (menu
+  // close) can save without re-subscribing every time the store changes.
+  const flushRef = useRef(flush);
+  useEffect(() => {
+    flushRef.current = flush;
+  }, [flush]);
+  useEffect(() => () => flushRef.current(), []);
+
+  return (
+    <div style={{ padding: "2px 8px 6px" }}>
+      <textarea
+        aria-label="待办详情备注"
+        maxLength={4000}
+        onBlur={flush}
+        onChange={(event) => {
+          notesRef.current = event.target.value;
+          setNotes(event.target.value);
+        }}
+        placeholder="记录会议号、密码、链接…"
+        rows={3}
+        spellCheck={false}
+        style={{
+          background: t.cardSurfaceAlt,
+          border: `1px solid ${t.separator}`,
+          borderRadius: 7,
+          color: t.textPrimary,
+          fontFamily: "inherit",
+          fontSize: 12.5,
+          lineHeight: 1.5,
+          minHeight: 54,
+          outline: "none",
+          padding: "6px 8px",
+          resize: "vertical",
+          width: "100%",
+        }}
+        value={notes}
+      />
+    </div>
+  );
+}
+
 function TodoContextMenu({
   accent,
   onClose,
   onEdit,
-  onOpenDetail,
   theme,
   today,
   todo,
@@ -2431,7 +2978,6 @@ function TodoContextMenu({
   accent: Accent;
   onClose: () => void;
   onEdit: (id: string) => void;
-  onOpenDetail: (id: string) => void;
   theme: Theme;
   today: string;
   todo: Todo;
@@ -2441,8 +2987,15 @@ function TodoContextMenu({
 }) {
   const { t } = theme;
   const menuRef = useRef<HTMLDivElement | null>(null);
+  // The calendar is folded away by default so the menu stays compact; quick date
+  // chips cover the common cases without it.
+  const [dateOpen, setDateOpen] = useState(false);
+  // Read the live record, not the snapshot the menu opened with, so edits made in
+  // place (quadrant, date, time) show immediately while the menu stays open.
+  const current = todos.todos.find((item) => item.id === todo.id) ?? todo;
 
-  // Keep the menu on-screen (mutate style directly — no state, no re-render flicker).
+  // Keep the menu on-screen (mutate style directly — no state, no re-render
+  // flicker). Re-runs when the calendar folds open so a taller menu still fits.
   useLayoutEffect(() => {
     const element = menuRef.current;
     if (!element) {
@@ -2451,7 +3004,7 @@ function TodoContextMenu({
     const rect = element.getBoundingClientRect();
     element.style.left = `${Math.max(8, Math.min(x, window.innerWidth - 8 - rect.width))}px`;
     element.style.top = `${Math.max(8, Math.min(y, window.innerHeight - 8 - rect.height))}px`;
-  }, [x, y]);
+  }, [x, y, dateOpen]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -2464,26 +3017,25 @@ function TodoContextMenu({
   }, [onClose]);
 
   const iconColor = t.textSecondary;
-  // Quick picks set a single day, so they clear any existing span rather than
-  // leaving an end date stranded behind a new start.
-  const setDue = (date: string | null) => () =>
-    void todos.patchTodo(todo.id, { dueDate: date, endDate: null });
-  const span: DateSpan = { start: todo.dueDate, end: todo.endDate };
+  const span: DateSpan = { start: current.dueDate, end: current.endDate };
+  const setSpan = (next: DateSpan) =>
+    void todos.patchTodo(todo.id, { dueDate: next.start, endDate: next.end });
+  // Single-day quick picks clear any lingering end so a new start never strands
+  // an old span behind it.
+  const dateQuick: { key: string; label: string; span: DateSpan }[] = [
+    { key: "today", label: "今天", span: { start: today, end: null } },
+    { key: "tomorrow", label: "明天", span: { start: shiftKey(today, 1), end: null } },
+    { key: "weekend", label: "本周末", span: { start: weekendKey(today), end: null } },
+    { key: "clear", label: "清除", span: { start: null, end: null } },
+  ];
 
   const rows: MenuRow[] = [
     {
       kind: "item",
       key: "toggle",
-      label: todo.done ? "标记为未完成" : "标记为已完成",
+      label: current.done ? "标记为未完成" : "标记为已完成",
       icon: <RiCheckLine color={iconColor} size={15} />,
-      run: () => void todos.patchTodo(todo.id, { done: !todo.done }),
-    },
-    {
-      kind: "item",
-      key: "detail",
-      label: "打开详情",
-      icon: <RiStickyNoteLine color={iconColor} size={15} />,
-      run: () => onOpenDetail(todo.id),
+      run: () => void todos.patchTodo(todo.id, { done: !current.done }),
     },
     {
       kind: "item",
@@ -2494,60 +3046,139 @@ function TodoContextMenu({
     },
     { kind: "divider", key: "d1" },
     { kind: "heading", key: "h-quadrant", label: "移动到象限" },
-    ...QUADRANTS.map<MenuRow>((meta) => ({
-      kind: "item",
-      key: `q${meta.id}`,
-      label: meta.label,
-      dot: meta.color,
-      selected: meta.id === todo.quadrant,
-      run: () => void todos.patchTodo(todo.id, { quadrant: meta.id }),
-    })),
+    {
+      kind: "custom",
+      key: "quadrant-grid",
+      // Two per row, so all four quadrants read at a glance without four full
+      // rows of chrome. Picking one keeps the menu open for further edits.
+      render: () => (
+        <div
+          style={{
+            display: "grid",
+            gap: 5,
+            gridTemplateColumns: "repeat(2, 1fr)",
+            padding: "2px 8px 4px",
+          }}
+        >
+          {QUADRANTS.map((meta) => {
+            const active = meta.id === current.quadrant;
+            return (
+              <button
+                key={meta.id}
+                onClick={() => void todos.patchTodo(todo.id, { quadrant: meta.id })}
+                onMouseEnter={(event) => {
+                  if (!active) event.currentTarget.style.background = t.controlHover;
+                }}
+                onMouseLeave={(event) => {
+                  if (!active) event.currentTarget.style.background = "transparent";
+                }}
+                style={{
+                  alignItems: "center",
+                  background: active ? meta.tint : "transparent",
+                  border: `1px solid ${active ? meta.color : t.controlBorder}`,
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  display: "flex",
+                  fontFamily: "inherit",
+                  fontSize: 12,
+                  fontWeight: active ? 700 : 500,
+                  gap: 7,
+                  padding: "6px 8px",
+                  textAlign: "left",
+                  transition: "background-color 120ms ease",
+                }}
+                type="button"
+              >
+                <span
+                  style={{
+                    background: meta.color,
+                    borderRadius: 999,
+                    flexShrink: 0,
+                    height: 9,
+                    width: 9,
+                  }}
+                />
+                <span
+                  style={{
+                    color: active ? meta.text : t.textSecondary,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {meta.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ),
+    },
     { kind: "divider", key: "d2" },
     { kind: "heading", key: "h-due", label: "日期" },
     {
-      kind: "item",
-      key: "due-today",
-      label: "今天",
-      icon: <RiCalendarTodoLine color={iconColor} size={15} />,
-      selected: todo.endDate === null && todo.dueDate === today,
-      run: setDue(today),
-    },
-    {
-      kind: "item",
-      key: "due-tomorrow",
-      label: "明天",
-      icon: <RiCalendarLine color={iconColor} size={15} />,
-      selected: todo.endDate === null && todo.dueDate === shiftKey(today, 1),
-      run: setDue(shiftKey(today, 1)),
-    },
-    {
-      kind: "item",
-      key: "due-weekend",
-      label: "本周末",
-      icon: <RiCalendarScheduleLine color={iconColor} size={15} />,
-      selected: todo.endDate === null && todo.dueDate === weekendKey(today),
-      run: setDue(weekendKey(today)),
-    },
-    {
-      kind: "item",
-      key: "due-clear",
-      label: "清除日期",
-      icon: <RiCloseLine color={iconColor} size={15} />,
-      selected: todo.dueDate === null,
-      run: setDue(null),
-    },
-    {
       kind: "custom",
-      key: "date-span",
+      key: "date-section",
       render: () => (
-        <DateSpanFields
-          accent={accent}
-          onChange={(next) =>
-            void todos.patchTodo(todo.id, { dueDate: next.start, endDate: next.end })
-          }
-          span={span}
-          theme={theme}
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "2px 8px 4px" }}>
+          <DateQuickChips
+            accent={accent}
+            onChange={setSpan}
+            options={dateQuick}
+            span={span}
+            theme={theme}
+          />
+          <button
+            aria-expanded={dateOpen}
+            onClick={() => setDateOpen((open) => !open)}
+            onMouseEnter={(event) => {
+              event.currentTarget.style.background = t.controlHover;
+            }}
+            onMouseLeave={(event) => {
+              event.currentTarget.style.background = "transparent";
+            }}
+            style={{
+              alignItems: "center",
+              background: "transparent",
+              border: `1px solid ${t.controlBorder}`,
+              borderRadius: 8,
+              color: span.start ? t.textPrimary : t.textSecondary,
+              cursor: "pointer",
+              display: "flex",
+              fontFamily: "inherit",
+              fontSize: 12,
+              fontWeight: 500,
+              gap: 6,
+              padding: "6px 8px",
+              transition: "background-color 120ms ease",
+            }}
+            type="button"
+          >
+            <RiCalendarLine color={t.textSecondary} size={14} />
+            <span style={{ flex: 1, textAlign: "left" }}>
+              {span.start ? spanLabel(span.start, span.end, today) : "选择具体日期"}
+            </span>
+            {dateOpen ? (
+              <RiArrowUpSLine color={t.textTertiary} size={16} />
+            ) : (
+              <RiArrowDownSLine color={t.textTertiary} size={16} />
+            )}
+          </button>
+          {dateOpen ? (
+            <MiniCalendar
+              accent={accent}
+              onChange={setSpan}
+              span={span}
+              theme={theme}
+              today={today}
+            />
+          ) : null}
+          {span.start && span.end ? (
+            <span style={{ color: accent.accentText, fontSize: 11.5, fontWeight: 600 }}>
+              共 {daysBetween(span.start, span.end) + 1} 天
+            </span>
+          ) : null}
+        </div>
       ),
     },
     { kind: "divider", key: "d-time" },
@@ -2560,8 +3191,17 @@ function TodoContextMenu({
           accent={accent}
           onPatch={(patch) => void todos.patchTodo(todo.id, patch)}
           theme={theme}
-          todo={todo}
+          todo={current}
         />
+      ),
+    },
+    { kind: "divider", key: "d-notes" },
+    { kind: "heading", key: "h-notes", label: "详情" },
+    {
+      kind: "custom",
+      key: "notes",
+      render: () => (
+        <ContextNotesEditor key={current.id} theme={theme} todo={current} todos={todos} />
       ),
     },
     { kind: "divider", key: "d3" },
@@ -2612,10 +3252,13 @@ function TodoContextMenu({
           boxShadow: "0 12px 32px rgba(16,24,36,0.18), 0 2px 8px rgba(16,24,36,0.10)",
           fontFamily: "inherit",
           left: x,
-          minWidth: 196,
+          maxHeight: "calc(100vh - 16px)",
+          overflowX: "hidden",
+          overflowY: "auto",
           padding: 6,
           position: "fixed",
           top: y,
+          width: 252,
         }}
       >
         {rows.map((row) => {

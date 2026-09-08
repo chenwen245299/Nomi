@@ -83,7 +83,7 @@ pub struct ProviderModel {
     name: String,
     #[serde(default)]
     capabilities: Vec<String>, // "audio" | "video" | "image" | "tool" | "reasoning"
-    /// Primary modality: "text" | "vision" | "audio" | "video" | "embedding".
+    /// Primary modality: "text" | "vision" | "image" | "audio" | "video" | "embedding".
     #[serde(default)]
     category: String,
     #[serde(default)]
@@ -193,7 +193,7 @@ fn is_chat_model(model: &ProviderModel) -> bool {
             .output_modalities
             .iter()
             .any(|modality| modality == "text");
-    produces_text && !matches!(model.category.as_str(), "embedding" | "audio" | "video")
+    produces_text && !matches!(model.category.as_str(), "embedding" | "audio" | "video" | "image")
 }
 
 /// Keep at most one starred model across every provider. With no explicit
@@ -720,7 +720,14 @@ fn fetched_model(entry: ModelEntry) -> FetchedProviderModel {
     } else if contains_modality(&outputs, "audio") {
         "audio"
     } else if contains_modality(&outputs, "image") {
-        "vision"
+        // A model whose output is images is a generator ("文生图"); one that also
+        // emits text is still a (visual) chat model, so only pure image output
+        // gets the standalone image category.
+        if contains_modality(&outputs, "text") {
+            "vision"
+        } else {
+            "image"
+        }
     } else if contains_modality(&inputs, "image") || contains_modality(&inputs, "video") {
         // Image/video understanding models still answer with text and remain
         // eligible for conversations, so they share the visual category.
@@ -930,6 +937,24 @@ mod tests {
         let video = fetched_model(video);
         assert_eq!(video.category, "video");
         assert_eq!(video.capabilities, vec!["image", "video"]);
+    }
+
+    #[test]
+    fn image_only_output_is_a_generator_while_text_plus_image_stays_visual() {
+        let generator: ModelEntry = serde_json::from_value(serde_json::json!({
+            "id": "vendor/text-to-image",
+            "architecture": { "input_modalities": ["text"], "output_modalities": ["image"] }
+        }))
+        .unwrap();
+        assert_eq!(fetched_model(generator).category, "image");
+
+        // A model that also emits text remains a (visual) chat model.
+        let multimodal: ModelEntry = serde_json::from_value(serde_json::json!({
+            "id": "vendor/text-and-image",
+            "architecture": { "input_modalities": ["text"], "output_modalities": ["text", "image"] }
+        }))
+        .unwrap();
+        assert_eq!(fetched_model(multimodal).category, "vision");
     }
 
     #[test]

@@ -2458,7 +2458,10 @@ function ModelEditor({
               onPress={() => {
                 const previousCategory = normalizeCategory(initial?.category);
                 const inferredCategory = inferModelCategory(id);
-                const specialCategories = new Set(["embedding", "audio", "video"]);
+                // Non-chat categories: preserved as-is on save so a name/price
+                // edit can't recompute an image/audio/video/embedding model into a
+                // chat category (which would leak it into the chat model pickers).
+                const specialCategories = new Set(["embedding", "audio", "video", "image"]);
                 const category = specialCategories.has(previousCategory)
                   ? previousCategory
                   : specialCategories.has(inferredCategory)

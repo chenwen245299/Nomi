@@ -14,6 +14,25 @@ import {
 
 type UploadHandler = NonNullable<NonNullable<VditorOptions["upload"]>["handler"]>;
 
+// Lute/Vditor does not consistently recognise a task marker with no content
+// after it when a document is parsed again. Give only those empty task lines an
+// invisible editor-side character, then remove it at every public/save boundary
+// so the Markdown file remains plain `- [ ]`.
+const EMPTY_TASK_PLACEHOLDER = "\u200B";
+const EMPTY_TASK_LINE = /^([ \t]*(?:[-+*]|\d+[.)])[ \t]+\[[ xX]\])[ \t]*(?=\r?$)/gm;
+const PLACEHOLDER_AFTER_TASK = new RegExp(
+  `^([ \\t]*(?:[-+*]|\\d+[.)])[ \\t]+\\[[ xX]\\][ \\t]*)${EMPTY_TASK_PLACEHOLDER}`,
+  "gm",
+);
+
+function prepareMarkdownForEditor(markdown: string): string {
+  return markdown.replace(EMPTY_TASK_LINE, `$1 ${EMPTY_TASK_PLACEHOLDER}`);
+}
+
+function cleanMarkdownFromEditor(markdown: string): string {
+  return markdown.replace(PLACEHOLDER_AFTER_TASK, "$1").replace(EMPTY_TASK_LINE, "$1");
+}
+
 /** One image the host resolved for an upload/paste/drop. `url` is whatever the
  * editor should reference in `![alt](url)` — normally a short local Blob URL
  * while the host persists its portable on-disk relative path. */
@@ -122,9 +141,10 @@ export function MarkdownEditor({
 
   const makeHandle = useCallback(
     (): MarkdownEditorHandle => ({
-      getValue: () => vditorRef.current?.getValue() ?? "",
-      setValue: (markdown, clearStack) => vditorRef.current?.setValue(markdown, clearStack),
-      insertValue: (markdown) => vditorRef.current?.insertValue(markdown),
+      getValue: () => cleanMarkdownFromEditor(vditorRef.current?.getValue() ?? ""),
+      setValue: (markdown, clearStack) =>
+        vditorRef.current?.setValue(prepareMarkdownForEditor(markdown), clearStack),
+      insertValue: (markdown) => vditorRef.current?.insertValue(prepareMarkdownForEditor(markdown)),
       focus: () => vditorRef.current?.focus(),
       blur: () => vditorRef.current?.blur(),
       getMode: () => vditorRef.current?.getCurrentMode() ?? null,
@@ -148,7 +168,7 @@ export function MarkdownEditor({
       cdn: VDITOR_CDN,
       lang,
       mode,
-      value: value ?? "",
+      value: prepareMarkdownForEditor(value ?? ""),
       minHeight,
       ...(height !== undefined ? { height } : {}),
       placeholder,
@@ -181,15 +201,15 @@ export function MarkdownEditor({
         }) as unknown as UploadHandler,
       },
       input(next) {
-        cbRef.current.onChange?.(next);
+        cbRef.current.onChange?.(cleanMarkdownFromEditor(next));
       },
       blur(next) {
-        cbRef.current.onBlur?.(next);
+        cbRef.current.onBlur?.(cleanMarkdownFromEditor(next));
       },
       keydown(event: KeyboardEvent) {
         if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "s") {
           event.preventDefault();
-          cbRef.current.onSave?.(instance.getValue());
+          cbRef.current.onSave?.(cleanMarkdownFromEditor(instance.getValue()));
         }
       },
       after() {

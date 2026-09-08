@@ -1084,9 +1084,11 @@ async fn generate_assistant(
             break;
         }
 
-        let wants_tools = turn.finish_reason.as_deref() == Some("tool_calls")
-            && !turn.tool_calls.is_empty()
-            && tools.is_some();
+        // Treat the structured calls themselves as authoritative. MiniMax-M3
+        // can finish a tool-use turn with `finish_reason: "stop"` even though
+        // `tool_calls` is populated; requiring the OpenAI-standard reason made
+        // us silently save an empty assistant reply instead of running the tool.
+        let wants_tools = should_execute_tool_calls(&turn, tools.is_some());
         if !wants_tools {
             break;
         }
@@ -1202,6 +1204,10 @@ async fn generate_assistant(
     });
     assistant.usage = Some(usage);
     Ok(assistant)
+}
+
+fn should_execute_tool_calls(turn: &llm::AssistantTurn, tools_available: bool) -> bool {
+    tools_available && !turn.tool_calls.is_empty()
 }
 
 // ── OpenAI message building ─────────────────────────────────────────────────────
@@ -2978,6 +2984,32 @@ mod tests {
             feedback: None,
             created_at: 0,
         }
+    }
+
+    #[test]
+    fn populated_tool_calls_continue_even_when_finish_reason_is_stop() {
+        let turn = llm::AssistantTurn {
+            tool_calls: vec![llm::AccumulatedToolCall {
+                id: "call-1".into(),
+                name: "create_markdown_document".into(),
+                arguments: "{}".into(),
+            }],
+            finish_reason: Some("stop".into()),
+            ..Default::default()
+        };
+
+        assert!(should_execute_tool_calls(&turn, true));
+        assert!(!should_execute_tool_calls(&turn, false));
+    }
+
+    #[test]
+    fn finish_reason_alone_does_not_invent_a_tool_call() {
+        let turn = llm::AssistantTurn {
+            finish_reason: Some("tool_calls".into()),
+            ..Default::default()
+        };
+
+        assert!(!should_execute_tool_calls(&turn, true));
     }
 
     #[test]

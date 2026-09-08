@@ -75,3 +75,39 @@ export function statusMeta(status: string): StatusMeta {
 export function isPaperStatus(value: string): value is PaperStatus {
   return value in STATUS_META;
 }
+
+/** A venue badge's colours. Same shape as {@link StatusMeta}'s colour trio: a
+ *  soft translucent fill, a deepened text colour that stays readable on it, and
+ *  a faint border that gives the pill an edge. */
+export interface VenueStyle {
+  soft: string;
+  text: string;
+  border: string;
+}
+
+/** Curated swatches for venue badges. Each journal / conference name is hashed
+ *  onto one of these so the same venue always reads in the same colour without
+ *  anyone assigning them by hand — the list becomes colour-coded at a glance.
+ *  The hues echo the muted, translucent palette the status chips already use. */
+const VENUE_PALETTE: VenueStyle[] = [
+  { soft: "rgba(62,134,224,0.13)", text: "#2A67BE", border: "rgba(62,134,224,0.30)" }, // blue
+  { soft: "rgba(62,158,110,0.14)", text: "#2C7B53", border: "rgba(62,158,110,0.30)" }, // green
+  { soft: "rgba(224,160,48,0.16)", text: "#A9741A", border: "rgba(224,160,48,0.32)" }, // amber
+  { soft: "rgba(200,91,160,0.14)", text: "#A23F79", border: "rgba(200,91,160,0.30)" }, // pink
+  { soft: "rgba(155,126,222,0.15)", text: "#6F53BE", border: "rgba(155,126,222,0.30)" }, // violet
+  { soft: "rgba(56,168,178,0.15)", text: "#1F7C86", border: "rgba(56,168,178,0.32)" }, // teal
+  { soft: "rgba(224,112,64,0.15)", text: "#BC5A28", border: "rgba(224,112,64,0.32)" }, // orange
+  { soft: "rgba(90,120,200,0.14)", text: "#3F5AAE", border: "rgba(90,120,200,0.30)" }, // indigo
+  { soft: "rgba(120,168,72,0.15)", text: "#5C7C24", border: "rgba(120,168,72,0.32)" }, // olive
+  { soft: "rgba(210,90,90,0.14)", text: "#B0413F", border: "rgba(210,90,90,0.30)" }, // red
+];
+
+/** Stable per-venue swatch. A trimmed, case-folded venue string is hashed so
+ *  "NeurIPS" and "neurips " land on the same colour; empty stays neutral (the
+ *  badge isn't rendered for empty venues anyway). */
+export function venueStyle(venue: string): VenueStyle {
+  const key = venue.trim().toLowerCase();
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (Math.imul(hash, 31) + key.charCodeAt(i)) | 0;
+  return VENUE_PALETTE[Math.abs(hash) % VENUE_PALETTE.length];
+}

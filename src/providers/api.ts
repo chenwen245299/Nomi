@@ -145,6 +145,7 @@ export const CAPABILITIES: { value: string; label: string }[] = [
 export const MODEL_CATEGORIES: { value: string; label: string }[] = [
   { value: "text", label: "文本" },
   { value: "vision", label: "视觉" },
+  { value: "image", label: "图像" },
   { value: "audio", label: "音频" },
   { value: "video", label: "视频" },
   { value: "embedding", label: "嵌入" },
@@ -191,6 +192,16 @@ export function inferModelCategory(id: string): string {
   if (/video|sora|veo|kling|cogvideo|hunyuanvideo|wan2(?:\.|-)/.test(s)) return "video";
   if (/whisper|tts|audio|voice|speech|transcrib|realtime|sensevoice|cosyvoice|sovits/.test(s)) {
     return "audio";
+  }
+  // Text-to-image generators ("文生图"). Kept to well-known families so it never
+  // steals a chat/vision model — image *understanding* ids (glm-4v, gpt-4o…) fall
+  // through to the vision rule below.
+  if (
+    /dall-?e|gpt-image|(?:^|[-_/])image[-_]?\d|cogview|flux|stable-?diffusion|(?:^|[-_/])sd-?(?:xl|[0-9])|kolors|seedream|(?:^|[-_/])wanx|hunyuan-image|qwen-image|imagen|jimeng|ideogram|recraft|playground/.test(
+      s,
+    )
+  ) {
+    return "image";
   }
   // Note: no bare "-v" version-suffix rule — it never matches "-v1/-v2" (word
   // boundary) yet false-positives ids ending in "-v", wrongly flagging vision.
@@ -304,67 +315,17 @@ export const DEEPSEEK_PEAK_TIME_RANGES: PricingTimeRange[] = [
 ];
 
 export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
+  // MiniMax and Zhipu pre-fill only the base URL. Their model line-ups (chat,
+  // speech, image, video) change often and a hand-kept list goes stale and
+  // incomplete, so we leave the models empty — the user fetches the live
+  // catalogue ("获取模型列表") or adds one by hand.
   minimax: {
     baseUrl: "https://api.minimax.cn/v1",
-    models: [
-      {
-        id: "MiniMax-M3",
-        name: "MiniMax-M3",
-        capabilities: ["image", "video", "tool", "reasoning"],
-        category: "vision",
-        size: "",
-        starred: true,
-        contextLength: 1_000_000,
-        inputModalities: ["text", "image", "video"],
-        outputModalities: ["text"],
-      },
-      ...[
-        "MiniMax-M2.7",
-        "MiniMax-M2.7-highspeed",
-        "MiniMax-M2.5",
-        "MiniMax-M2.5-highspeed",
-        "MiniMax-M2.1",
-        "MiniMax-M2.1-highspeed",
-        "MiniMax-M2",
-      ].map((id) => ({
-        id,
-        name: id,
-        capabilities: ["tool", "reasoning"],
-        category: "text",
-        size: "",
-        starred: false,
-        contextLength: 204_800,
-        inputModalities: ["text"],
-        outputModalities: ["text"],
-      })),
-    ],
+    models: [],
   },
   zhipu: {
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    models: [
-      {
-        id: "glm-5.3-flash",
-        name: "GLM-5.3-Flash",
-        capabilities: ["image", "video", "tool", "reasoning"],
-        category: "vision",
-        size: "320B / 18B activated",
-        starred: true,
-        contextLength: 1_000_000,
-        inputModalities: ["text", "image", "video", "file"],
-        outputModalities: ["text"],
-      },
-      {
-        id: "glm-5.3",
-        name: "GLM-5.3",
-        capabilities: ["tool", "reasoning"],
-        category: "text",
-        size: "",
-        starred: false,
-        contextLength: 1_000_000,
-        inputModalities: ["text"],
-        outputModalities: ["text"],
-      },
-    ],
+    models: [],
   },
   // DeepSeek model sizes come straight from the vendor (no name-parsing): flash
   // is 284B, pro is 1.6T, and the vision model is flash-based (also 284B).

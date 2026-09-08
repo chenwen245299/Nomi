@@ -13,6 +13,7 @@ import { createPortal } from "react-dom";
 import { confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
 import {
   RiAddLine,
+  RiArrowDownSLine,
   RiCloseLine,
   RiDeleteBinLine,
   RiExternalLinkLine,
@@ -32,7 +33,14 @@ import {
   type Theme,
 } from "../theme";
 import { revealPaper, type Paper } from "./api";
-import { RATED_STATUSES, STATUS_META, STATUS_ORDER, type PaperStatus } from "./constants";
+import {
+  RATED_STATUSES,
+  STATUS_META,
+  STATUS_ORDER,
+  isPaperStatus,
+  venueStyle,
+  type PaperStatus,
+} from "./constants";
 import { GraphCanvas } from "./GraphCanvas";
 import { PaperEditor } from "./PaperEditor";
 import type { PapersData } from "./usePapers";
@@ -64,6 +72,39 @@ const NEW_PAPER = (x: number, y: number) => ({
 
 import { StarsInline } from "../ratings";
 
+// A burst of rapid list clicks used to remount the heavy detail editor (Vditor +
+// a disk read) once per click. Opening the picked paper is debounced by this so
+// only the paper the clicking settles on actually mounts — see PapersMainColumn.
+const OPEN_DEBOUNCE_MS = 120;
+
+// Which status groups are folded shut in the collection list. A per-machine view
+// preference (like the notes tree's expanded folders), so it lives in
+// localStorage rather than the data folder and survives the section unmounting
+// on every tab switch.
+const COLLAPSED_GROUPS_KEY = "nomi.papers.collapsedGroups";
+
+function readCollapsedGroups(): Set<PaperStatus> {
+  try {
+    const stored: unknown = JSON.parse(window.localStorage.getItem(COLLAPSED_GROUPS_KEY) ?? "null");
+    if (Array.isArray(stored)) {
+      return new Set(
+        stored.filter((s): s is PaperStatus => typeof s === "string" && isPaperStatus(s)),
+      );
+    }
+  } catch {
+    // Unreadable / unavailable storage (private mode) — start all expanded.
+  }
+  return new Set();
+}
+
+function writeCollapsedGroups(set: Set<PaperStatus>): void {
+  try {
+    window.localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify([...set]));
+  } catch {
+    // Storage unavailable — groups still fold, it just won't be remembered.
+  }
+}
+
 // ── Collection: papers grouped by status ────────────────────────────────────
 export function PapersCollection({
   accent,
@@ -81,8 +122,14 @@ export function PapersCollection({
   const [query, setQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
-  // Status filter: empty set = show everything. Otherwise only the chosen statuses.
-  const [filters, setFilters] = useState<Set<PaperStatus>>(new Set());
+  // Which status groups are folded shut. Persisted so the list reopens exactly
+  // where the user left it. Read lazily in the initializer, written from one
+  // effect so every toggle path is covered at once.
+  const [collapsed, setCollapsed] = useState<Set<PaperStatus>>(readCollapsedGroups);
+
+  useEffect(() => {
+    writeCollapsedGroups(collapsed);
+  }, [collapsed]);
 
   const deletePaper = useCallback(
     async (id: string) => {
@@ -95,8 +142,8 @@ export function PapersCollection({
     [papers],
   );
 
-  const toggleFilter = useCallback((status: PaperStatus) => {
-    setFilters((prev) => {
+  const toggleCollapse = useCallback((status: PaperStatus) => {
+    setCollapsed((prev) => {
       const next = new Set(prev);
       if (next.has(status)) next.delete(status);
       else next.add(status);
@@ -134,9 +181,6 @@ export function PapersCollection({
     }
     return by;
   }, [filtered]);
-
-  const visibleStatuses = STATUS_ORDER.filter((s) => filters.size === 0 || filters.has(s));
-  const visibleCount = visibleStatuses.reduce((n, s) => n + grouped[s].length, 0);
 
   const createPaper = useCallback(async () => {
     // Spread list-created papers on a loose grid so they don't stack at the origin.
@@ -193,46 +237,16 @@ export function PapersCollection({
         </Pressable>
       </View>
 
-      <View style={styles.filterRow}>
-        {STATUS_ORDER.map((status) => {
-          const active = filters.has(status);
-          const meta = STATUS_META[status];
-          return (
-            <Pressable
-              key={status}
-              accessibilityRole="button"
-              accessibilityState={{ selected: active }}
-              onPress={() => toggleFilter(status)}
-              style={({ hovered }: PressState) => [
-                styles.filterChip,
-                motion,
-                hovered && !active && styles.filterChipHover,
-                active && { backgroundColor: meta.soft, borderColor: meta.color },
-              ]}
-            >
-              <View style={[styles.filterDot, { backgroundColor: meta.color }]} />
-              <Text
-                style={[styles.filterChipText, active && { color: meta.text, fontWeight: "600" }]}
-              >
-                {meta.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
       {papers.loading && papers.papers.length === 0 ? (
         <View style={styles.empty}>
           <ActivityIndicator color={theme.t.textTertiary} size="small" />
         </View>
-      ) : visibleCount === 0 ? (
+      ) : filtered.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyText}>
             {normalized
               ? `没有找到包含“${query.trim()}”的论文`
-              : filters.size > 0
-                ? "没有符合筛选条件的论文"
-                : "还没有论文\n点上方「新建」开始规划"}
+              : "还没有论文\n点上方「新建」开始规划"}
           </Text>
         </View>
       ) : (
@@ -240,27 +254,49 @@ export function PapersCollection({
           contentContainerStyle={styles.listContent}
           style={{ flex: 1, minHeight: 0 } as ViewStyle}
         >
-          {visibleStatuses.map((status) => {
+          {STATUS_ORDER.map((status) => {
             const items = grouped[status];
             if (items.length === 0) return null;
             const meta = STATUS_META[status];
+            // A search always shows its matches, even inside a folded group.
+            const isCollapsed = !normalized && collapsed.has(status);
             return (
               <View key={status} style={styles.group}>
-                <View style={styles.groupHeader}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: !isCollapsed }}
+                  onPress={() => toggleCollapse(status)}
+                  style={({ hovered }: PressState) => [
+                    styles.groupHeader,
+                    motion,
+                    hovered && styles.groupHeaderHover,
+                  ]}
+                >
+                  <RiArrowDownSLine
+                    color={theme.t.textTertiary}
+                    size={16}
+                    style={{
+                      transform: isCollapsed ? "rotate(-90deg)" : "none",
+                      transition: "transform 140ms ease",
+                      flexShrink: 0,
+                    }}
+                  />
                   <View style={[styles.groupDot, { backgroundColor: meta.color }]} />
                   <Text style={styles.groupTitle}>{meta.label}</Text>
                   <Text style={styles.groupCount}>{items.length}</Text>
-                </View>
-                {items.map((paper) => (
-                  <PaperListCard
-                    key={paper.id}
-                    active={paper.id === selectedId}
-                    paper={paper}
-                    styles={styles}
-                    onContextMenu={(x, y) => setMenu({ id: paper.id, x, y })}
-                    onPress={() => onOpenPaper(paper.id)}
-                  />
-                ))}
+                </Pressable>
+                {isCollapsed
+                  ? null
+                  : items.map((paper) => (
+                      <PaperListCard
+                        key={paper.id}
+                        active={paper.id === selectedId}
+                        paper={paper}
+                        styles={styles}
+                        onContextMenu={(x, y) => setMenu({ id: paper.id, x, y })}
+                        onPress={() => onOpenPaper(paper.id)}
+                      />
+                    ))}
               </View>
             );
           })}
@@ -436,6 +472,7 @@ function PaperListCard({
 }) {
   const theme = useTheme();
   const showStars = RATED_STATUSES.has(paper.status) && paper.rating > 0;
+  const venue = venueStyle(paper.venue);
   return (
     <div
       onContextMenu={(event) => {
@@ -464,8 +501,13 @@ function PaperListCard({
                 can be read as a ranking at a glance. */}
             {showStars ? <StarsInline rating={paper.rating} size={10} /> : null}
             {paper.venue ? (
-              <View style={styles.venueBadge}>
-                <Text numberOfLines={1} style={styles.venueBadgeText}>
+              <View
+                style={[
+                  styles.venueBadge,
+                  { backgroundColor: venue.soft, borderColor: venue.border },
+                ]}
+              >
+                <Text numberOfLines={1} style={[styles.venueBadgeText, { color: venue.text }]}>
                   {paper.venue}
                 </Text>
               </View>
@@ -504,7 +546,29 @@ export function PapersMainColumn({
   const styles = useMemo(() => makeStyles(theme, accent), [theme, accent]);
   const [edgeModal, setEdgeModal] = useState<{ id: string; label: string } | null>(null);
 
-  const selected = papers.findPaper(selectedId);
+  // The list highlights the clicked paper instantly (it reads selectedId), but
+  // the heavy detail editor — a Vditor instance keyed by paper id, plus a disk
+  // read — only mounts for the paper the clicking settles on. deferredId trails
+  // selectedId on a *leading-edge* debounce: an isolated change (a lone list
+  // click, a tab switch, opening from the graph) commits at once, so nothing
+  // stale is shown; only changes arriving faster than the window — a rapid
+  // click burst — are coalesced so the editor mounts once at the end instead of
+  // once per click. Opening from / clearing to nothing is instant via committedId.
+  const [deferredId, setDeferredId] = useState(selectedId);
+  const lastCommitRef = useRef(0);
+  useEffect(() => {
+    if (deferredId === selectedId) return;
+    const sinceLast = Date.now() - lastCommitRef.current;
+    const delay = sinceLast >= OPEN_DEBOUNCE_MS ? 0 : OPEN_DEBOUNCE_MS - sinceLast;
+    const timer = window.setTimeout(() => {
+      lastCommitRef.current = Date.now();
+      setDeferredId(selectedId);
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [selectedId, deferredId]);
+  const committedId = selectedId === null || deferredId === null ? selectedId : deferredId;
+
+  const selected = papers.findPaper(committedId);
 
   const handleCreateAt = useCallback(
     async (x: number, y: number) => {
@@ -808,17 +872,17 @@ function makeStyles(theme: Theme, accent: Accent) {
   const { t } = theme;
   return StyleSheet.create({
     // Collection
-    searchArea: { flexDirection: "row", gap: 8, paddingHorizontal: 10, paddingVertical: 10 },
+    searchArea: { flexDirection: "row", gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
     searchBox: {
       alignItems: "center",
       backgroundColor: t.searchFill,
       borderColor: t.separator,
-      borderRadius: 10,
+      borderRadius: 9,
       borderWidth: 1,
       flex: 1,
       flexDirection: "row",
       gap: 8,
-      height: 36,
+      height: 32,
       minWidth: 0,
       paddingHorizontal: 10,
     },
@@ -827,7 +891,7 @@ function makeStyles(theme: Theme, accent: Accent) {
       borderColor: accent.accent,
       boxShadow: `0 0 0 3px rgba(${accent.rgb},0.16)`,
     },
-    searchInput: { color: t.textPrimary, flex: 1, fontSize: 12.5, minWidth: 0, paddingVertical: 7 },
+    searchInput: { color: t.textPrimary, flex: 1, fontSize: 12.5, minWidth: 0, paddingVertical: 5 },
     searchClear: {
       alignItems: "center",
       borderRadius: 6,
@@ -840,37 +904,16 @@ function makeStyles(theme: Theme, accent: Accent) {
       alignItems: "center",
       backgroundColor: t.controlIdle,
       borderColor: t.controlBorder,
-      borderRadius: 10,
+      borderRadius: 9,
       borderWidth: 1,
       flexDirection: "row",
       gap: 4,
-      height: 36,
+      height: 32,
       justifyContent: "center",
       paddingHorizontal: 12,
     },
     newButtonHover: { backgroundColor: t.controlHover },
     newButtonText: { color: t.textSecondary, fontSize: 12.5, fontWeight: "600" },
-    filterRow: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 6,
-      paddingBottom: 10,
-      paddingHorizontal: 10,
-    },
-    filterChip: {
-      alignItems: "center",
-      backgroundColor: t.controlIdle,
-      borderColor: t.controlBorder,
-      borderRadius: 999,
-      borderWidth: 1,
-      flexDirection: "row",
-      gap: 5,
-      height: 26,
-      paddingHorizontal: 9,
-    },
-    filterChipHover: { backgroundColor: t.controlHover },
-    filterDot: { borderRadius: 3, height: 7, width: 7 },
-    filterChipText: { color: t.textSecondary, fontSize: 11.5, fontWeight: "500" },
     empty: {
       alignItems: "center",
       gap: 6,
@@ -880,15 +923,22 @@ function makeStyles(theme: Theme, accent: Accent) {
     },
     emptyText: { color: t.textTertiary, fontSize: 12.5, lineHeight: 19, textAlign: "center" },
     listContent: { paddingBottom: 20, paddingHorizontal: 8 },
-    group: { marginTop: 6 },
+    group: { marginTop: 2 },
+    // A full-width clickable row that folds its group. width:100% is required
+    // because accessibilityRole="button" makes RNW render a <button>, which
+    // shrinks to its content instead of filling the column (same reason as .card).
     groupHeader: {
       alignItems: "center",
+      borderRadius: 8,
       flexDirection: "row",
-      gap: 7,
-      paddingBottom: 4,
+      gap: 6,
+      marginTop: 4,
+      paddingBottom: 5,
       paddingHorizontal: 6,
-      paddingTop: 8,
+      paddingTop: 5,
+      width: "100%",
     },
+    groupHeaderHover: { backgroundColor: t.controlHover },
     groupDot: { borderRadius: 4, height: 8, width: 8 },
     groupTitle: { color: t.textSecondary, flex: 1, fontSize: 12, fontWeight: "700" },
     groupCount: { color: t.textTertiary, fontSize: 11, fontWeight: "600" },
@@ -932,13 +982,18 @@ function makeStyles(theme: Theme, accent: Accent) {
       marginTop: 3,
       overflow: "hidden",
     },
+    // Fill / text / border colour come per-venue from venueStyle() at the call
+    // site so each journal or conference reads in its own stable colour; only the
+    // shape lives here.
     venueBadge: {
-      backgroundColor: `rgba(${accent.rgb},0.10)`,
+      backgroundColor: "transparent",
+      borderColor: "transparent",
       borderRadius: 6,
+      borderWidth: 1,
       flexShrink: 0,
       maxWidth: "60%",
-      paddingHorizontal: 7,
-      paddingVertical: 2,
+      paddingHorizontal: 6,
+      paddingVertical: 1,
     },
     venueBadgeText: { color: accent.accentText, fontSize: 11, fontWeight: "600" },
     cardTags: { flexShrink: 1, fontSize: 11, minWidth: 0 },

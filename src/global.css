@@ -117,29 +117,27 @@ button {
   font-weight: 700;
   margin: 0.8em 0 0.4em;
 }
+/* Chat keeps a gentler heading scale than editors/previews. In a conversation
+   the shared Obsidian scale (h1 1.618em) reads as oversized next to the 16px
+   body, so headings here step down more modestly. Editors / notes / papers keep
+   the full --nomi-markdown-h*-size scale via .nomi-md-preview, untouched. */
 .nomi-md h1 {
-  font-size: var(--nomi-markdown-h1-size);
-  line-height: var(--nomi-markdown-h1-line-height);
+  font-size: 1.3em;
+  line-height: 1.3;
 }
 .nomi-md h2 {
-  font-size: var(--nomi-markdown-h2-size);
-  line-height: var(--nomi-markdown-h2-line-height);
+  font-size: 1.18em;
+  line-height: 1.3;
 }
 .nomi-md h3 {
-  font-size: var(--nomi-markdown-h3-size);
-  line-height: var(--nomi-markdown-h3-line-height);
+  font-size: 1.08em;
+  line-height: 1.35;
 }
-.nomi-md h4 {
-  font-size: var(--nomi-markdown-h4-size);
-  line-height: var(--nomi-markdown-h4-line-height);
-}
-.nomi-md h5 {
-  font-size: var(--nomi-markdown-h5-size);
-  line-height: var(--nomi-markdown-h5-line-height);
-}
+.nomi-md h4,
+.nomi-md h5,
 .nomi-md h6 {
-  font-size: var(--nomi-markdown-h6-size);
-  line-height: var(--nomi-markdown-h6-line-height);
+  font-size: 1em;
+  line-height: 1.4;
 }
 .nomi-md table {
   border-collapse: collapse;
@@ -166,8 +164,10 @@ button {
    left-to-right reading edge. Long turns are capped by the conversation UI. */
 .nomi-user-message-text {
   cursor: text;
-  font-size: 15px;
-  line-height: 23px;
+  /* Match the assistant Markdown body (.nomi-md, 16px / 1.65) so a user turn and
+     the model's reply read in one unified type size. */
+  font-size: 16px;
+  line-height: 26px;
   max-width: 100%;
   overflow-wrap: anywhere;
   text-align: left;
@@ -180,8 +180,10 @@ button {
   user-select: text;
 }
 
+/* The clamp height is applied inline from USER_MESSAGE_COLLAPSED_HEIGHT
+   (Conversation.tsx) so it stays tied to the line-height constant and can't
+   drift from the overflow-detection threshold. Only the clip lives here. */
 .nomi-user-message-text.is-collapsed {
-  max-height: 230px;
   overflow: hidden;
 }
 

@@ -44,6 +44,7 @@ import {
   RiLoader4Line,
   RiRestartLine,
   RiSendPlane2Fill,
+  RiSendPlane2Line,
   RiStopFill,
   RiThumbDownFill,
   RiThumbDownLine,
@@ -116,7 +117,9 @@ interface ReasoningViewState {
 
 const DEFAULT_REASONING_VIEW_STATE: ReasoningViewState = { expanded: false, open: true };
 const USER_MESSAGE_COLLAPSED_LINES = 10;
-const USER_MESSAGE_LINE_HEIGHT = 23;
+// Keep in sync with .nomi-user-message-text's line-height in global.css so the
+// collapse threshold and fade gradient line up with the rendered text.
+const USER_MESSAGE_LINE_HEIGHT = 26;
 const USER_MESSAGE_COLLAPSED_HEIGHT = USER_MESSAGE_COLLAPSED_LINES * USER_MESSAGE_LINE_HEIGHT;
 const CHAT_SCROLL_STORAGE_KEY = "nomi.chat.scroll-positions.v1";
 const MAX_SAVED_CHAT_SCROLL_POSITIONS = 200;
@@ -2453,6 +2456,7 @@ function MessageBubble({
   message,
   onDelete,
   onEdit,
+  onResend,
   onPreviewAttachment,
   providerKind,
   providerName,
@@ -2463,6 +2467,7 @@ function MessageBubble({
   message: ChatMessage;
   onDelete: (messageId: string) => Promise<void>;
   onEdit: (messageId: string, content: string) => Promise<void>;
+  onResend: (message: ChatMessage) => void;
   onPreviewAttachment: (attachment: Attachment) => void;
   providerKind?: string | null;
   providerName?: string | null;
@@ -2554,7 +2559,11 @@ function MessageBubble({
                     userOverflows && !userExpanded ? " is-collapsed" : ""
                   }`}
                   ref={userTextRef}
-                  style={{ color: theme.t.textPrimary }}
+                  style={{
+                    color: theme.t.textPrimary,
+                    maxHeight:
+                      userOverflows && !userExpanded ? USER_MESSAGE_COLLAPSED_HEIGHT : undefined,
+                  }}
                 >
                   {message.content}
                 </div>
@@ -2581,6 +2590,13 @@ function MessageBubble({
                 icon={<RiFileCopyLine color={iconColor} size={13} />}
                 label="复制消息"
                 onPress={() => void navigator.clipboard?.writeText(message.content)}
+                styles={styles}
+                theme={theme}
+              />
+              <AnswerAction
+                icon={<RiSendPlane2Line color={iconColor} size={13} />}
+                label="重新发送"
+                onPress={() => onResend(message)}
                 styles={styles}
                 theme={theme}
               />
@@ -3241,6 +3257,13 @@ export function ConversationView({
                           message={message}
                           onDelete={convo.remove}
                           onEdit={convo.edit}
+                          onResend={(target) =>
+                            void convo.send(
+                              target.content,
+                              target.attachments,
+                              thinkingEffort === "off" ? null : thinkingEffort,
+                            )
+                          }
                           onPreviewAttachment={(attachment) =>
                             void openAttachmentPreview(attachment)
                           }
