@@ -130,6 +130,15 @@ pub(crate) trait ProviderSpec: Send + Sync {
         false
     }
 
+    /// Whether a tool-enabled turn must be sent non-streaming (`stream:false`) and
+    /// parsed from the single JSON body instead of SSE. Default: false (stream).
+    /// MiniMax-M3's streaming endpoint silently drops a large `tool_calls` chunk
+    /// (it returns `finish_reason:"stop"` with the call missing), so that model
+    /// falls back to a non-streaming request when tools are offered.
+    fn requires_non_streaming_tool_calls(&self, _target: &ChatTarget, _has_tools: bool) -> bool {
+        false
+    }
+
     /// Preserve reasoning on an assistant message replayed to the provider.
     /// Most OpenAI-compatible APIs neither require nor accept this field, so the
     /// default is a no-op. GLM-5.3 needs it when a tool result follows an

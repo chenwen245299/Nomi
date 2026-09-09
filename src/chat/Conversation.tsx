@@ -493,15 +493,16 @@ function makeStyles(theme: Theme, accent: Accent) {
       borderRadius: 10,
       borderWidth: 1,
       boxShadow: "0 12px 36px rgba(30,38,50,0.16)",
-      left: 76,
+      left: 0,
       maxHeight: 260,
       overflow: "scroll",
       padding: 5,
       position: "absolute",
-      top: 27,
       width: 270,
       zIndex: 30,
     },
+    modelMenuDown: { top: 27 },
+    modelMenuUp: { bottom: 27 },
     modelMenuProvider: {
       color: t.textTertiary,
       fontSize: 9.5,
@@ -1857,6 +1858,8 @@ function AnswerSurface({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [modelMenuPlacement, setModelMenuPlacement] = useState<"up" | "down">("down");
+  const modelMenuAnchorRef = useRef<HTMLDivElement | null>(null);
   const iconColor = theme.t.textTertiary;
   const currentProvider = providerForMessage(message, providers, fallbackProviderId);
   const currentModelId = message.usage?.modelId ?? message.model ?? "";
@@ -1963,14 +1966,76 @@ function AnswerSurface({
               styles={styles}
               theme={theme}
             />
-            <AnswerAction
-              active={modelMenuOpen}
-              icon={<RiAtLine color={iconColor} size={13} />}
-              label="切换模型回答"
-              onPress={() => setModelMenuOpen((open) => !open)}
-              styles={styles}
-              theme={theme}
-            />
+            <div ref={modelMenuAnchorRef} style={{ position: "relative" }}>
+              <AnswerAction
+                active={modelMenuOpen}
+                icon={<RiAtLine color={iconColor} size={13} />}
+                label="切换模型回答"
+                onPress={() => {
+                  if (modelMenuOpen) {
+                    setModelMenuOpen(false);
+                    return;
+                  }
+
+                  const anchor = modelMenuAnchorRef.current;
+                  if (anchor) {
+                    const anchorRect = anchor.getBoundingClientRect();
+                    const scrollRect = findScrollableParent(anchor)?.getBoundingClientRect();
+                    const boundaryTop = Math.max(0, scrollRect?.top ?? 0);
+                    const boundaryBottom = Math.min(
+                      window.innerHeight,
+                      scrollRect?.bottom ?? window.innerHeight,
+                    );
+                    const roomAbove = anchorRect.top - boundaryTop;
+                    const roomBelow = boundaryBottom - anchorRect.bottom;
+                    setModelMenuPlacement(roomBelow < 270 && roomAbove > roomBelow ? "up" : "down");
+                  }
+                  setModelMenuOpen(true);
+                }}
+                styles={styles}
+                theme={theme}
+              />
+              {modelMenuOpen ? (
+                <View
+                  style={[
+                    styles.modelMenu,
+                    modelMenuPlacement === "up" ? styles.modelMenuUp : styles.modelMenuDown,
+                  ]}
+                >
+                  {availableProviders.map(({ provider, models }) => (
+                    <View key={provider.id}>
+                      <Text style={styles.modelMenuProvider}>{provider.name}</Text>
+                      {models.map((model) => (
+                        <Pressable
+                          accessibilityLabel={`使用 ${provider.name} ${model.name} 回答`}
+                          accessibilityRole="button"
+                          key={model.id}
+                          onPress={() => {
+                            setModelMenuOpen(false);
+                            void onGenerate(message.id, provider.id, model.id, false);
+                          }}
+                          style={({ hovered: rowHovered, pressed }: PressState) => [
+                            styles.modelMenuRow,
+                            motion,
+                            (rowHovered || pressed) && styles.modelMenuRowHover,
+                          ]}
+                        >
+                          <BrandIcon
+                            accent={accent}
+                            fallback={provider.name.slice(0, 1).toUpperCase()}
+                            size={24}
+                            url={modelIconUrl(model.id, model.name)}
+                          />
+                          <Text numberOfLines={1} style={styles.modelMenuName}>
+                            {model.name || model.id}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+            </div>
             {!hideFeedback && (
               <>
                 <AnswerAction
@@ -2025,42 +2090,6 @@ function AnswerSurface({
             />
           ) : null}
         </View>
-
-        {modelMenuOpen ? (
-          <View style={styles.modelMenu}>
-            {availableProviders.map(({ provider, models }) => (
-              <View key={provider.id}>
-                <Text style={styles.modelMenuProvider}>{provider.name}</Text>
-                {models.map((model) => (
-                  <Pressable
-                    accessibilityLabel={`使用 ${provider.name} ${model.name} 回答`}
-                    accessibilityRole="button"
-                    key={model.id}
-                    onPress={() => {
-                      setModelMenuOpen(false);
-                      void onGenerate(message.id, provider.id, model.id, false);
-                    }}
-                    style={({ hovered: rowHovered, pressed }: PressState) => [
-                      styles.modelMenuRow,
-                      motion,
-                      (rowHovered || pressed) && styles.modelMenuRowHover,
-                    ]}
-                  >
-                    <BrandIcon
-                      accent={accent}
-                      fallback={provider.name.slice(0, 1).toUpperCase()}
-                      size={24}
-                      url={modelIconUrl(model.id, model.name)}
-                    />
-                    <Text numberOfLines={1} style={styles.modelMenuName}>
-                      {model.name || model.id}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            ))}
-          </View>
-        ) : null}
       </View>
     </div>
   );

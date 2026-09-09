@@ -193,7 +193,11 @@ fn is_chat_model(model: &ProviderModel) -> bool {
             .output_modalities
             .iter()
             .any(|modality| modality == "text");
-    produces_text && !matches!(model.category.as_str(), "embedding" | "audio" | "video" | "image")
+    produces_text
+        && !matches!(
+            model.category.as_str(),
+            "embedding" | "audio" | "video" | "image"
+        )
 }
 
 /// Keep at most one starred model across every provider. With no explicit

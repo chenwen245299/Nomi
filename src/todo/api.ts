@@ -49,6 +49,14 @@ export interface TodoPatch {
   done?: boolean;
 }
 
+/** Optional fields saved atomically with a newly created todo. */
+export interface TodoCreateFields {
+  endDate?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  notes?: string;
+}
+
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const nowSec = () => Math.floor(Date.now() / 1000);
 
@@ -96,10 +104,18 @@ export async function createTodo(
   title: string,
   quadrant: Quadrant,
   dueDate: string | null,
-  endDate: string | null = null,
+  fields: TodoCreateFields = {},
 ): Promise<Todo> {
   if (isTauri()) {
-    return invoke<Todo>("create_todo", { title, quadrant, dueDate, endDate });
+    return invoke<Todo>("create_todo", {
+      title,
+      quadrant,
+      dueDate,
+      endDate: fields.endDate ?? null,
+      startTime: fields.startTime ?? null,
+      endTime: fields.endTime ?? null,
+      notes: fields.notes ?? "",
+    });
   }
   const trimmed = title.trim().slice(0, 200);
   if (!trimmed) {
@@ -109,11 +125,11 @@ export async function createTodo(
   const todo: Todo = {
     id: `todo-preview-${preview.seq++}`,
     title: trimmed,
-    notes: "",
+    notes: (fields.notes ?? "").slice(0, 4000),
     quadrant,
-    ...spanOf(dueDate || null, endDate || null),
-    startTime: null,
-    endTime: null,
+    ...spanOf(dueDate || null, fields.endDate || null),
+    startTime: fields.startTime || null,
+    endTime: fields.endTime || null,
     done: false,
     completedAt: null,
     createdAt: timestamp,

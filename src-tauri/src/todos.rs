@@ -272,27 +272,34 @@ pub fn todos_list(app: AppHandle) -> Result<Vec<Todo>, String> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // a Tauri command's params are the wire API
 pub fn create_todo(
     app: AppHandle,
     title: String,
     quadrant: u8,
     due_date: Option<String>,
     end_date: Option<String>,
+    notes: Option<String>,
+    start_time: Option<String>,
+    end_time: Option<String>,
 ) -> Result<Todo, String> {
     let title = clean_title(&title)?;
     let quadrant = check_quadrant(quadrant)?;
     let (due_date, end_date) = normalize_span(check_due_date(due_date)?, check_due_date(end_date)?);
+    let notes = notes.unwrap_or_default().chars().take(MAX_NOTES).collect();
+    let start_time = check_time(start_time)?;
+    let end_time = check_time(end_time)?;
     let mut todos = load(&app)?;
     let timestamp = now();
     let todo = Todo {
         id: format!("todo-{}", uuid::Uuid::new_v4()),
         title,
-        notes: String::new(),
+        notes,
         quadrant,
         due_date,
         end_date,
-        start_time: None,
-        end_time: None,
+        start_time,
+        end_time,
         done: false,
         completed_at: None,
         created_at: timestamp,

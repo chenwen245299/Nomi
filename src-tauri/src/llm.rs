@@ -161,8 +161,9 @@ pub async fn stream_chat(
         // cache hit/miss counts). Standard OpenAI streaming option.
         "stream_options": { "include_usage": true },
     });
+    let has_tools = tools.is_some_and(|t| !t.is_empty());
     if let Some(tools) = tools
-        && !tools.is_empty()
+        && has_tools
     {
         body["tools"] = Value::Array(tools.to_vec());
         body["tool_choice"] = Value::String("auto".into());
@@ -173,6 +174,16 @@ pub async fn stream_chat(
     // Other provider-specific request fields are added last so the spec sees
     // the fully assembled body.
     spec.decorate_body(&mut body, target);
+
+    // Some models (MiniMax-M3) drop large tool_calls over their streaming endpoint,
+    // so a tool-enabled turn is sent non-streaming and parsed from one JSON body.
+    if spec.requires_non_streaming_tool_calls(target, has_tools) {
+        body["stream"] = Value::Bool(false);
+        if let Some(object) = body.as_object_mut() {
+            object.remove("stream_options");
+        }
+        return non_stream_chat(spec, target, &body, channel, cancel).await;
+    }
 
     let client = reqwest::Client::new();
     let mut req = client
@@ -264,6 +275,143 @@ pub async fn stream_chat(
     }
 
     Ok(turn)
+}
+
+/// Send one chat completion with `stream:false` and build the same
+/// [`AssistantTurn`] a streamed turn would, emitting the equivalent
+/// [`StreamEvent`]s so the frontend still renders content, reasoning and tool
+/// calls. Used for models whose streaming endpoint drops tool calls (MiniMax-M3).
+async fn non_stream_chat(
+    spec: &dyn crate::providers::ProviderSpec,
+    target: &ChatTarget,
+    body: &Value,
+    channel: &tauri::ipc::Channel<StreamEvent>,
+    cancel: &Arc<AtomicBool>,
+) -> Result<AssistantTurn, String> {
+    let client = reqwest::Client::new();
+    let mut req = client
+        .post(spec.chat_url(&target.base_url))
+        .header("Content-Type", "application/json")
+        .json(body);
+    if let Some(key) = target.api_key.as_deref()
+        && !key.is_empty()
+    {
+        req = spec.apply_auth(req, key);
+    }
+    let resp = req.send().await.map_err(|e| format!("请求模型失败：{e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取模型响应失败：{e}"))?;
+    if !status.is_success() {
+        let snippet: String = text.chars().take(400).collect();
+        return Err(format!("模型接口返回 {status}：{snippet}"));
+    }
+    let json: Value = serde_json::from_str(&text).map_err(|e| format!("无法解析模型响应：{e}"))?;
+    if let Some(err) = json.get("error") {
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("未知错误");
+        return Err(format!("模型返回错误：{msg}"));
+    }
+
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(AssistantTurn {
+            cancelled: true,
+            ..Default::default()
+        });
+    }
+
+    let turn = build_turn_from_message(&json, spec.reasoning_fields());
+    // Replay the built turn as the same events a streamed turn would emit, so the
+    // frontend renders reasoning, content and the tool call identically. The
+    // emitted index matches the slot in `turn.tool_calls` (empty-name calls are
+    // dropped before the push), so it never drifts from the accumulated list.
+    if !turn.reasoning.is_empty() {
+        let _ = channel.send(StreamEvent::Reasoning {
+            delta: turn.reasoning.clone(),
+        });
+    }
+    if !turn.content.is_empty() {
+        let _ = channel.send(StreamEvent::Text {
+            delta: turn.content.clone(),
+        });
+    }
+    for (index, call) in turn.tool_calls.iter().enumerate() {
+        let _ = channel.send(StreamEvent::ToolCallStart {
+            index: index as u32,
+            id: call.id.clone(),
+            name: call.name.clone(),
+        });
+        if !call.arguments.is_empty() {
+            let _ = channel.send(StreamEvent::ToolCallArgs {
+                index: index as u32,
+                delta: call.arguments.clone(),
+            });
+        }
+    }
+
+    Ok(turn)
+}
+
+/// Build an [`AssistantTurn`] from a non-streaming `choices[0].message` body,
+/// mirroring what [`apply_chunk`] accumulates from a stream: visible reasoning
+/// prefers `reasoning_content` / `reasoning`, and otherwise falls back to the text
+/// inside `reasoning_details` (which is also kept verbatim for replay). Pure and
+/// channel-free so it can be unit-tested.
+fn build_turn_from_message(json: &Value, reasoning_fields: &[&str]) -> AssistantTurn {
+    let mut turn = AssistantTurn::default();
+    if let Some(usage) = json.get("usage").filter(|value| value.is_object()) {
+        turn.usage = Some(parse_usage(usage));
+    }
+    let choice = &json["choices"][0];
+    turn.finish_reason = choice["finish_reason"].as_str().map(str::to_string);
+    let message = &choice["message"];
+
+    if let Some(content) = message["content"].as_str() {
+        turn.content = content.to_string();
+    }
+
+    let direct_reasoning = reasoning_fields
+        .iter()
+        .find_map(|field| message[*field].as_str())
+        .filter(|text| !text.is_empty());
+    if let Some(details) = message
+        .get("reasoning_details")
+        .filter(|value| !value.is_null())
+    {
+        turn.reasoning_details = Some(details.clone());
+    }
+    turn.reasoning = match direct_reasoning {
+        Some(text) => text.to_string(),
+        None => message
+            .get("reasoning_details")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.get("text").and_then(Value::as_str))
+            .collect::<String>(),
+    };
+
+    if let Some(tool_calls) = message["tool_calls"].as_array() {
+        for call in tool_calls {
+            let name = call["function"]["name"].as_str().unwrap_or_default();
+            if name.is_empty() {
+                continue;
+            }
+            turn.tool_calls.push(AccumulatedToolCall {
+                id: call["id"].as_str().unwrap_or_default().to_string(),
+                name: name.to_string(),
+                arguments: call["function"]["arguments"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            });
+        }
+    }
+    turn
 }
 
 /// Fold one streamed `choices[0].delta` chunk into the turn, emitting events.
@@ -463,6 +611,64 @@ mod tests {
         assert_eq!(turn.content, "你好。");
         assert_eq!(turn.reasoning, "先想好");
         assert_eq!(turn.reasoning_details.unwrap()[0]["text"], "先想好");
+    }
+
+    #[test]
+    fn non_stream_message_recovers_reasoning_and_tool_calls() {
+        // Mirrors MiniMax-M3's non-streaming body: reasoning only in
+        // reasoning_details (no reasoning_content), and the tool call that its
+        // streaming endpoint drops. finish_reason "stop" must not hide the call.
+        let json = serde_json::json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "好的，正在为你生成 PDF。",
+                    "reasoning_details": [{ "type": "reasoning.text", "text": "用户要导出 PDF，调用工具。" }],
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "create_markdown_document",
+                            "arguments": "{\"markdown\":\"# 新闻\"}"
+                        }
+                    }]
+                }
+            }],
+            "usage": { "prompt_tokens": 2084, "completion_tokens": 545, "total_tokens": 2629 }
+        });
+        let turn = build_turn_from_message(&json, &["reasoning_content", "reasoning"]);
+        assert_eq!(turn.content, "好的，正在为你生成 PDF。");
+        // reasoning_details-only still surfaces visible reasoning text
+        assert_eq!(turn.reasoning, "用户要导出 PDF，调用工具。");
+        assert!(turn.reasoning_details.is_some());
+        assert_eq!(turn.tool_calls.len(), 1);
+        assert_eq!(turn.tool_calls[0].name, "create_markdown_document");
+        assert_eq!(turn.tool_calls[0].arguments, "{\"markdown\":\"# 新闻\"}");
+        assert_eq!(turn.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(turn.usage.unwrap().completion_tokens, 545);
+    }
+
+    #[test]
+    fn non_stream_prefers_reasoning_content_and_skips_nameless_calls() {
+        let json = serde_json::json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": "",
+                    "reasoning_content": "直接推理",
+                    "reasoning_details": [{ "text": "detail" }],
+                    "tool_calls": [
+                        { "id": "x", "function": { "name": "", "arguments": "{}" } },
+                        { "id": "y", "function": { "name": "web_search", "arguments": "{\"query\":\"a\"}" } }
+                    ]
+                }
+            }]
+        });
+        let turn = build_turn_from_message(&json, &["reasoning_content", "reasoning"]);
+        assert_eq!(turn.reasoning, "直接推理"); // prefers reasoning_content over details
+        assert_eq!(turn.tool_calls.len(), 1); // the empty-name call is dropped
+        assert_eq!(turn.tool_calls[0].name, "web_search");
     }
 
     /// A throwaway HTTP server that answers exactly one request with an OpenAI

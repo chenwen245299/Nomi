@@ -942,6 +942,7 @@ async fn run_chat(
         reasoning: String::new(),
         attachments,
         tool_calls: Vec::new(),
+        provider_history: Vec::new(),
         usage: None,
         response_group_id: None,
         selected_for_context: None,
@@ -1032,6 +1033,7 @@ async fn generate_assistant(
         reasoning: String::new(),
         attachments: Vec::new(),
         tool_calls: Vec::new(),
+        provider_history: Vec::new(),
         usage: None,
         response_group_id: Some(response_group_id.to_string()),
         selected_for_context: Some(true),
@@ -1041,6 +1043,7 @@ async fn generate_assistant(
     };
     let mut usage = chat::MessageUsage::default();
     let mut have_usage = false;
+    let mut had_tool_exchange = false;
     let generation_started = Instant::now();
 
     // Keep following tool requests until the model produces a final response.
@@ -1090,24 +1093,18 @@ async fn generate_assistant(
         // us silently save an empty assistant reply instead of running the tool.
         let wants_tools = should_execute_tool_calls(&turn, tools.is_some());
         if !wants_tools {
+            if had_tool_exchange {
+                assistant
+                    .provider_history
+                    .push(assistant_turn_message(&turn, target.spec()));
+            }
             break;
         }
 
-        let mut assistant_tool_message = json!({
-            "role": "assistant",
-            "content": turn.content,
-            "tool_calls": turn.tool_calls.iter().map(|tc| json!({
-                "id": tc.id,
-                "type": "function",
-                "function": { "name": tc.name, "arguments": tc.arguments },
-            })).collect::<Vec<_>>(),
-        });
-        target.spec().attach_reasoning_to_assistant_message(
-            &mut assistant_tool_message,
-            &turn.reasoning,
-            turn.reasoning_details.as_ref(),
-        );
-        oa_messages.push(assistant_tool_message);
+        had_tool_exchange = true;
+        let assistant_tool_message = assistant_turn_message(&turn, target.spec());
+        oa_messages.push(assistant_tool_message.clone());
+        assistant.provider_history.push(assistant_tool_message);
 
         let mut pending_images: Vec<String> = Vec::new();
         for tc in &turn.tool_calls {
@@ -1154,11 +1151,13 @@ async fn generate_assistant(
                 ok: outcome.ok,
                 images: outcome.preview_images.clone(),
             });
-            oa_messages.push(json!({
+            let tool_message = json!({
                 "role": "tool",
                 "tool_call_id": tc.id,
                 "content": outcome.tool_content,
-            }));
+            });
+            oa_messages.push(tool_message.clone());
+            assistant.provider_history.push(tool_message);
             pending_images.extend(outcome.images);
         }
 
@@ -1208,6 +1207,37 @@ async fn generate_assistant(
 
 fn should_execute_tool_calls(turn: &llm::AssistantTurn, tools_available: bool) -> bool {
     tools_available && !turn.tool_calls.is_empty()
+}
+
+/// Preserve the provider's complete assistant turn before tool results are
+/// appended. MiniMax-M3 validates its interleaved reasoning/tool transcript on
+/// every follow-up request, so rebuilding this from visible final text is not
+/// sufficient.
+fn assistant_turn_message(turn: &llm::AssistantTurn, spec: &dyn providers::ProviderSpec) -> Value {
+    let mut message = json!({
+        "role": "assistant",
+        "content": turn.content,
+    });
+    if !turn.tool_calls.is_empty() {
+        message["tool_calls"] = Value::Array(
+            turn.tool_calls
+                .iter()
+                .map(|tc| {
+                    json!({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": { "name": tc.name, "arguments": tc.arguments },
+                    })
+                })
+                .collect(),
+        );
+    }
+    spec.attach_reasoning_to_assistant_message(
+        &mut message,
+        &turn.reasoning,
+        turn.reasoning_details.as_ref(),
+    );
+    message
 }
 
 // ── OpenAI message building ─────────────────────────────────────────────────────
@@ -1290,15 +1320,28 @@ fn append_oa_history<'a>(
 ) {
     for msg in messages {
         match msg.role.as_str() {
-            "assistant" if msg.selected_for_context.unwrap_or(true) && !msg.content.is_empty() => {
-                let content = if reference {
-                    format!("[左侧对话·助手]\n{}", msg.content)
-                } else {
-                    msg.content.clone()
-                };
-                let mut message = json!({ "role": "assistant", "content": content });
-                spec.attach_reasoning_to_assistant_message(&mut message, &msg.reasoning, None);
-                out.push(message);
+            "assistant" if msg.selected_for_context.unwrap_or(true) => {
+                if reference {
+                    if !msg.content.is_empty() {
+                        out.push(json!({
+                            "role": "assistant",
+                            "content": format!("[左侧对话·助手]\n{}", msg.content),
+                        }));
+                    }
+                    continue;
+                }
+
+                if append_provider_history(out, &msg.provider_history, spec) {
+                    continue;
+                }
+                if append_legacy_tool_history(out, msg, spec) {
+                    continue;
+                }
+                if !msg.content.is_empty() {
+                    let mut message = json!({ "role": "assistant", "content": msg.content });
+                    spec.attach_reasoning_to_assistant_message(&mut message, &msg.reasoning, None);
+                    out.push(message);
+                }
             }
             "user" => {
                 let mut message =
@@ -1311,6 +1354,124 @@ fn append_oa_history<'a>(
             _ => {}
         }
     }
+}
+
+/// Replay the OpenAI-compatible part of a saved provider exchange, then let the
+/// currently selected provider restore its own reasoning field. This keeps
+/// MiniMax's exact `reasoning_details` without leaking that private field to a
+/// different provider after the user switches models.
+fn append_provider_history(
+    out: &mut Vec<Value>,
+    history: &[Value],
+    spec: &dyn providers::ProviderSpec,
+) -> bool {
+    if history.is_empty() {
+        return false;
+    }
+    let start = out.len();
+    for saved in history {
+        match saved.get("role").and_then(Value::as_str) {
+            Some("assistant") => {
+                let mut message = json!({
+                    "role": "assistant",
+                    "content": saved
+                        .get("content")
+                        .cloned()
+                        .unwrap_or(Value::String(String::new())),
+                });
+                if let Some(calls) = saved.get("tool_calls").and_then(Value::as_array)
+                    && !calls.is_empty()
+                {
+                    message["tool_calls"] = Value::Array(calls.clone());
+                }
+                let reasoning = saved_reasoning_text(saved);
+                spec.attach_reasoning_to_assistant_message(
+                    &mut message,
+                    &reasoning,
+                    saved.get("reasoning_details"),
+                );
+                out.push(message);
+            }
+            Some("tool") => {
+                let Some(tool_call_id) = saved.get("tool_call_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                out.push(json!({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": saved
+                        .get("content")
+                        .cloned()
+                        .unwrap_or(Value::String(String::new())),
+                }));
+            }
+            _ => {}
+        }
+    }
+    out.len() > start
+}
+
+fn saved_reasoning_text(message: &Value) -> String {
+    if let Some(reasoning) = message
+        .get("reasoning_content")
+        .or_else(|| message.get("reasoning"))
+        .and_then(Value::as_str)
+    {
+        return reasoning.to_string();
+    }
+    message
+        .get("reasoning_details")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|detail| detail.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// Older conversations only saved visible tool cards. Rebuild a valid
+/// assistant/tool/final sequence so an existing MiniMax-M3 chat is repaired
+/// without forcing the user to start a new conversation.
+fn append_legacy_tool_history(
+    out: &mut Vec<Value>,
+    message: &ChatMessage,
+    spec: &dyn providers::ProviderSpec,
+) -> bool {
+    let calls = message
+        .tool_calls
+        .iter()
+        .filter(|call| !call.id.is_empty() && !call.name.is_empty())
+        .collect::<Vec<_>>();
+    if calls.is_empty() {
+        return false;
+    }
+
+    let mut assistant_tool_message = json!({
+        "role": "assistant",
+        "content": "",
+        "tool_calls": calls.iter().map(|call| json!({
+            "id": call.id,
+            "type": "function",
+            "function": { "name": call.name, "arguments": call.arguments },
+        })).collect::<Vec<_>>(),
+    });
+    spec.attach_reasoning_to_assistant_message(
+        &mut assistant_tool_message,
+        &message.reasoning,
+        None,
+    );
+    out.push(assistant_tool_message);
+    for call in calls {
+        out.push(json!({
+            "role": "tool",
+            "tool_call_id": call.id,
+            "content": json!({ "ok": call.ok, "summary": call.result }).to_string(),
+        }));
+    }
+    if !message.content.is_empty() {
+        out.push(json!({ "role": "assistant", "content": message.content }));
+    }
+    true
 }
 
 fn prefix_message_content(message: &mut Value, prefix: &str) {
@@ -1495,7 +1656,7 @@ fn tool_schemas(has_web_search: bool) -> Vec<Value> {
         "type": "function",
         "function": {
             "name": "create_markdown_document",
-            "description": "把 Markdown 渲染成 PDF 或 PNG 文件，并作为附件加入你这条回复；用户能在聊天里看到缩略图、点击预览并下载。适合导出报告、总结、方案、表格、清单、代码或含公式的内容。完整支持中文、GFM 表格、代码高亮和数学公式（行内 $...$、块级 $$...$$）。生成后文件会直接展示给用户，你不需要把完整正文再粘贴到回复文本里，只需简短说明即可。",
+            "description": "把 Markdown 渲染成 PDF 或 PNG 文件，并作为附件加入你这条回复；用户能在聊天里看到缩略图、点击预览并下载。当用户明确要求“生成”或“导出” PDF/PNG 时，必须在当前回复调用本工具，禁止只说“我来生成”而不调用。适合导出报告、总结、方案、表格、清单、代码或含公式的内容。完整支持中文、GFM 表格、代码高亮和数学公式（行内 $...$、块级 $$...$$）。生成后文件会直接展示给用户，你不需要把完整正文再粘贴到回复文本里，只需简短说明即可。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2977,6 +3138,7 @@ mod tests {
             reasoning: String::new(),
             attachments: Vec::new(),
             tool_calls: Vec::new(),
+            provider_history: Vec::new(),
             usage: None,
             response_group_id: None,
             selected_for_context: None,
@@ -3010,6 +3172,81 @@ mod tests {
         };
 
         assert!(!should_execute_tool_calls(&turn, true));
+    }
+
+    #[test]
+    fn provider_history_replays_the_complete_minimax_tool_exchange() {
+        let mut assistant = text_message("assistant", "assistant", "visible combined answer");
+        assistant.provider_history = vec![
+            json!({
+                "role": "assistant",
+                "content": "我来处理。",
+                "reasoning_details": [{ "type": "reasoning.text", "text": "需要调用工具" }],
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "create_markdown_document",
+                        "arguments": "{\"markdown\":\"# PDF\"}"
+                    }
+                }]
+            }),
+            json!({
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": "{\"ok\":true}"
+            }),
+            json!({
+                "role": "assistant",
+                "content": "PDF 已生成。",
+                "reasoning_details": [{ "type": "reasoning.text", "text": "已完成" }]
+            }),
+        ];
+
+        let history = build_oa_messages(
+            "",
+            &[assistant],
+            false,
+            false,
+            Path::new("."),
+            providers::spec_for("minimax"),
+        );
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0]["tool_calls"][0]["id"], "call-1");
+        assert_eq!(history[0]["reasoning_details"][0]["text"], "需要调用工具");
+        assert_eq!(history[1]["role"], "tool");
+        assert_eq!(history[1]["tool_call_id"], "call-1");
+        assert_eq!(history[2]["content"], "PDF 已生成。");
+        assert_eq!(history[2]["reasoning_details"][0]["text"], "已完成");
+    }
+
+    #[test]
+    fn legacy_tool_records_are_rebuilt_for_existing_conversations() {
+        let mut assistant = text_message("assistant", "assistant", "新闻总结。");
+        assistant.tool_calls.push(ToolCallRecord {
+            id: "legacy-call".into(),
+            name: "web_search".into(),
+            arguments: "{\"query\":\"今日新闻\"}".into(),
+            result: "已找到结果".into(),
+            ok: true,
+            images: Vec::new(),
+        });
+
+        let history = build_oa_messages(
+            "",
+            &[assistant],
+            false,
+            false,
+            Path::new("."),
+            providers::spec_for("minimax"),
+        );
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0]["tool_calls"][0]["id"], "legacy-call");
+        assert_eq!(history[1]["role"], "tool");
+        assert_eq!(history[1]["tool_call_id"], "legacy-call");
+        assert_eq!(history[2]["content"], "新闻总结。");
     }
 
     #[test]
@@ -3207,6 +3444,12 @@ mod tests {
         assert_eq!(
             tools[3]["function"]["parameters"]["required"][0],
             "markdown"
+        );
+        assert!(
+            tools[3]["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("必须在当前回复调用本工具")
         );
     }
 

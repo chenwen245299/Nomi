@@ -247,15 +247,31 @@ impl ProviderSpec for MiniMax {
         model
     }
 
-    fn configure_reasoning(&self, body: &mut Value, target: &ChatTarget, effort: Option<&str>) {
-        // M3 defaults to adaptive thinking, so an explicit disabled value is
-        // required when the user turns it off. M2.x thinking is mandatory; omit
-        // a false value that those models reject.
-        if is_m3(&target.model_id) {
-            body["thinking"] = json!({
-                "type": if effort.is_some() { "adaptive" } else { "disabled" }
-            });
-        }
+    fn configure_reasoning(&self, _body: &mut Value, _target: &ChatTarget, _effort: Option<&str>) {
+        // Deliberately a no-op — and deliberately NOT deferring to the default impl
+        // (which would add `reasoning_effort`, a field MiniMax ignores).
+        //
+        // On MiniMax's OpenAI-compatible endpoint M3 accepts a `thinking` object
+        // ({type: "disabled" | "adaptive"}), and thinking is ON when it is omitted.
+        // `disabled` makes M3 skip reasoning and answer directly; `adaptive` lets the
+        // model decide. But the M-series only calls tools reliably *with* its
+        // interleaved thinking, so we must not send `disabled` (nor let `adaptive`
+        // short-circuit it): sending `disabled` made M3 narrate "好的，我帮你生成…" and
+        // never emit a tool_call. We omit the param entirely to keep full thinking
+        // on, exactly like M2.x (which never received it and always think + call
+        // tools). Reasoning is still split out via `reasoning_split` (decorate_body).
+        //
+        // Trade-off: the UI reasoning-effort switch no longer changes M3's request —
+        // acceptable, since reliable tool calling is worth more than a thinking toggle.
+    }
+
+    fn requires_non_streaming_tool_calls(&self, target: &ChatTarget, has_tools: bool) -> bool {
+        // M3's OpenAI-compatible *streaming* endpoint drops a large tool_calls chunk:
+        // it streams a short preamble, then `finish_reason:"stop"` with the call
+        // missing (yet `completion_tokens` shows it was generated). A non-streaming
+        // request returns the complete `message.tool_calls`. M2.x stream tool calls
+        // fine, so only M3 needs this fallback, and only when tools are offered.
+        has_tools && is_m3(&target.model_id)
     }
 
     fn decorate_body(&self, body: &mut Value, _target: &ChatTarget) {
@@ -411,14 +427,19 @@ mod tests {
     }
 
     #[test]
-    fn m3_thinking_follows_the_explicit_ui_switch() {
+    fn m3_never_sends_a_thinking_param_so_tool_calls_survive() {
+        // Thinking must stay ON (the endpoint default) for M3 to emit tool_calls,
+        // so configure_reasoning adds neither an Anthropic-style `thinking` field
+        // nor `reasoning_effort`, in either UI switch position.
         let mut off = json!({});
         MiniMax.configure_reasoning(&mut off, &target("MiniMax-M3"), None);
-        assert_eq!(off["thinking"]["type"], "disabled");
+        assert!(off.get("thinking").is_none());
+        assert!(off.get("reasoning_effort").is_none());
 
         let mut on = json!({});
         MiniMax.configure_reasoning(&mut on, &target("MiniMax-M3"), Some("high"));
-        assert_eq!(on["thinking"]["type"], "adaptive");
+        assert!(on.get("thinking").is_none());
+        assert!(on.get("reasoning_effort").is_none());
     }
 
     #[test]

@@ -8,6 +8,7 @@ import {
   updateTodo,
   type Quadrant,
   type Todo,
+  type TodoCreateFields,
   type TodoPatch,
 } from "./api";
 
@@ -36,7 +37,7 @@ export interface TodosData {
     title: string,
     quadrant: Quadrant,
     dueDate: string | null,
-    endDate?: string | null,
+    fields?: TodoCreateFields,
   ) => Promise<Todo | null>;
   patchTodo: (id: string, patch: TodoPatch) => Promise<Todo | null>;
   removeTodo: (id: string) => Promise<void>;
@@ -76,10 +77,10 @@ export function useTodos(active: boolean): TodosData {
       title: string,
       quadrant: Quadrant,
       dueDate: string | null,
-      endDate: string | null = null,
+      fields: TodoCreateFields = {},
     ) => {
       try {
-        const created = await createTodo(title, quadrant, dueDate, endDate);
+        const created = await createTodo(title, quadrant, dueDate, fields);
         setTodos((prev) => canonical([...prev, created]));
         setError(null);
         return created;

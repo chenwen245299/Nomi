@@ -1047,6 +1047,12 @@ pub struct ChatMessage {
     pub attachments: Vec<Attachment>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCallRecord>,
+    /// Exact provider messages produced while this reply ran tools: assistant
+    /// responses (including tool_calls/reasoning_details), tool results, and the
+    /// final assistant response. Replaying these verbatim is required by models
+    /// with interleaved thinking such as MiniMax-M3.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_history: Vec<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<MessageUsage>,
     /// Assistant answers that respond to the same user turn share this id.
@@ -1193,6 +1199,7 @@ pub fn add_context_marker(
         reasoning: String::new(),
         attachments: Vec::new(),
         tool_calls: Vec::new(),
+        provider_history: Vec::new(),
         usage: None,
         response_group_id: None,
         selected_for_context: None,
@@ -1379,6 +1386,7 @@ mod tests {
             reasoning: String::new(),
             attachments: Vec::new(),
             tool_calls: Vec::new(),
+            provider_history: Vec::new(),
             usage: None,
             response_group_id: None,
             selected_for_context: None,

@@ -153,6 +153,8 @@ export interface ChatMessage {
   reasoning?: string;
   attachments: Attachment[];
   toolCalls: ToolCallRecord[];
+  /** Provider-native assistant/tool transcript retained for reliable follow-up tool calls. */
+  providerHistory?: unknown[];
   usage?: MessageUsage | null;
   responseGroupId?: string | null;
   selectedForContext?: boolean | null;

@@ -609,7 +609,9 @@ export function TodoCollection({
     setDraft("");
     // The date chosen here is kept for the next item: entering a week of work
     // for the same day should not mean re-picking the date every line.
-    await todos.addTodo(title, target.quadrant, target.span.start, target.span.end);
+    await todos.addTodo(title, target.quadrant, target.span.start, {
+      endDate: target.span.end,
+    });
   };
 
   const percent = progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100);
@@ -2005,7 +2007,7 @@ function InlineAdd({
   const { t } = theme;
   const [value, setValue] = useState("");
   // `open` = the composer is active. The schedule (date + time) shows in a
-  // floating popover below the input only while adding, so no persistent date
+  // floating popover beside the input only while adding, so no persistent date
   // chip clutters the row and the surrounding cards never shift.
   const [open, setOpen] = useState(false);
   const [calOpen, setCalOpen] = useState(false);
@@ -2013,9 +2015,21 @@ function InlineAdd({
   // a time) as you type, so a todo can be scheduled the moment it is created.
   const [span, setSpan] = useState<DateSpan>({ start: dueDate, end: null });
   const [time, setTime] = useState<{ start: string; end: string }>({ start: "", end: "" });
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const touched = useRef(false);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
+  // Pick a side once per open session. Expanding the month calendar must not
+  // make the whole popover jump from below the composer to the top of the
+  // window; if the enlarged content no longer fits, it scrolls in place.
+  const placementRef = useRef<"above" | "below" | null>(null);
+  const closePopover = useCallback(() => {
+    placementRef.current = null;
+    setCalOpen(false);
+    setOpen(false);
+  }, []);
 
   // Follow the scope's default until the user picks a date of their own; after
   // that their choice sticks even as the scope's default shifts underneath.
@@ -2025,21 +2039,41 @@ function InlineAdd({
     }
   }, [dueDate]);
 
-  // Glue the popover under (or above, near the screen edge) the input row as a
-  // fixed overlay, so opening it never nudges the surrounding cards.
+  // Glue the popover to the input row as a fixed overlay. The initial compact
+  // popover chooses the better side; later content changes preserve that side.
   const reposition = useCallback(() => {
     const el = popRef.current;
     const row = rowRef.current;
     if (!el || !row) return;
     const r = row.getBoundingClientRect();
     const box = el.getBoundingClientRect();
-    const below = r.bottom + 6;
-    const top =
-      below + box.height > window.innerHeight - 8 && r.top - 6 - box.height >= 8
-        ? r.top - 6 - box.height
-        : below;
-    el.style.top = `${Math.max(8, top)}px`;
-    el.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 8 - box.width))}px`;
+    const viewportGap = 8;
+    const anchorGap = 6;
+    const belowTop = r.bottom + anchorGap;
+    const belowSpace = window.innerHeight - viewportGap - belowTop;
+    const aboveSpace = r.top - anchorGap - viewportGap;
+
+    if (placementRef.current === null) {
+      const compactHeight = Math.min(box.height, 220);
+      placementRef.current =
+        belowSpace >= compactHeight || belowSpace >= aboveSpace ? "below" : "above";
+    }
+
+    if (placementRef.current === "below") {
+      const top = Math.max(viewportGap, belowTop);
+      el.style.bottom = "auto";
+      el.style.top = `${top}px`;
+      el.style.maxHeight = `${Math.max(96, window.innerHeight - viewportGap - top)}px`;
+    } else {
+      const bottom = Math.max(viewportGap, window.innerHeight - r.top + anchorGap);
+      el.style.bottom = `${bottom}px`;
+      el.style.top = "auto";
+      el.style.maxHeight = `${Math.max(96, r.top - anchorGap - viewportGap)}px`;
+    }
+    el.style.left = `${Math.max(
+      viewportGap,
+      Math.min(r.left, window.innerWidth - viewportGap - box.width),
+    )}px`;
   }, []);
 
   // Subscribe once per open session…
@@ -2065,10 +2099,10 @@ function InlineAdd({
     const onDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (rowRef.current?.contains(target) || popRef.current?.contains(target)) return;
-      setOpen(false);
+      closePopover();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") closePopover();
     };
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey);
@@ -2076,24 +2110,36 @@ function InlineAdd({
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [closePopover, open]);
 
   const submit = async () => {
+    if (savingRef.current) {
+      return;
+    }
     const title = value.trim();
     if (!title) {
       return;
     }
-    // Clear the text but keep the chosen date/time: entering a run of items for
-    // the same slot should not mean re-picking it every line.
-    setValue("");
     const startTime = normalizeClock(time.start);
     const endTime = normalizeClock(time.end);
-    // Reflect what was actually applied: canonicalise valid times and drop any
-    // half-typed value the user never blurred, so it isn't silently carried on.
-    setTime({ start: startTime ?? "", end: endTime ?? "" });
-    const created = await todos.addTodo(title, quadrant, span.start, span.end);
-    if (created && (startTime || endTime)) {
-      await todos.patchTodo(created.id, { startTime, endTime });
+    savingRef.current = true;
+    setSaving(true);
+    const created = await todos.addTodo(title, quadrant, span.start, {
+      endDate: span.end,
+      startTime,
+      endTime,
+      // Deliberate blank lines are meaningful in a todo's detail note.
+      notes,
+    });
+    savingRef.current = false;
+    setSaving(false);
+    if (created) {
+      setValue("");
+      setTime({ start: "", end: "" });
+      setNotes("");
+      touched.current = false;
+      setSpan({ start: dueDate, end: null });
+      closePopover();
     }
   };
 
@@ -2117,6 +2163,11 @@ function InlineAdd({
     outline: "none",
     padding: "5px 7px",
     width: 72,
+  };
+  const submitFromTime = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    void submit();
   };
 
   return (
@@ -2154,9 +2205,11 @@ function InlineAdd({
                 // Scroll inside rather than spilling off-screen when it fits
                 // neither below nor above (small viewport / calendar open).
                 maxHeight: "calc(100vh - 16px)",
+                overscrollBehavior: "contain",
                 overflowY: "auto",
                 padding: 8,
                 position: "fixed",
+                scrollbarGutter: "stable",
                 top: 0,
                 width: 264,
                 zIndex: 2000,
@@ -2234,6 +2287,7 @@ function InlineAdd({
                 <input
                   aria-label="开始时间，24 小时制"
                   autoComplete="off"
+                  disabled={saving}
                   inputMode="numeric"
                   maxLength={5}
                   onBlur={() =>
@@ -2246,6 +2300,7 @@ function InlineAdd({
                     setTime((s) => ({ ...s, start: autoFormatTimeInput(event.target.value) }))
                   }
                   onFocus={(event) => event.currentTarget.select()}
+                  onKeyDown={submitFromTime}
                   placeholder="HH:MM"
                   spellCheck={false}
                   style={timeInputStyle}
@@ -2256,6 +2311,7 @@ function InlineAdd({
                 <input
                   aria-label="结束时间，24 小时制"
                   autoComplete="off"
+                  disabled={saving}
                   inputMode="numeric"
                   maxLength={5}
                   onBlur={() =>
@@ -2268,6 +2324,7 @@ function InlineAdd({
                     setTime((s) => ({ ...s, end: autoFormatTimeInput(event.target.value) }))
                   }
                   onFocus={(event) => event.currentTarget.select()}
+                  onKeyDown={submitFromTime}
                   placeholder="HH:MM"
                   spellCheck={false}
                   style={timeInputStyle}
@@ -2299,6 +2356,73 @@ function InlineAdd({
                     <RiCloseLine color={t.textTertiary} size={14} />
                   </button>
                 ) : null}
+              </div>
+              <div style={{ background: t.separator, height: 1, margin: "1px 0" }} />
+              <div
+                style={{
+                  alignItems: "center",
+                  color: t.textTertiary,
+                  display: "flex",
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  justifyContent: "space-between",
+                  letterSpacing: 0.3,
+                }}
+              >
+                <span>详情</span>
+                <span style={{ fontWeight: 500, letterSpacing: 0 }}>{notes.length}/4000</span>
+              </div>
+              <textarea
+                aria-label="待办详情"
+                disabled={saving}
+                maxLength={4000}
+                onChange={(event) => setNotes(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                    event.preventDefault();
+                    void submit();
+                  }
+                }}
+                placeholder="记录会议号、密码、链接或其他详情…"
+                rows={3}
+                style={{
+                  background: t.cardSurfaceAlt,
+                  border: `1px solid ${t.separator}`,
+                  borderRadius: 8,
+                  color: t.textPrimary,
+                  fontFamily: "inherit",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  minHeight: 58,
+                  outline: "none",
+                  padding: "7px 8px",
+                  resize: "vertical",
+                }}
+                value={notes}
+              />
+              <div style={{ alignItems: "center", display: "flex", gap: 8 }}>
+                <span style={{ color: t.textTertiary, flex: 1, fontSize: 10.5 }}>
+                  时间框按回车提交 · 详情中按 ⌘↵ 提交
+                </span>
+                <button
+                  disabled={saving || !value.trim()}
+                  onClick={() => void submit()}
+                  style={{
+                    background: accent.accent,
+                    border: "none",
+                    borderRadius: 7,
+                    color: "#FFFFFF",
+                    cursor: saving || !value.trim() ? "default" : "pointer",
+                    fontFamily: "inherit",
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    opacity: saving || !value.trim() ? 0.45 : 1,
+                    padding: "6px 10px",
+                  }}
+                  type="button"
+                >
+                  {saving ? "添加中…" : "添加"}
+                </button>
               </div>
             </div>,
             document.body,
