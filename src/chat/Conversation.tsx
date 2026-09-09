@@ -523,7 +523,13 @@ function makeStyles(theme: Theme, accent: Accent) {
     modelMenuRowHover: { backgroundColor: t.controlHover },
     modelMenuName: { color: t.textSecondary, flex: 1, fontSize: 11 },
     // attachments
-    attachRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
+    attachRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 6,
+      justifyContent: "flex-end",
+      marginBottom: 8,
+    },
     chip: {
       alignItems: "center",
       backgroundColor: t.cardSurfaceAlt,
@@ -1025,7 +1031,53 @@ function UsageFooter({
   );
 }
 
-function attachmentIcon(att: { mimeType?: string; kind?: string }, color: string, size = 14) {
+/**
+ * Per-file-type palette so a badge reads its kind at a glance: PDF is red, images
+ * green, video violet, everything else a steel blue. `fill`/`border` are low-alpha
+ * washes for the chip; `icon` is the AA-deepened tone for the glyph + label.
+ */
+interface AttachmentTint {
+  icon: string;
+  fill: string;
+  fillHover: string;
+  border: string;
+}
+
+function attachmentTint(att: { mimeType?: string; kind?: string }): AttachmentTint {
+  if (att.mimeType === "application/pdf") {
+    return {
+      icon: "#C24A38",
+      fill: "rgba(194,74,56,0.10)",
+      fillHover: "rgba(194,74,56,0.16)",
+      border: "rgba(194,74,56,0.22)",
+    };
+  }
+  if (att.kind === "image" || att.mimeType?.startsWith("image/")) {
+    return {
+      icon: "#2F8A5B",
+      fill: "rgba(47,138,91,0.10)",
+      fillHover: "rgba(47,138,91,0.16)",
+      border: "rgba(47,138,91,0.22)",
+    };
+  }
+  if (att.kind === "video" || att.mimeType?.startsWith("video/")) {
+    return {
+      icon: "#6A4FC0",
+      fill: "rgba(106,79,192,0.10)",
+      fillHover: "rgba(106,79,192,0.16)",
+      border: "rgba(106,79,192,0.22)",
+    };
+  }
+  return {
+    icon: "#4C6A9E",
+    fill: "rgba(76,106,158,0.10)",
+    fillHover: "rgba(76,106,158,0.16)",
+    border: "rgba(76,106,158,0.22)",
+  };
+}
+
+function attachmentIcon(att: { mimeType?: string; kind?: string }, size = 14) {
+  const color = attachmentTint(att).icon;
   if (att.mimeType === "application/pdf") return <RiFilePdf2Line color={color} size={size} />;
   if (att.kind === "image" || att.mimeType?.startsWith("image/"))
     return <RiImage2Line color={color} size={size} />;
@@ -1092,23 +1144,26 @@ function AttachmentChip({
   att,
   onPreview,
   styles,
-  theme,
 }: {
   att: Attachment;
   onPreview?: (attachment: Attachment) => void;
   styles: Styles;
-  theme: Theme;
 }) {
+  const tint = attachmentTint(att);
   const content = (
     <>
-      {attachmentIcon(att, theme.t.textTertiary)}
+      {attachmentIcon(att)}
       <Text numberOfLines={1} style={styles.chipText}>
         {att.name}
       </Text>
     </>
   );
   if (!onPreview) {
-    return <View style={styles.chip}>{content}</View>;
+    return (
+      <View style={[styles.chip, { backgroundColor: tint.fill, borderColor: tint.border }]}>
+        {content}
+      </View>
+    );
   }
   return (
     <Pressable
@@ -1117,8 +1172,9 @@ function AttachmentChip({
       onPress={() => onPreview(att)}
       style={({ hovered, pressed }: PressState) => [
         styles.chip,
+        { backgroundColor: tint.fill, borderColor: tint.border },
         motion,
-        (hovered || pressed) && styles.chipHover,
+        (hovered || pressed) && { backgroundColor: tint.fillHover },
       ]}
     >
       {content}
@@ -1131,12 +1187,10 @@ function AttachmentBadges({
   attachments,
   onPreview,
   styles,
-  theme,
 }: {
   attachments: Attachment[];
   onPreview: (attachment: Attachment) => void;
   styles: Styles;
-  theme: Theme;
 }) {
   return (
     <View style={styles.attachRow}>
@@ -1146,7 +1200,6 @@ function AttachmentBadges({
           key={att.id}
           onPreview={attachmentPreviewKind(att) ? onPreview : undefined}
           styles={styles}
-          theme={theme}
         />
       ))}
     </View>
@@ -1295,14 +1348,12 @@ function AssistantAttachmentCard({
   onOpen,
   onDownload,
   styles,
-  theme,
 }: {
   att: Attachment;
   preview?: AttachmentPreview;
   onOpen: () => void;
   onDownload: () => void;
   styles: Styles;
-  theme: Theme;
 }) {
   const canPreview = Boolean(attachmentPreviewKind(att));
   const ratio =
@@ -1340,7 +1391,7 @@ function AssistantAttachmentCard({
             />
           ) : (
             <View style={styles.assistantAttachFallback}>
-              {attachmentIcon(att, theme.t.textTertiary, 30)}
+              {attachmentIcon(att, 30)}
             </View>
           )}
         </Pressable>
@@ -1369,11 +1420,9 @@ function AssistantAttachmentCard({
 function AssistantAttachments({
   attachments,
   styles,
-  theme,
 }: {
   attachments: Attachment[];
   styles: Styles;
-  theme: Theme;
 }) {
   const context = useContext(ToolImageContext);
   const scope = context?.scope ?? "";
@@ -1432,7 +1481,6 @@ function AssistantAttachments({
           onOpen={() => openAttachment?.(att)}
           preview={previews[att.id]}
           styles={styles}
-          theme={theme}
         />
       ))}
     </View>
@@ -1935,7 +1983,7 @@ function AnswerSurface({
           <MarkdownView color={theme.t.textPrimary} content={message.content} />
         ) : null}
         {message.attachments.length > 0 ? (
-          <AssistantAttachments attachments={message.attachments} styles={styles} theme={theme} />
+          <AssistantAttachments attachments={message.attachments} styles={styles} />
         ) : null}
 
         <View style={styles.answerMetaRow}>
@@ -2167,11 +2215,7 @@ function SplitAnswerPanel({
               <MarkdownView color={theme.t.textPrimary} content={message.content} />
             ) : null}
             {message.attachments.length > 0 ? (
-              <AssistantAttachments
-                attachments={message.attachments}
-                styles={styles}
-                theme={theme}
-              />
+              <AssistantAttachments attachments={message.attachments} styles={styles} />
             ) : null}
           </>
         )}
@@ -2546,7 +2590,6 @@ function MessageBubble({
                 attachments={message.attachments}
                 onPreview={onPreviewAttachment}
                 styles={styles}
-                theme={theme}
               />
             )}
             {editing ? (
@@ -2705,7 +2748,7 @@ function MessageBubble({
           <MarkdownView color={theme.t.textPrimary} content={message.content} />
         ) : null}
         {message.attachments.length > 0 ? (
-          <AssistantAttachments attachments={message.attachments} styles={styles} theme={theme} />
+          <AssistantAttachments attachments={message.attachments} styles={styles} />
         ) : null}
         {message.usage ? (
           <UsageFooter
@@ -3418,7 +3461,16 @@ export function ConversationView({
                       ) : null}
                     </View>
                   ) : (
-                    <View key={p.key} style={styles.chip}>
+                    <View
+                      key={p.key}
+                      style={[
+                        styles.chip,
+                        {
+                          backgroundColor: attachmentTint(p.attachment ?? {}).fill,
+                          borderColor: attachmentTint(p.attachment ?? {}).border,
+                        },
+                      ]}
+                    >
                       <Pressable
                         accessibilityLabel={
                           p.attachment && attachmentPreviewKind(p.attachment)
@@ -3434,7 +3486,7 @@ export function ConversationView({
                         }}
                         style={styles.pendingChipPreview}
                       >
-                        {attachmentIcon(p.attachment ?? {}, theme.t.textTertiary)}
+                        {attachmentIcon(p.attachment ?? {})}
                         <Text numberOfLines={1} style={styles.chipText}>
                           {p.name}
                         </Text>

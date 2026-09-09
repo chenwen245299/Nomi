@@ -1219,14 +1219,6 @@ export function TravelMainColumn({
               </View>
 
               <View pointerEvents="box-none" style={styles.planningMapControls}>
-                <MapLayersControl
-                  accent={accent}
-                  basemap={basemap}
-                  value={effectiveMapLayer}
-                  styles={styles}
-                  theme={theme}
-                  onChange={setMapLayer}
-                />
                 <Pressable
                   accessibilityLabel="地图来源与离线地图"
                   accessibilityRole="button"
@@ -1242,6 +1234,14 @@ export function TravelMainColumn({
                     {basemap === "online" ? "在线地图" : basemap}
                   </Text>
                 </Pressable>
+                <MapLayersControl
+                  accent={accent}
+                  basemap={basemap}
+                  value={effectiveMapLayer}
+                  styles={styles}
+                  theme={theme}
+                  onChange={setMapLayer}
+                />
               </View>
 
               {planningMarkers.length === 0 ? (
@@ -1341,14 +1341,6 @@ export function TravelMainColumn({
             </View>
 
             <View pointerEvents="box-none" style={styles.overlayRight}>
-              <MapLayersControl
-                accent={accent}
-                basemap={basemap}
-                value={effectiveMapLayer}
-                styles={styles}
-                theme={theme}
-                onChange={setMapLayer}
-              />
               <Pressable
                 accessibilityLabel="地图来源与离线地图"
                 accessibilityRole="button"
@@ -1364,6 +1356,14 @@ export function TravelMainColumn({
                   {basemap === "online" ? "在线地图" : basemap}
                 </Text>
               </Pressable>
+              <MapLayersControl
+                accent={accent}
+                basemap={basemap}
+                value={effectiveMapLayer}
+                styles={styles}
+                theme={theme}
+                onChange={setMapLayer}
+              />
             </View>
           </View>
 
@@ -2568,7 +2568,9 @@ function makeStyles(theme: Theme, accent: Accent) {
       gap: 8,
       position: "absolute",
       right: 16,
-      top: 14,
+      // The center segment is ~6px taller (outer padding + inner button padding),
+      // so nudge the chips down ~3px to share its vertical center line.
+      top: 17,
     },
     levelSegment: {
       alignItems: "center",

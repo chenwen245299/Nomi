@@ -3385,6 +3385,25 @@ function TodoContextMenu({
           width: 252,
         }}
       >
+        {current.title ? (
+          <>
+            <div
+              style={{
+                color: t.textPrimary,
+                fontSize: 13,
+                fontWeight: 600,
+                lineHeight: 1.35,
+                padding: "6px 10px 8px",
+                overflowWrap: "anywhere",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              {current.title}
+            </div>
+            <div style={{ background: t.separator, height: 1, margin: "0 8px 5px" }} />
+          </>
+        ) : null}
         {rows.map((row) => {
           if (row.kind === "divider") {
             return (
