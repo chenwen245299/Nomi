@@ -146,6 +146,20 @@ jobs:
           # network error doesn't force a full re-download on the next run.
           cache-on-failure: true
 
+      - name: Cache Tauri Windows bundler tools
+        if: matrix.platform == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/tauri/NSIS
+            ~/AppData/Local/tauri/WixTools314
+          key: tauri-windows-tools-v2.11.4-nsis-3.11-utils-0.5.3-wix-3.14.1
+
+      - name: Prepare Tauri Windows bundler tools
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: ./.github/scripts/prepare-tauri-windows-tools.ps1
+
       - name: Sync version
         shell: bash
         env:
