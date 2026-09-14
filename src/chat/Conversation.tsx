@@ -372,12 +372,17 @@ function makeStyles(theme: Theme, accent: Accent) {
       textAlign: "left",
     },
     userMetaRow: {
+      marginTop: 2,
+      minHeight: 23,
+      position: "relative",
+    },
+    userMetaControls: {
       alignItems: "center",
       flexDirection: "row",
       gap: 3,
-      justifyContent: "flex-end",
-      marginTop: 2,
-      minHeight: 23,
+      position: "absolute",
+      right: 0,
+      top: 0,
     },
     userExpandButton: {
       alignItems: "center",
@@ -1390,9 +1395,7 @@ function AssistantAttachmentCard({
               style={{ height: "100%", objectFit: "cover", objectPosition: "top", width: "100%" }}
             />
           ) : (
-            <View style={styles.assistantAttachFallback}>
-              {attachmentIcon(att, 30)}
-            </View>
+            <View style={styles.assistantAttachFallback}>{attachmentIcon(att, 30)}</View>
           )}
         </Pressable>
         <Pressable
@@ -2657,64 +2660,66 @@ function MessageBubble({
             ) : null}
           </View>
           <View style={styles.userMetaRow}>
-            <View style={[styles.answerActions, { opacity: showActions ? 1 : 0 }]}>
-              <AnswerAction
-                icon={<RiFileCopyLine color={iconColor} size={13} />}
-                label="复制消息"
-                onPress={() => void navigator.clipboard?.writeText(message.content)}
-                styles={styles}
-                theme={theme}
-              />
-              <AnswerAction
-                icon={<RiSendPlane2Line color={iconColor} size={13} />}
-                label="重新发送"
-                onPress={() => onResend(message)}
-                styles={styles}
-                theme={theme}
-              />
-              {persisted ? (
-                <>
-                  <AnswerAction
-                    active={editing}
-                    icon={<RiEditLine color={iconColor} size={13} />}
-                    label="编辑消息"
-                    onPress={() => setEditing(true)}
-                    styles={styles}
-                    theme={theme}
+            <View style={styles.userMetaControls}>
+              <View style={[styles.answerActions, { opacity: showActions ? 1 : 0 }]}>
+                <AnswerAction
+                  icon={<RiFileCopyLine color={iconColor} size={13} />}
+                  label="复制消息"
+                  onPress={() => void navigator.clipboard?.writeText(message.content)}
+                  styles={styles}
+                  theme={theme}
+                />
+                <AnswerAction
+                  icon={<RiSendPlane2Line color={iconColor} size={13} />}
+                  label="重新发送"
+                  onPress={() => onResend(message)}
+                  styles={styles}
+                  theme={theme}
+                />
+                {persisted ? (
+                  <>
+                    <AnswerAction
+                      active={editing}
+                      icon={<RiEditLine color={iconColor} size={13} />}
+                      label="编辑消息"
+                      onPress={() => setEditing(true)}
+                      styles={styles}
+                      theme={theme}
+                    />
+                    <AnswerAction
+                      icon={<RiDeleteBinLine color={iconColor} size={13} />}
+                      label="删除消息"
+                      onPress={() => void onDelete(message.id)}
+                      styles={styles}
+                      theme={theme}
+                    />
+                  </>
+                ) : null}
+              </View>
+              {userOverflows && !editing ? (
+                <Pressable
+                  accessibilityLabel={userExpanded ? "收起用户消息" : "展开用户消息"}
+                  accessibilityRole="button"
+                  onPress={(event) =>
+                    updatePreservingScrollPosition(event.target, () =>
+                      setUserExpanded((expanded) => !expanded),
+                    )
+                  }
+                  style={({ hovered, pressed }: PressState) => [
+                    styles.userExpandButton,
+                    motion,
+                    (hovered || pressed) && styles.userExpandButtonHover,
+                  ]}
+                >
+                  <Text style={styles.userExpandText}>{userExpanded ? "收起" : "展开"}</Text>
+                  <RiArrowDownSLine
+                    color={theme.t.textSecondary}
+                    size={14}
+                    style={{ transform: userExpanded ? "rotate(180deg)" : "none" }}
                   />
-                  <AnswerAction
-                    icon={<RiDeleteBinLine color={iconColor} size={13} />}
-                    label="删除消息"
-                    onPress={() => void onDelete(message.id)}
-                    styles={styles}
-                    theme={theme}
-                  />
-                </>
+                </Pressable>
               ) : null}
             </View>
-            {userOverflows && !editing ? (
-              <Pressable
-                accessibilityLabel={userExpanded ? "收起用户消息" : "展开用户消息"}
-                accessibilityRole="button"
-                onPress={(event) =>
-                  updatePreservingScrollPosition(event.target, () =>
-                    setUserExpanded((expanded) => !expanded),
-                  )
-                }
-                style={({ hovered, pressed }: PressState) => [
-                  styles.userExpandButton,
-                  motion,
-                  (hovered || pressed) && styles.userExpandButtonHover,
-                ]}
-              >
-                <Text style={styles.userExpandText}>{userExpanded ? "收起" : "展开"}</Text>
-                <RiArrowDownSLine
-                  color={theme.t.textSecondary}
-                  size={14}
-                  style={{ transform: userExpanded ? "rotate(180deg)" : "none" }}
-                />
-              </Pressable>
-            ) : null}
           </View>
         </div>
         <UserAvatar size={30} />

@@ -1308,6 +1308,24 @@ export function TravelMainColumn({
 
           {/* Floating controls (transparent to the map except on the chrome itself) */}
           <View pointerEvents="box-none" style={styles.overlayTop}>
+            <View pointerEvents="box-none" style={styles.overlayLeft}>
+              <Pressable
+                accessibilityLabel="地图来源与离线地图"
+                accessibilityRole="button"
+                onPress={() => setShowOffline(true)}
+                style={({ hovered }: PressState) => [
+                  styles.mapChipButton,
+                  motion,
+                  hovered && styles.mapChipButtonHover,
+                ]}
+              >
+                <RiGlobalLine color={theme.t.textSecondary} size={16} />
+                <Text style={styles.mapChipText}>
+                  {basemap === "online" ? "在线地图" : basemap}
+                </Text>
+              </Pressable>
+            </View>
+
             <View pointerEvents="box-none" style={styles.centerControls}>
               {viewSwitcher}
 
@@ -1341,21 +1359,6 @@ export function TravelMainColumn({
             </View>
 
             <View pointerEvents="box-none" style={styles.overlayRight}>
-              <Pressable
-                accessibilityLabel="地图来源与离线地图"
-                accessibilityRole="button"
-                onPress={() => setShowOffline(true)}
-                style={({ hovered }: PressState) => [
-                  styles.mapChipButton,
-                  motion,
-                  hovered && styles.mapChipButtonHover,
-                ]}
-              >
-                <RiGlobalLine color={theme.t.textSecondary} size={16} />
-                <Text style={styles.mapChipText}>
-                  {basemap === "online" ? "在线地图" : basemap}
-                </Text>
-              </Pressable>
               <MapLayersControl
                 accent={accent}
                 basemap={basemap}
@@ -2538,6 +2541,14 @@ function makeStyles(theme: Theme, accent: Accent) {
       alignItems: "center",
       gap: 8,
     },
+    overlayLeft: {
+      alignItems: "center",
+      flexDirection: "row",
+      left: 16,
+      position: "absolute",
+      // Align the chip's vertical center with the taller center segment.
+      top: 17,
+    },
     segment: {
       alignItems: "center",
       backgroundColor: t.overlaySolid,
@@ -2565,7 +2576,6 @@ function makeStyles(theme: Theme, accent: Accent) {
     overlayRight: {
       alignItems: "center",
       flexDirection: "row",
-      gap: 8,
       position: "absolute",
       right: 16,
       // The center segment is ~6px taller (outer padding + inner button padding),
