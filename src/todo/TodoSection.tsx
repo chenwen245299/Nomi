@@ -32,6 +32,7 @@ import {
   RiLayoutGrid2Line,
   RiListCheck2,
   RiPencilLine,
+  RiRepeatLine,
   RiSearch2Line,
   RiStickyNoteLine,
   RiTimeLine,
@@ -47,7 +48,7 @@ import {
   type Accent,
   type Theme,
 } from "../theme";
-import { revealTodoData, type Quadrant, type Todo, type TodoPatch } from "./api";
+import { revealTodoData, type Quadrant, type Recurrence, type Todo, type TodoPatch } from "./api";
 import {
   dateKey,
   daysBetween,
@@ -86,6 +87,17 @@ type RemixIcon = typeof RiAddLine;
 
 const QUADRANT_IDS: Quadrant[] = [1, 2, 3, 4];
 const TODO_SHOW_DONE_KEY = "nomi.todo.showDone";
+const RECURRENCE_OPTIONS: { value: Recurrence; label: string }[] = [
+  { value: "none", label: "不重复" },
+  { value: "daily", label: "每天" },
+  { value: "weekly", label: "每周" },
+  { value: "monthly", label: "每月" },
+  { value: "yearly", label: "每年" },
+];
+
+function recurrenceLabel(value: Recurrence): string {
+  return RECURRENCE_OPTIONS.find((option) => option.value === value)?.label ?? "不重复";
+}
 
 const isTauriRuntime = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -1659,6 +1671,7 @@ function TodoRow({
         )}
 
         {todo.dueDate ? <DueChip styles={styles} today={today} todo={todo} /> : null}
+        {todo.recurrence !== "none" ? <RecurrenceChip styles={styles} todo={todo} /> : null}
         {todo.endDate && !todo.done ? (
           <SpanProgressChip day={refDay ?? today} styles={styles} todo={todo} />
         ) : null}
@@ -1951,6 +1964,18 @@ function DueChip({ styles, today, todo }: { styles: TodoStyles; today: string; t
   );
 }
 
+function RecurrenceChip({ styles, todo }: { styles: TodoStyles; todo: Todo }) {
+  const theme = useTheme();
+  return (
+    <View style={[styles.chip, { backgroundColor: theme.t.controlIdle } as ViewStyle]}>
+      <RiRepeatLine color={theme.t.textSecondary} size={10} />
+      <Text style={[styles.chipText, { color: theme.t.textSecondary } as ViewStyle]}>
+        {recurrenceLabel(todo.recurrence)}
+      </Text>
+    </View>
+  );
+}
+
 /** "第 2/4 天" for a multi-day task that is running right now. The date range
  *  alone says when it ends, not how far into it you are. */
 function SpanProgressChip({ day, styles, todo }: { day: string; styles: TodoStyles; todo: Todo }) {
@@ -2015,6 +2040,7 @@ function InlineAdd({
   // a time) as you type, so a todo can be scheduled the moment it is created.
   const [span, setSpan] = useState<DateSpan>({ start: dueDate, end: null });
   const [time, setTime] = useState<{ start: string; end: string }>({ start: "", end: "" });
+  const [recurrence, setRecurrence] = useState<Recurrence>("none");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
@@ -2090,7 +2116,7 @@ function InlineAdd({
   // count, time row) or a new row shifts the anchor — without re-subscribing.
   useLayoutEffect(() => {
     if (open) reposition();
-  }, [open, reposition, calOpen, value, span, time]);
+  }, [open, reposition, calOpen, value, span, time, recurrence]);
 
   // Close when a pointer lands outside both the row and the popover, or on Escape
   // — never on plain input blur, so clicking into the calendar/time keeps it open.
@@ -2130,12 +2156,14 @@ function InlineAdd({
       endTime,
       // Deliberate blank lines are meaningful in a todo's detail note.
       notes,
+      recurrence,
     });
     savingRef.current = false;
     setSaving(false);
     if (created) {
       setValue("");
       setTime({ start: "", end: "" });
+      setRecurrence("none");
       setNotes("");
       touched.current = false;
       setSpan({ start: dueDate, end: null });
@@ -2146,6 +2174,9 @@ function InlineAdd({
   const pickDate = (next: DateSpan) => {
     touched.current = true;
     setSpan(next);
+    if (next.start === null) {
+      setRecurrence("none");
+    }
   };
   const quick: { key: string; label: string; span: DateSpan }[] = [
     { key: "today", label: "今天", span: { start: today, end: null } },
@@ -2271,6 +2302,29 @@ function InlineAdd({
                   共 {daysBetween(span.start, span.end) + 1} 天
                 </span>
               ) : null}
+
+              <div style={{ background: t.separator, height: 1, margin: "1px 0" }} />
+              <div
+                style={{
+                  color: t.textTertiary,
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  letterSpacing: 0.3,
+                }}
+              >
+                重复
+              </div>
+              <RecurrencePicker
+                accent={accent}
+                onChange={(next) => {
+                  setRecurrence(next);
+                  if (next !== "none" && span.start === null) {
+                    pickDate({ start: today, end: null });
+                  }
+                }}
+                theme={theme}
+                value={recurrence}
+              />
 
               <div style={{ background: t.separator, height: 1, margin: "1px 0" }} />
               <div
@@ -2450,6 +2504,69 @@ function spanButtonLabel(span: DateSpan, today: string): string {
     return "不设日期";
   }
   return spanLabel(span.start, span.end, today);
+}
+
+function RecurrencePicker({
+  accent,
+  disabled = false,
+  onChange,
+  theme,
+  value,
+}: {
+  accent: Accent;
+  disabled?: boolean;
+  onChange: (value: Recurrence) => void;
+  theme: Theme;
+  value: Recurrence;
+}) {
+  const { t } = theme;
+  return (
+    <div
+      aria-label="重复频率"
+      style={{
+        display: "grid",
+        gap: 4,
+        gridTemplateColumns: `repeat(${RECURRENCE_OPTIONS.length}, 1fr)`,
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {RECURRENCE_OPTIONS.map((option) => {
+        const selected = option.value === value;
+        return (
+          <button
+            aria-pressed={selected}
+            disabled={disabled}
+            key={option.value}
+            onClick={() => onChange(option.value)}
+            onMouseEnter={(event) => {
+              if (!selected) event.currentTarget.style.background = t.controlHover;
+            }}
+            onMouseLeave={(event) => {
+              if (!selected) event.currentTarget.style.background = "transparent";
+            }}
+            style={{
+              background: selected ? accent.selectedFill : "transparent",
+              border: `1px solid ${selected ? accent.accent : t.controlBorder}`,
+              borderRadius: 7,
+              color: selected ? accent.accentText : t.textSecondary,
+              cursor: disabled ? "default" : "pointer",
+              fontFamily: "inherit",
+              fontSize: 11.5,
+              fontWeight: selected ? 600 : 500,
+              minWidth: 0,
+              padding: "5px 2px",
+              textAlign: "center",
+              transition: "background-color 120ms ease",
+              whiteSpace: "nowrap",
+            }}
+            type="button"
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 /** One-tap date presets, shared by the composer popover and the row menu. Each
@@ -3301,6 +3418,32 @@ function TodoContextMenu({
             <span style={{ color: accent.accentText, fontSize: 11.5, fontWeight: 600 }}>
               共 {daysBetween(span.start, span.end) + 1} 天
             </span>
+          ) : null}
+        </div>
+      ),
+    },
+    { kind: "divider", key: "d-repeat" },
+    { kind: "heading", key: "h-repeat", label: "重复" },
+    {
+      kind: "custom",
+      key: "repeat",
+      render: () => (
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, padding: "2px 8px 4px" }}>
+          <RecurrencePicker
+            accent={accent}
+            disabled={current.done}
+            onChange={(recurrence) => {
+              const patch: TodoPatch = { recurrence };
+              if (recurrence !== "none" && current.dueDate === null) {
+                patch.dueDate = today;
+              }
+              void todos.patchTodo(todo.id, patch);
+            }}
+            theme={theme}
+            value={current.recurrence}
+          />
+          {current.done ? (
+            <span style={{ color: t.textTertiary, fontSize: 10.5 }}>已完成的记录不能设置重复</span>
           ) : null}
         </div>
       ),

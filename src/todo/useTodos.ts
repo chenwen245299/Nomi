@@ -98,10 +98,15 @@ export function useTodos(active: boolean): TodosData {
         canonical(prev.map((todo) => (todo.id === id ? { ...todo, ...patch } : todo))),
       );
       try {
-        const updated = await updateTodo(id, patch);
-        setTodos((prev) => canonical(prev.map((todo) => (todo.id === id ? updated : todo))));
+        const result = await updateTodo(id, patch);
+        setTodos((prev) =>
+          canonical([
+            ...prev.map((todo) => (todo.id === id ? result.todo : todo)),
+            ...(result.nextTodo ? [result.nextTodo] : []),
+          ]),
+        );
         setError(null);
-        return updated;
+        return result.todo;
       } catch (err) {
         setError(String(err));
         await refresh();

@@ -8,6 +8,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 /** Eisenhower cell: 1 重要且紧急 · 2 重要不紧急 · 3 紧急不重要 · 4 不重要不紧急. */
 export type Quadrant = 1 | 2 | 3 | 4;
+export type Recurrence = "none" | "daily" | "weekly" | "monthly" | "yearly";
 
 export interface Todo {
   id: string;
@@ -24,6 +25,13 @@ export interface Todo {
   /** `HH:MM` (24-hour) start / end time on the due date, or null when unset. */
   startTime: string | null;
   endTime: string | null;
+  /** How this todo repeats after it is completed. A repeating todo always has a
+   *  due date; completed occurrences are detached from the series while the
+   *  newly generated next occurrence carries the rule forward. */
+  recurrence: Recurrence;
+  /** Original series date, used to keep monthly/yearly rules anchored after a
+   *  short month or leap-year adjustment. */
+  recurrenceAnchorDate: string | null;
   done: boolean;
   /** Epoch seconds, or null while unfinished. */
   completedAt: number | null;
@@ -46,6 +54,7 @@ export interface TodoPatch {
   endDate?: string | null;
   startTime?: string | null;
   endTime?: string | null;
+  recurrence?: Recurrence;
   done?: boolean;
 }
 
@@ -55,6 +64,12 @@ export interface TodoCreateFields {
   startTime?: string | null;
   endTime?: string | null;
   notes?: string;
+  recurrence?: Recurrence;
+}
+
+interface TodoUpdateResult {
+  todo: Todo;
+  nextTodo: Todo | null;
 }
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -74,6 +89,60 @@ function spanOf(
     return { dueDate, endDate: null };
   }
   return endDate < dueDate ? { dueDate: endDate, endDate: dueDate } : { dueDate, endDate };
+}
+
+function localDateKey(date: Date): string {
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function dateParts(key: string): { year: number; month: number; day: number } {
+  const [year, month, day] = key.split("-").map(Number);
+  return { year, month, day };
+}
+
+function clampedDateKey(year: number, month: number, day: number): string {
+  const lastDay = new Date(year, month, 0).getDate();
+  return localDateKey(new Date(year, month - 1, Math.min(day, lastDay)));
+}
+
+function shiftDateKey(key: string, days: number): string {
+  const { year, month, day } = dateParts(key);
+  return localDateKey(new Date(year, month - 1, day + days));
+}
+
+function advanceRecurrenceDate(
+  current: string,
+  anchor: string,
+  recurrence: Exclude<Recurrence, "none">,
+): string {
+  const now = dateParts(current);
+  const base = dateParts(anchor);
+  if (recurrence === "daily" || recurrence === "weekly") {
+    return shiftDateKey(current, recurrence === "daily" ? 1 : 7);
+  }
+  if (recurrence === "monthly") {
+    const nextMonth = now.month === 12 ? 1 : now.month + 1;
+    const nextYear = now.month === 12 ? now.year + 1 : now.year;
+    return clampedDateKey(nextYear, nextMonth, base.day);
+  }
+  return clampedDateKey(now.year + 1, base.month, base.day);
+}
+
+function nextRecurrenceDate(
+  current: string,
+  anchor: string,
+  recurrence: Exclude<Recurrence, "none">,
+): string {
+  const today = localDateKey(new Date());
+  let next = advanceRecurrenceDate(current, anchor, recurrence);
+  // Skip occurrences already in the past when an overdue repeating todo is
+  // completed. The cap only protects a hand-edited file with an extreme date.
+  for (let step = 0; next <= today && step < 100_000; step += 1) {
+    next = advanceRecurrenceDate(next, anchor, recurrence);
+  }
+  return next;
 }
 
 // ── Browser-preview in-memory store ──────────────────────────────────────────
@@ -115,6 +184,7 @@ export async function createTodo(
       startTime: fields.startTime ?? null,
       endTime: fields.endTime ?? null,
       notes: fields.notes ?? "",
+      recurrence: fields.recurrence ?? "none",
     });
   }
   const trimmed = title.trim().slice(0, 200);
@@ -122,14 +192,18 @@ export async function createTodo(
     throw new Error("待办内容不能为空。");
   }
   const timestamp = nowSec();
+  const span = spanOf(dueDate || null, fields.endDate || null);
+  const recurrence = span.dueDate ? (fields.recurrence ?? "none") : "none";
   const todo: Todo = {
     id: `todo-preview-${preview.seq++}`,
     title: trimmed,
     notes: (fields.notes ?? "").slice(0, 4000),
     quadrant,
-    ...spanOf(dueDate || null, fields.endDate || null),
+    ...span,
     startTime: fields.startTime || null,
     endTime: fields.endTime || null,
+    recurrence,
+    recurrenceAnchorDate: recurrence === "none" ? null : span.dueDate,
     done: false,
     completedAt: null,
     createdAt: timestamp,
@@ -140,9 +214,9 @@ export async function createTodo(
   return todo;
 }
 
-export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
+export async function updateTodo(id: string, patch: TodoPatch): Promise<TodoUpdateResult> {
   if (isTauri()) {
-    return invoke<Todo>("update_todo", { id, patch });
+    return invoke<TodoUpdateResult>("update_todo", { id, patch, today: localDateKey(new Date()) });
   }
   const todo = preview.todos.find((item) => item.id === id);
   if (!todo) {
@@ -162,6 +236,8 @@ export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
     todo.order = previewNextOrder(patch.quadrant);
     todo.quadrant = patch.quadrant;
   }
+  const previousDueDate = todo.dueDate;
+  const wasDone = todo.done;
   if (patch.dueDate !== undefined || patch.endDate !== undefined) {
     const next = spanOf(
       patch.dueDate !== undefined ? patch.dueDate || null : todo.dueDate,
@@ -176,12 +252,55 @@ export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
   if (patch.endTime !== undefined) {
     todo.endTime = patch.endTime || null;
   }
+  if (patch.recurrence !== undefined) {
+    todo.recurrence = patch.recurrence;
+    todo.recurrenceAnchorDate = patch.recurrence === "none" ? null : todo.dueDate;
+  } else if (todo.dueDate !== previousDueDate && todo.recurrence !== "none") {
+    todo.recurrenceAnchorDate = todo.dueDate;
+  }
+  if (todo.dueDate === null) {
+    todo.recurrence = "none";
+    todo.recurrenceAnchorDate = null;
+  }
   if (patch.done !== undefined) {
     todo.done = patch.done;
     todo.completedAt = patch.done ? nowSec() : null;
   }
-  todo.updatedAt = nowSec();
-  return { ...todo };
+  const timestamp = nowSec();
+  todo.updatedAt = timestamp;
+
+  let nextTodo: Todo | null = null;
+  if (!wasDone && todo.done && todo.dueDate && todo.recurrence !== "none") {
+    const recurrence = todo.recurrence;
+    const recurrenceAnchorDate = todo.recurrenceAnchorDate ?? todo.dueDate;
+    const nextDueDate = nextRecurrenceDate(todo.dueDate, recurrenceAnchorDate, recurrence);
+    const spanLength = todo.endDate
+      ? Math.round(
+          (new Date(`${todo.endDate}T00:00:00`).getTime() -
+            new Date(`${todo.dueDate}T00:00:00`).getTime()) /
+            86_400_000,
+        )
+      : 0;
+    const nextEndDate = spanLength > 0 ? shiftDateKey(nextDueDate, spanLength) : null;
+
+    todo.recurrence = "none";
+    todo.recurrenceAnchorDate = null;
+    nextTodo = {
+      ...todo,
+      id: `todo-preview-${preview.seq++}`,
+      dueDate: nextDueDate,
+      endDate: nextEndDate,
+      recurrence,
+      recurrenceAnchorDate,
+      done: false,
+      completedAt: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      order: previewNextOrder(todo.quadrant),
+    };
+    preview.todos.push(nextTodo);
+  }
+  return { todo: { ...todo }, nextTodo };
 }
 
 export async function deleteTodo(id: string): Promise<void> {

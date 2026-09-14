@@ -1,3 +1,4 @@
+use chrono::{Datelike, Duration, NaiveDate};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
     fs,
@@ -10,7 +11,7 @@ use crate::storage;
 
 const TODO_DIR: &str = "todo";
 const TODO_FILE: &str = "todos.json";
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 const MAX_TITLE: usize = 200;
 const MAX_NOTES: usize = 4000;
 
@@ -18,12 +19,23 @@ const MAX_NOTES: usize = 4000;
 // file so the whole list can be diffed, synced or edited by hand:
 //
 //   todo/
-//     todos.json    { "schemaVersion": 1, "todos": [ … ] }
+//     todos.json    { "schemaVersion": 2, "todos": [ … ] }
 //
 // A todo carries its Eisenhower quadrant (1–4) and an optional local-calendar due
 // date (`YYYY-MM-DD`). Both views the UI offers — the four-quadrant board and the
 // per-day list — are just different groupings of this one array, so a todo never
 // has to be moved between files when its date or quadrant changes.
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Recurrence {
+    #[default]
+    None,
+    Daily,
+    Weekly,
+    Monthly,
+    Yearly,
+}
 
 /// One todo item. `quadrant` is the Eisenhower cell:
 /// 1 = 重要且紧急, 2 = 重要不紧急, 3 = 紧急不重要, 4 = 不重要不紧急.
@@ -50,6 +62,15 @@ pub struct Todo {
     start_time: Option<String>,
     #[serde(default)]
     end_time: Option<String>,
+    /// Repetition carried only by the currently active occurrence. When that
+    /// occurrence is completed it becomes a one-off history item and the rule
+    /// moves to the newly generated next occurrence.
+    #[serde(default)]
+    recurrence: Recurrence,
+    /// Original series date. Monthly/yearly advancement uses it so Jan 31 does
+    /// not drift to the 28th forever after passing through February.
+    #[serde(default)]
+    recurrence_anchor_date: Option<String>,
     #[serde(default)]
     done: bool,
     #[serde(default)]
@@ -85,7 +106,15 @@ pub struct TodoPatch {
     start_time: Option<Option<String>>,
     #[serde(default, deserialize_with = "some_option")]
     end_time: Option<Option<String>>,
+    recurrence: Option<Recurrence>,
     done: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoUpdateResult {
+    todo: Todo,
+    next_todo: Option<Todo>,
 }
 
 /// Distinguishes an explicit JSON `null` from an absent key (serde maps both to
@@ -212,6 +241,71 @@ fn check_due_date(date: Option<String>) -> Result<Option<String>, String> {
     Ok(Some(date))
 }
 
+fn parse_calendar_date(value: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map_err(|_| format!("日期不是有效的日历日期：{value}"))
+}
+
+fn clamped_calendar_date(year: i32, month: u32, day: u32) -> Result<NaiveDate, String> {
+    let first = NaiveDate::from_ymd_opt(year, month, 1)
+        .ok_or_else(|| "无法计算下一次重复日期。".to_string())?;
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    let next_first = NaiveDate::from_ymd_opt(next_year, next_month, 1)
+        .ok_or_else(|| "无法计算下一次重复日期。".to_string())?;
+    let last_day = (next_first - Duration::days(1)).day();
+    NaiveDate::from_ymd_opt(first.year(), first.month(), day.min(last_day))
+        .ok_or_else(|| "无法计算下一次重复日期。".to_string())
+}
+
+fn advance_recurrence_date(
+    current: &str,
+    anchor: &str,
+    recurrence: Recurrence,
+) -> Result<String, String> {
+    let current = parse_calendar_date(current)?;
+    let anchor = parse_calendar_date(anchor)?;
+    let next = match recurrence {
+        Recurrence::None => return Err("没有可计算的重复规则。".into()),
+        Recurrence::Daily => current + Duration::days(1),
+        Recurrence::Weekly => current + Duration::days(7),
+        Recurrence::Monthly => {
+            let (year, month) = if current.month() == 12 {
+                (current.year() + 1, 1)
+            } else {
+                (current.year(), current.month() + 1)
+            };
+            clamped_calendar_date(year, month, anchor.day())?
+        }
+        Recurrence::Yearly => {
+            clamped_calendar_date(current.year() + 1, anchor.month(), anchor.day())?
+        }
+    };
+    Ok(next.format("%Y-%m-%d").to_string())
+}
+
+fn next_recurrence_date(
+    current: &str,
+    anchor: &str,
+    recurrence: Recurrence,
+    today: Option<&str>,
+) -> Result<String, String> {
+    let after = parse_calendar_date(today.unwrap_or(current))?;
+    let mut next = advance_recurrence_date(current, anchor, recurrence)?;
+    // A long-overdue repeating item should advance to its next useful date,
+    // rather than forcing the user to complete every missed interval one by one.
+    for _ in 0..100_000 {
+        if parse_calendar_date(&next)? > after {
+            return Ok(next);
+        }
+        next = advance_recurrence_date(&next, anchor, recurrence)?;
+    }
+    Err("重复日期跨度过大，无法计算下一次日期。".into())
+}
+
 /// Accept a plain `HH:MM` 24-hour clock time (or empty → `None`), so the stored
 /// file stays as unambiguous as the date.
 fn check_time(time: Option<String>) -> Result<Option<String>, String> {
@@ -282,6 +376,7 @@ pub fn create_todo(
     notes: Option<String>,
     start_time: Option<String>,
     end_time: Option<String>,
+    recurrence: Option<Recurrence>,
 ) -> Result<Todo, String> {
     let title = clean_title(&title)?;
     let quadrant = check_quadrant(quadrant)?;
@@ -289,6 +384,16 @@ pub fn create_todo(
     let notes = notes.unwrap_or_default().chars().take(MAX_NOTES).collect();
     let start_time = check_time(start_time)?;
     let end_time = check_time(end_time)?;
+    let recurrence = if due_date.is_some() {
+        recurrence.unwrap_or_default()
+    } else {
+        Recurrence::None
+    };
+    let recurrence_anchor_date = if recurrence == Recurrence::None {
+        None
+    } else {
+        due_date.clone()
+    };
     let mut todos = load(&app)?;
     let timestamp = now();
     let todo = Todo {
@@ -300,6 +405,8 @@ pub fn create_todo(
         end_date,
         start_time,
         end_time,
+        recurrence,
+        recurrence_anchor_date,
         done: false,
         completed_at: None,
         created_at: timestamp,
@@ -312,9 +419,17 @@ pub fn create_todo(
 }
 
 #[tauri::command]
-pub fn update_todo(app: AppHandle, id: String, patch: TodoPatch) -> Result<Todo, String> {
+pub fn update_todo(
+    app: AppHandle,
+    id: String,
+    patch: TodoPatch,
+    today: Option<String>,
+) -> Result<TodoUpdateResult, String> {
     let mut todos = load(&app)?;
     let index = find_index(&todos, &id)?;
+    let was_done = todos[index].done;
+    let previous_due_date = todos[index].due_date.clone();
+    let due_date_was_patched = patch.due_date.is_some();
 
     if let Some(title) = patch.title {
         todos[index].title = clean_title(&title)?;
@@ -349,15 +464,97 @@ pub fn update_todo(app: AppHandle, id: String, patch: TodoPatch) -> Result<Todo,
     if let Some(end_time) = patch.end_time {
         todos[index].end_time = check_time(end_time)?;
     }
+    if let Some(recurrence) = patch.recurrence {
+        todos[index].recurrence = recurrence;
+        todos[index].recurrence_anchor_date = if recurrence == Recurrence::None {
+            None
+        } else {
+            todos[index].due_date.clone()
+        };
+    } else if due_date_was_patched
+        && todos[index].due_date != previous_due_date
+        && todos[index].recurrence != Recurrence::None
+    {
+        // Moving a repeating item intentionally starts a newly anchored series.
+        todos[index].recurrence_anchor_date = todos[index].due_date.clone();
+    }
+    if todos[index].due_date.is_none() {
+        // Repetition without a calendar date is undefined. Clearing the date is
+        // therefore also the intuitive way to clear the repeat rule.
+        todos[index].recurrence = Recurrence::None;
+        todos[index].recurrence_anchor_date = None;
+    }
     if let Some(done) = patch.done {
         todos[index].done = done;
         todos[index].completed_at = if done { Some(now()) } else { None };
     }
-    todos[index].updated_at = now();
+    let timestamp = now();
+    todos[index].updated_at = timestamp;
+
+    let mut next_todo = None;
+    if !was_done
+        && todos[index].done
+        && todos[index].due_date.is_some()
+        && todos[index].recurrence != Recurrence::None
+    {
+        let completed = todos[index].clone();
+        let due_date = completed.due_date.clone().unwrap_or_default();
+        let anchor = completed
+            .recurrence_anchor_date
+            .clone()
+            .unwrap_or_else(|| due_date.clone());
+        let checked_today = check_due_date(today)?.unwrap_or_else(|| due_date.clone());
+        let next_due_date = next_recurrence_date(
+            &due_date,
+            &anchor,
+            completed.recurrence,
+            Some(&checked_today),
+        )?;
+        let span_days = completed
+            .end_date
+            .as_deref()
+            .map(|end| {
+                Ok::<i64, String>(
+                    (parse_calendar_date(end)? - parse_calendar_date(&due_date)?).num_days(),
+                )
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let next_end_date = if span_days > 0 {
+            Some(
+                (parse_calendar_date(&next_due_date)? + Duration::days(span_days))
+                    .format("%Y-%m-%d")
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+
+        // The completed occurrence becomes ordinary history. Only the next open
+        // occurrence owns the rule, so unchecking an old item cannot fork a
+        // duplicate recurring series.
+        todos[index].recurrence = Recurrence::None;
+        todos[index].recurrence_anchor_date = None;
+        let mut next = completed;
+        next.id = format!("todo-{}", uuid::Uuid::new_v4());
+        next.due_date = Some(next_due_date);
+        next.end_date = next_end_date;
+        next.recurrence_anchor_date = Some(anchor);
+        next.done = false;
+        next.completed_at = None;
+        next.created_at = timestamp;
+        next.updated_at = timestamp;
+        next.order = next_order(&todos, next.quadrant);
+        todos.push(next.clone());
+        next_todo = Some(next);
+    }
 
     let updated = todos[index].clone();
     save(&app, &todos)?;
-    Ok(updated)
+    Ok(TodoUpdateResult {
+        todo: updated,
+        next_todo,
+    })
 }
 
 #[tauri::command]
@@ -432,6 +629,8 @@ mod tests {
             end_date: None,
             start_time: None,
             end_time: None,
+            recurrence: Recurrence::None,
+            recurrence_anchor_date: None,
             done,
             completed_at: None,
             created_at: 1,
@@ -512,6 +711,46 @@ mod tests {
     }
 
     #[test]
+    fn recurrence_keeps_month_and_year_anchors() {
+        assert_eq!(
+            advance_recurrence_date("2026-01-31", "2026-01-31", Recurrence::Monthly).unwrap(),
+            "2026-02-28"
+        );
+        assert_eq!(
+            advance_recurrence_date("2026-02-28", "2026-01-31", Recurrence::Monthly).unwrap(),
+            "2026-03-31"
+        );
+        assert_eq!(
+            advance_recurrence_date("2027-02-28", "2024-02-29", Recurrence::Yearly).unwrap(),
+            "2028-02-29"
+        );
+    }
+
+    #[test]
+    fn recurrence_skips_missed_occurrences() {
+        assert_eq!(
+            next_recurrence_date(
+                "2026-09-01",
+                "2026-09-01",
+                Recurrence::Daily,
+                Some("2026-09-14"),
+            )
+            .unwrap(),
+            "2026-09-15"
+        );
+        assert_eq!(
+            next_recurrence_date(
+                "2024-05-10",
+                "2024-05-10",
+                Recurrence::Yearly,
+                Some("2026-09-14"),
+            )
+            .unwrap(),
+            "2027-05-10"
+        );
+    }
+
+    #[test]
     fn rejects_blank_titles_and_caps_long_ones() {
         assert!(clean_title("   ").is_err());
         assert_eq!(clean_title("  写周报  ").unwrap(), "写周报");
@@ -526,5 +765,8 @@ mod tests {
         assert_eq!(cleared.due_date, Some(None));
         let set: TodoPatch = serde_json::from_str(r#"{"dueDate":"2026-08-28"}"#).unwrap();
         assert_eq!(set.due_date, Some(Some("2026-08-28".to_string())));
+
+        let repeating: TodoPatch = serde_json::from_str(r#"{"recurrence":"yearly"}"#).unwrap();
+        assert_eq!(repeating.recurrence, Some(Recurrence::Yearly));
     }
 }
