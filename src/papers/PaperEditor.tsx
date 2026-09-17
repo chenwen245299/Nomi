@@ -375,6 +375,7 @@ function PaperBody({
       <View style={styles.editorHost}>
         <MarkdownEditor
           accentRgb={accent.rgb}
+          className="nomi-editor--papers"
           mode="wysiwyg"
           onBlur={() => void flush()}
           onChange={onChange}

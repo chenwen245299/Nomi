@@ -57,6 +57,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import Vditor from "vditor";
 import { AttachmentPreviewModal, type AttachmentPreviewKind } from "../AttachmentPreviewModal";
+import { copyText } from "../clipboard";
 import { VDITOR_CDN } from "../editor/vditorAssets";
 import { accentFor, motion, useTheme, type Accent, type Theme } from "../theme";
 import { BrandIcon } from "../providers/BrandIcon";
@@ -1809,6 +1810,8 @@ function ReasoningBlock({
 function AnswerAction({
   active,
   icon,
+  successIcon,
+  successLabel,
   label,
   onPress,
   styles,
@@ -1816,17 +1819,32 @@ function AnswerAction({
 }: {
   active?: boolean;
   icon: ReactNode;
+  /** Shown briefly after `onPress` resolves truthy — e.g. a check mark on copy. */
+  successIcon?: ReactNode;
+  successLabel?: string;
   label: string;
-  onPress: () => void;
+  onPress: () => void | Promise<boolean>;
   styles: Styles;
   theme: Theme;
 }) {
+  const [succeeded, setSucceeded] = useState(false);
+  const handlePress = () => {
+    const result = onPress();
+    if (successIcon && result && typeof (result as Promise<boolean>).then === "function") {
+      void (result as Promise<boolean>).then((ok) => {
+        if (!ok) return;
+        setSucceeded(true);
+        setTimeout(() => setSucceeded(false), 1500);
+      });
+    }
+  };
+  const showSuccess = succeeded && !!successIcon;
   return (
-    <div title={label}>
+    <div title={showSuccess ? (successLabel ?? label) : label}>
       <Pressable
-        accessibilityLabel={label}
+        accessibilityLabel={showSuccess ? (successLabel ?? label) : label}
         accessibilityRole="button"
-        onPress={onPress}
+        onPress={handlePress}
         style={({ hovered, pressed }: PressState) => [
           styles.answerAction,
           motion,
@@ -1835,7 +1853,7 @@ function AnswerAction({
           pressed && { backgroundColor: theme.t.controlPressed },
         ]}
       >
-        {icon}
+        {showSuccess ? successIcon : icon}
       </Pressable>
     </div>
   );
@@ -1993,8 +2011,10 @@ function AnswerSurface({
           <View style={[styles.answerActions, { opacity: showActions ? 1 : 0 }]}>
             <AnswerAction
               icon={<RiFileCopyLine color={iconColor} size={13} />}
+              successIcon={<RiCheckLine color={theme.t.statusGreenText} size={13} />}
+              successLabel="已复制"
               label="复制回答"
-              onPress={() => void navigator.clipboard?.writeText(message.content)}
+              onPress={() => copyText(message.content)}
               styles={styles}
               theme={theme}
             />
@@ -2228,8 +2248,10 @@ function SplitAnswerPanel({
           <View style={styles.compareFooterActions}>
             <AnswerAction
               icon={<RiFileCopyLine color={iconColor} size={13} />}
+              successIcon={<RiCheckLine color={theme.t.statusGreenText} size={13} />}
+              successLabel="已复制"
               label="复制回答"
-              onPress={() => void navigator.clipboard?.writeText(message.content)}
+              onPress={() => copyText(message.content)}
               styles={styles}
               theme={theme}
             />
@@ -2664,8 +2686,10 @@ function MessageBubble({
               <View style={[styles.answerActions, { opacity: showActions ? 1 : 0 }]}>
                 <AnswerAction
                   icon={<RiFileCopyLine color={iconColor} size={13} />}
+                  successIcon={<RiCheckLine color={theme.t.statusGreenText} size={13} />}
+                  successLabel="已复制"
                   label="复制消息"
-                  onPress={() => void navigator.clipboard?.writeText(message.content)}
+                  onPress={() => copyText(message.content)}
                   styles={styles}
                   theme={theme}
                 />

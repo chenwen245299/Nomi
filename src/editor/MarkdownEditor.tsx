@@ -120,6 +120,10 @@ export function MarkdownEditor({
   const vditorRef = useRef<Vditor | null>(null);
   const toolbarHostRef = useRef<HTMLElement | null>(toolbarHost ?? null);
   const portaledToolbarRef = useRef<HTMLElement | null>(null);
+  // WYSIWYG sticky-format guard (wired in `after`, torn down on unmount).
+  const stickyFormatRef = useRef(false);
+  const suppressStickyRef = useRef(false);
+  const stickyCleanupRef = useRef<(() => void) | null>(null);
   // True once vditor's async init (Lute load) has finished and the instance exists.
   const [ready, setReady] = useState(false);
 
@@ -222,6 +226,101 @@ export function MarkdownEditor({
           return;
         }
         vditorRef.current = instance;
+
+        // WYSIWYG bold/italic/strike is applied with document.execCommand, which
+        // leaves the browser's "typing stays bold" state on the contenteditable.
+        // On Chrome vditor escapes the caret out of the emphasis run (a ZWSP after
+        // `<strong>…</strong>`), but that fix is gated on isChrome() and never runs
+        // in WKWebView (Tauri/Safari) — so the caret stays glued to the run and the
+        // next edit keeps emitting bold, which vditor then merges + re-parses into a
+        // single `**…**`, turning the whole paragraph bold. Neutralise the leaked
+        // typing-state, but ONLY on the first edit right after a format command and
+        // ONLY on a collapsed caret, so editing genuinely-bold text is never touched.
+        const INLINE_FORMAT_INPUT = new Set(["formatBold", "formatItalic", "formatStrikeThrough"]);
+        const NAV_KEYS = new Set([
+          "Shift",
+          "Control",
+          "Meta",
+          "Alt",
+          "CapsLock",
+          "Tab",
+          "Escape",
+          "ArrowLeft",
+          "ArrowRight",
+          "ArrowUp",
+          "ArrowDown",
+          "Home",
+          "End",
+          "PageUp",
+          "PageDown",
+        ]);
+        const onFormatInput = (event: Event) => {
+          if (suppressStickyRef.current) return;
+          if (vditorRef.current?.getCurrentMode() !== "wysiwyg") return;
+          const inputType = (event as InputEvent).inputType;
+          if (inputType && INLINE_FORMAT_INPUT.has(inputType)) {
+            stickyFormatRef.current = true;
+          }
+        };
+        // True only when the caret sits *strictly inside* an emphasis run (there is
+        // still emphasised text after it) — i.e. the user is editing genuinely-bold
+        // text and the format must be preserved. At the trailing edge (nothing after
+        // the caret) or outside the run, the "bold" state is the leaked typing-state.
+        const EMPHASIS_TAGS = new Set(["STRONG", "B", "EM", "I", "S", "STRIKE", "DEL"]);
+        const caretStrictlyInsideEmphasis = (node: Node | null, offset: number): boolean => {
+          let emphasis: HTMLElement | null = null;
+          for (let el: Node | null = node; el && el !== element; el = el.parentNode) {
+            if (el.nodeType === 1 && EMPHASIS_TAGS.has((el as HTMLElement).tagName)) {
+              emphasis = el as HTMLElement;
+              break;
+            }
+          }
+          if (!emphasis || !node) return false;
+          try {
+            const rest = document.createRange();
+            rest.setStart(node, offset);
+            rest.setEnd(emphasis, emphasis.childNodes.length);
+            return rest.toString().length > 0;
+          } catch {
+            return false;
+          }
+        };
+        const onEditKeydown = (event: KeyboardEvent) => {
+          if (!stickyFormatRef.current) return;
+          if (event.metaKey || event.ctrlKey || event.altKey || NAV_KEYS.has(event.key)) {
+            return; // navigation / shortcut — wait for the actual content edit
+          }
+          // A real edit (typing, Enter, Backspace/Delete) follows the fresh format
+          // command; consume the one-shot and drop the leaked typing-state.
+          stickyFormatRef.current = false;
+          const selection = window.getSelection();
+          if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return;
+          if (!element.contains(selection.anchorNode)) return;
+          if (caretStrictlyInsideEmphasis(selection.anchorNode, selection.anchorOffset)) return;
+          suppressStickyRef.current = true;
+          try {
+            for (const command of ["bold", "italic", "strikeThrough"] as const) {
+              try {
+                if (document.queryCommandState(command)) {
+                  document.execCommand(command, false, "");
+                }
+              } catch {
+                /* queryCommandState/execCommand unsupported — nothing to clear */
+              }
+            }
+          } finally {
+            suppressStickyRef.current = false;
+          }
+        };
+        // Capture phase on the stable container so a mode switch (sv⇄wysiwyg) that
+        // swaps the inner editable can't drop the listeners.
+        element.addEventListener("input", onFormatInput, true);
+        element.addEventListener("keydown", onEditKeydown, true);
+        stickyCleanupRef.current = () => {
+          element.removeEventListener("input", onFormatInput, true);
+          element.removeEventListener("keydown", onEditKeydown, true);
+        };
+
         const toolbarElement = element.querySelector<HTMLElement>(".vditor-toolbar");
         const externalHost = toolbarHostRef.current;
         if (toolbarElement && externalHost) {
@@ -240,6 +339,8 @@ export function MarkdownEditor({
 
     return () => {
       cancelled = true;
+      stickyCleanupRef.current?.();
+      stickyCleanupRef.current = null;
       const current = vditorRef.current;
       vditorRef.current = null;
       // Vditor's destroy() only clears its own root. Put a portaled toolbar back

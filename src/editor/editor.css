@@ -283,10 +283,16 @@
      keep note content on the same 24px alignment line as the title header. */
   padding: 42px 24px 120px !important;
 }
-.nomi-editor--notes .vditor-reset {
+/* Full-document editors (notes, papers) portal their toolbar into the header, so
+   they don't need the base editor's tall lead-in — trim the top padding and drop
+   the first block's own top margin so content sits just under the header instead
+   of after a large blank. */
+.nomi-editor--notes .vditor-reset,
+.nomi-editor--papers .vditor-reset {
   padding-top: 24px !important;
 }
-.nomi-editor--notes .vditor-reset > :first-child {
+.nomi-editor--notes .vditor-reset > :first-child,
+.nomi-editor--papers .vditor-reset > :first-child {
   margin-top: 0;
 }
 .nomi-editor .vditor-content,

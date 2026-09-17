@@ -7,6 +7,7 @@ import {
   RiTerminalBoxLine,
 } from "@remixicon/react";
 import { accentFor, cardShadow, motion, useTheme, type Accent, type Theme } from "../theme";
+import { copyText } from "../clipboard";
 import type { McpController } from "./useMcp";
 
 type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
@@ -231,12 +232,9 @@ function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
+    if (await copyText(text)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard can be unavailable (e.g. denied permission); ignore silently.
     }
   }
 
