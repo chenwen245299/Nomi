@@ -48,6 +48,7 @@ impl ProviderSpec for OpenRouter {
         &self,
         base_url: &str,
         api_key: &str,
+        _access_token: Option<&str>,
     ) -> Result<ProviderBalance, String> {
         // OpenRouter's balance lives under the same `/api/v1` base as chat, so
         // (unlike DeepSeek) the `/v1` stays on.
@@ -69,6 +70,9 @@ impl ProviderSpec for OpenRouter {
                     total_usage: Some(credits.total_usage),
                     is_available: remaining > 0.0,
                     other_currencies: Vec::new(),
+                    unlimited: false,
+                    expires_at: None,
+                    note: None,
                 })
             }
             Err(e) if e.is_auth() => fetch_key(base, api_key).await,
@@ -97,6 +101,9 @@ async fn fetch_key(base: &str, api_key: &str) -> Result<ProviderBalance, String>
         total_usage: Some(key.usage),
         is_available: remaining.is_none_or(|r| r > 0.0),
         other_currencies: Vec::new(),
+        unlimited: false,
+        expires_at: None,
+        note: None,
     })
 }
 

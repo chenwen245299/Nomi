@@ -6,6 +6,7 @@ import {
   listProviders,
   providerBalance,
   setDefaultModel,
+  setProviderAccessToken,
   setProviderEnabled,
   setProviderKey,
   testProvider,
@@ -36,6 +37,7 @@ export interface ProvidersController {
   toggleEnabled: (id: string, enabled: boolean) => Promise<void>;
   remove: (id: string) => Promise<void>;
   saveKey: (id: string, key: string) => Promise<void>;
+  saveAccessToken: (id: string, token: string) => Promise<void>;
   test: (id: string) => Promise<{ ok: boolean; message: string }>;
   fetchModels: (id: string) => Promise<FetchedProviderModel[]>;
   balance: (id: string) => Promise<ProviderBalance>;
@@ -148,6 +150,20 @@ export function useProviders(active: boolean): ProvidersController {
     }
   }, []);
 
+  const saveAccessToken = useCallback(async (id: string, token: string) => {
+    try {
+      await setProviderAccessToken(id, token);
+      setProviders((prev) =>
+        prev.map((item) =>
+          item.id === id ? { ...item, hasAccessToken: token.trim().length > 0 } : item,
+        ),
+      );
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    }
+  }, []);
+
   const test = useCallback(async (id: string) => {
     try {
       const message = await testProvider(id);
@@ -189,6 +205,7 @@ export function useProviders(active: boolean): ProvidersController {
     toggleEnabled,
     remove,
     saveKey,
+    saveAccessToken,
     test,
     fetchModels,
     balance,

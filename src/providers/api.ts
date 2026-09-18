@@ -42,6 +42,36 @@ export interface FetchedProviderModel {
   contextLength?: number | null;
   inputModalities: string[];
   outputModalities: string[];
+  /** MoleAPI-only: per-million-token USD rates parsed from the relay's price
+   * list, converted to the user-maintained CNY fields when the model is added. */
+  inputPriceUsdPerMillion?: number | null;
+  outputPriceUsdPerMillion?: number | null;
+  /** MoleAPI-only: both directions priced at zero. */
+  isFree?: boolean;
+}
+
+/** MoleAPI reports prices in USD; Nomi stores CNY. A fixed conversion rate keeps
+ * the auto-filled figure sane — it lands in the editable per-model price field,
+ * so the user can adjust it if the rate drifts. */
+export const USD_TO_CNY = 7.2;
+
+/** Convert a USD/million rate to a CNY/million figure, rounded to 6 dp (the
+ * precision the price editor accepts). `null`/non-finite in → `null` out. */
+export function cnyFromUsdPerMillion(usd: number | null | undefined): number | null {
+  if (usd == null || !Number.isFinite(usd)) return null;
+  return Math.round(usd * USD_TO_CNY * 1e6) / 1e6;
+}
+
+/** CNY input/output prices derived from a fetched model's USD rates (MoleAPI).
+ * Both `null` for providers that don't report prices. */
+export function fetchedModelCnyPrices(model: FetchedProviderModel): {
+  inputPrice: number | null;
+  outputPrice: number | null;
+} {
+  return {
+    inputPrice: cnyFromUsdPerMillion(model.inputPriceUsdPerMillion),
+    outputPrice: cnyFromUsdPerMillion(model.outputPriceUsdPerMillion),
+  };
 }
 
 export type PricingPeriod = "peak" | "offPeak";
@@ -104,6 +134,11 @@ export interface Provider {
   /** Whether this provider publishes an account balance (from the backend spec).
    * Drives the balance UI; absent in browser-preview mode. */
   supportsBalance?: boolean;
+  /** Whether this provider accepts the optional 系统访问令牌 second secret
+   * (MoleAPI). Gates the extra field in settings. */
+  supportsAccessToken?: boolean;
+  /** Whether that optional token is currently stored. */
+  hasAccessToken?: boolean;
 }
 
 export interface DefaultModelRef {
@@ -127,6 +162,7 @@ export const PROVIDER_KINDS: { value: string; label: string }[] = [
   { value: "zhipu", label: "智谱 / BigModel" },
   { value: "minimax", label: "MiniMax" },
   { value: "mimo", label: "小米 MiMo" },
+  { value: "moleapi", label: "MoleAPI" },
   { value: "kimi", label: "Kimi / Moonshot" },
   { value: "ollama", label: "Ollama" },
   { value: "anthropic", label: "Anthropic Claude" },
@@ -278,6 +314,7 @@ const KIND_KEYWORDS: [string, string][] = [
   ["mimo", "mimo"],
   ["xiaomi", "mimo"],
   ["小米", "mimo"],
+  ["moleapi", "moleapi"],
   ["kimi", "kimi"],
   ["moonshot", "kimi"],
   ["ollama", "ollama"],
@@ -325,6 +362,13 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
   },
   zhipu: {
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    models: [],
+  },
+  // MoleAPI relays several hundred models; the line-up changes constantly and the
+  // catalogue carries tags + prices, so leave models empty and let the user fetch
+  // the live list ("获取模型列表"), which enriches capabilities and CNY prices.
+  moleapi: {
+    baseUrl: "https://api.moleapi.com/v1",
     models: [],
   },
   // DeepSeek model sizes come straight from the vendor (no name-parsing): flash
@@ -393,6 +437,13 @@ export interface ProviderBalance {
   totalUsage?: number;
   isAvailable: boolean;
   otherCurrencies?: CurrencyBalance[];
+  /** MoleAPI: a 无限额度 key has no ceiling, so `remaining` is meaningless —
+   * render "不限额" instead of the amount. */
+  unlimited?: boolean;
+  /** MoleAPI: key expiry as Unix seconds; absent when it never expires. */
+  expiresAt?: number | null;
+  /** MoleAPI: a secondary line (已用 / 密钥剩余 / 无限额度 notes). */
+  note?: string;
 }
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -401,14 +452,22 @@ const nowSec = () => Math.floor(Date.now() / 1000);
 // The backend derives `supportsBalance` from each provider kind's spec. In
 // browser-preview mode there is no backend, so mirror the same set here (the
 // only place the kinds are duplicated, and only for offline UI dev).
-const PREVIEW_BALANCE_KINDS = new Set(["deepseek", "openrouter"]);
+const PREVIEW_BALANCE_KINDS = new Set(["deepseek", "openrouter", "moleapi"]);
 const previewSupportsBalance = (kind: string): boolean => PREVIEW_BALANCE_KINDS.has(kind);
+const previewSupportsAccessToken = (kind: string): boolean => kind === "moleapi";
 
-// ── Browser-preview in-memory store (pnpm dev without the Rust backend). Keys are
-// only tracked as a boolean here — real keys live in the OS keychain via Rust. ──
-const preview: { providers: Provider[]; keys: Set<string>; seq: number } = {
+// ── Browser-preview in-memory store (pnpm dev without the Rust backend). Keys and
+// access tokens are only tracked as booleans here — real secrets live encrypted
+// via Rust. ──
+const preview: {
+  providers: Provider[];
+  keys: Set<string>;
+  accessTokens: Set<string>;
+  seq: number;
+} = {
   providers: [],
   keys: new Set(),
+  accessTokens: new Set(),
   seq: 1,
 };
 
@@ -434,6 +493,8 @@ export async function listProviders(): Promise<Provider[]> {
     ...p,
     hasKey: preview.keys.has(p.id),
     supportsBalance: previewSupportsBalance(p.kind),
+    supportsAccessToken: previewSupportsAccessToken(p.kind),
+    hasAccessToken: preview.accessTokens.has(p.id),
   }));
 }
 
@@ -457,6 +518,8 @@ export async function createProvider(
     updatedAt: ts,
     hasKey: false,
     supportsBalance: previewSupportsBalance(kind),
+    supportsAccessToken: previewSupportsAccessToken(kind),
+    hasAccessToken: false,
   };
   preview.providers.push(provider);
   return provider;
@@ -475,6 +538,8 @@ export async function updateProvider(provider: Provider): Promise<Provider> {
       ...existing,
       hasKey: preview.keys.has(id),
       supportsBalance: previewSupportsBalance(kind),
+      supportsAccessToken: previewSupportsAccessToken(kind),
+      hasAccessToken: preview.accessTokens.has(id),
     };
   }
   throw new Error("服务商不存在");
@@ -511,6 +576,7 @@ export async function deleteProvider(id: string): Promise<void> {
   }
   preview.providers = preview.providers.filter((p) => p.id !== id);
   preview.keys.delete(id);
+  preview.accessTokens.delete(id);
 }
 
 export async function setProviderKey(id: string, key: string): Promise<void> {
@@ -523,6 +589,25 @@ export async function setProviderKey(id: string, key: string): Promise<void> {
   } else {
     preview.keys.delete(id);
   }
+}
+
+export async function setProviderAccessToken(id: string, token: string): Promise<void> {
+  if (isTauri()) {
+    await invoke("set_provider_access_token", { id, token });
+    return;
+  }
+  if (token.trim()) {
+    preview.accessTokens.add(id);
+  } else {
+    preview.accessTokens.delete(id);
+  }
+}
+
+export async function providerHasAccessToken(id: string): Promise<boolean> {
+  if (isTauri()) {
+    return invoke<boolean>("provider_has_access_token", { id });
+  }
+  return preview.accessTokens.has(id);
 }
 
 export async function testProvider(id: string): Promise<string> {

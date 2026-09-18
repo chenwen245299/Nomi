@@ -24,11 +24,12 @@ mod deepseek;
 mod generic;
 mod mimo;
 mod minimax;
+mod moleapi;
 mod openrouter;
 mod qwen;
 mod zhipu;
 
-pub(crate) use spec::{ProviderBalance, ProviderSpec, spec_for};
+pub(crate) use spec::{ProviderBalance, ProviderSpec, spec_for, spec_for_provider};
 
 const CONFIG_DIR: &str = ".nomi";
 const PROVIDERS_FILE: &str = "providers.json";
@@ -61,6 +62,15 @@ pub struct FetchedProviderModel {
     pub(crate) context_length: Option<u64>,
     pub(crate) input_modalities: Vec<String>,
     pub(crate) output_modalities: Vec<String>,
+    /// MoleAPI-only: per-million-token USD rates parsed from the relay's price
+    /// list, so the webview can convert them into its user-maintained CNY price
+    /// fields. Omitted from the JSON when absent (every other provider).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) input_price_usd_per_million: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) output_price_usd_per_million: Option<f64>,
+    /// MoleAPI-only: both directions priced at zero.
+    pub(crate) is_free: bool,
 }
 
 impl PricingTimeRange {
@@ -151,6 +161,11 @@ pub struct ProviderView {
     /// network probe, and keeps the "which providers have a balance" answer in
     /// one place (the per-provider modules) instead of hardcoded in the frontend.
     supports_balance: bool,
+    /// Whether this provider accepts the optional 系统访问令牌 second secret
+    /// (MoleAPI). Gates the extra field in settings.
+    supports_access_token: bool,
+    /// Whether that optional token is currently stored for this provider.
+    has_access_token: bool,
 }
 
 fn now() -> u64 {
@@ -389,12 +404,14 @@ pub(crate) fn delete_key(app: &AppHandle, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn to_view(app_id_key_ok: bool, provider: Provider) -> ProviderView {
-    let supports_balance = spec_for(&provider.kind).supports_balance();
+fn to_view(has_key: bool, has_access_token: bool, provider: Provider) -> ProviderView {
+    let spec = spec_for_provider(&provider.kind, &provider.base_url);
     ProviderView {
+        has_key,
+        supports_balance: spec.supports_balance(),
+        supports_access_token: spec.supports_access_token(),
+        has_access_token,
         provider,
-        has_key: app_id_key_ok,
-        supports_balance,
     }
 }
 
@@ -403,9 +420,19 @@ fn view_list(app: &AppHandle, providers: Vec<Provider>) -> Vec<ProviderView> {
         .into_iter()
         .map(|provider| {
             let has_key = read_key(app, &provider.id).unwrap_or(None).is_some();
-            to_view(has_key, provider)
+            let has_access_token = read_key(app, &access_token_id(&provider.id))
+                .unwrap_or(None)
+                .is_some();
+            to_view(has_key, has_access_token, provider)
         })
         .collect()
+}
+
+/// The encrypted-store slot for a provider's optional 系统访问令牌 (second
+/// secret). Namespaced under the provider id so it never collides with the API
+/// key and is removed together with the provider.
+fn access_token_id(id: &str) -> String {
+    format!("{id}__access_token")
 }
 
 fn find_index(providers: &[Provider], id: &str) -> Result<usize, String> {
@@ -564,7 +591,7 @@ pub fn create_provider(
     };
     providers.push(provider.clone());
     write_providers(&app, &providers)?;
-    Ok(to_view(false, provider))
+    Ok(to_view(false, false, provider))
 }
 
 #[tauri::command]
@@ -590,7 +617,10 @@ pub fn update_provider(
     let updated = providers[index].clone();
     write_providers(&app, &providers)?;
     let has_key = read_key(&app, &id).unwrap_or(None).is_some();
-    Ok(to_view(has_key, updated))
+    let has_access_token = read_key(&app, &access_token_id(&id))
+        .unwrap_or(None)
+        .is_some();
+    Ok(to_view(has_key, has_access_token, updated))
 }
 
 /// Atomically replace the single global default model across all providers.
@@ -633,7 +663,8 @@ pub fn delete_provider(app: AppHandle, id: String) -> Result<(), String> {
     let index = find_index(&providers, &id)?;
     providers.remove(index);
     write_providers(&app, &providers)?;
-    delete_key(&app, &id)
+    delete_key(&app, &id)?;
+    delete_key(&app, &access_token_id(&id))
 }
 
 #[tauri::command]
@@ -653,6 +684,27 @@ pub fn provider_has_key(app: AppHandle, id: String) -> Result<bool, String> {
     let providers = read_providers(&app)?;
     find_index(&providers, &id)?;
     Ok(read_key(&app, &id)?.is_some())
+}
+
+/// Store (or clear, when blank) a provider's optional 系统访问令牌. This is a
+/// second encrypted secret alongside the API key — MoleAPI needs it to read the
+/// account balance a 无限额度 key hides — and never leaves the backend.
+#[tauri::command]
+pub fn set_provider_access_token(app: AppHandle, id: String, token: String) -> Result<(), String> {
+    let providers = read_providers(&app)?;
+    find_index(&providers, &id)?;
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return delete_key(&app, &access_token_id(&id));
+    }
+    save_key(&app, &access_token_id(&id), trimmed)
+}
+
+#[tauri::command]
+pub fn provider_has_access_token(app: AppHandle, id: String) -> Result<bool, String> {
+    let providers = read_providers(&app)?;
+    find_index(&providers, &id)?;
+    Ok(read_key(&app, &access_token_id(&id))?.is_some())
 }
 
 #[derive(Default, Deserialize)]
@@ -754,10 +806,18 @@ fn fetched_model(entry: ModelEntry) -> FetchedProviderModel {
         context_length: entry.context_length,
         input_modalities: inputs,
         output_modalities: outputs,
+        input_price_usd_per_million: None,
+        output_price_usd_per_million: None,
+        is_free: false,
     }
 }
 
-async fn fetch_models_raw(
+/// Fetch just the provider's `/models` catalogue — the plain OpenAI-shaped list,
+/// before any provider-specific enrichment. This is the connectivity signal (it
+/// exercises the base URL + key), so it deliberately does *not* touch MoleAPI's
+/// separate price-list endpoint, which would otherwise let an unrelated `/api/pricing`
+/// outage make a working key look broken.
+async fn fetch_models_bare(
     base_url: &str,
     key: Option<&str>,
     kind: &str,
@@ -765,7 +825,7 @@ async fn fetch_models_raw(
     if base_url.trim().is_empty() {
         return Err("请先填写 API 地址。".into());
     }
-    let spec = spec_for(kind);
+    let spec = spec_for_provider(kind, base_url);
     let client = reqwest::Client::new();
     let mut request = client.get(spec.models_url(base_url));
     if let Some(key) = key {
@@ -786,12 +846,25 @@ async fn fetch_models_raw(
         .json()
         .await
         .map_err(|error| format!("无法解析模型列表：{error}"))?;
-    Ok(parsed
-        .data
-        .into_iter()
-        .map(fetched_model)
-        .map(|model| spec.enrich_fetched_model(model))
-        .collect())
+    Ok(parsed.data.into_iter().map(fetched_model).collect())
+}
+
+/// The catalogue a user actually adds from: the bare `/models` list plus
+/// provider-specific enrichment. Enrichment runs over the whole list at once so a
+/// provider that needs a second call (MoleAPI's price list) makes it once and can
+/// drop rows it can't serve. Enrichment failures are fatal here — the memo
+/// requires the price list to be a hard dependency of the add/refresh flow so a
+/// transient miss never wipes stored prices — but the connectivity test above
+/// uses the bare fetch to stay independent of it.
+async fn fetch_models_raw(
+    base_url: &str,
+    key: Option<&str>,
+    kind: &str,
+) -> Result<Vec<FetchedProviderModel>, String> {
+    let models = fetch_models_bare(base_url, key, kind).await?;
+    spec_for_provider(kind, base_url)
+        .enrich_fetched_models(base_url, key, models)
+        .await
 }
 
 /// Query a provider's account balance, dispatched to its [`ProviderSpec`]. Only
@@ -807,7 +880,11 @@ pub async fn provider_balance(app: AppHandle, id: String) -> Result<ProviderBala
         return Err("请先填写 API 地址。".into());
     }
     let key = read_key(&app, &id)?.ok_or("请先填写 API 密钥。")?;
-    spec_for(&kind).fetch_balance(base_url.trim(), &key).await
+    // The optional 系统访问令牌 (MoleAPI's account secret); other providers ignore it.
+    let access_token = read_key(&app, &access_token_id(&id))?;
+    spec_for_provider(&kind, &base_url)
+        .fetch_balance(base_url.trim(), &key, access_token.as_deref())
+        .await
 }
 
 #[tauri::command]
@@ -817,7 +894,9 @@ pub async fn test_provider(app: AppHandle, id: String) -> Result<String, String>
     let base_url = providers[index].base_url.clone();
     let kind = providers[index].kind.clone();
     let key = read_key(&app, &id)?;
-    let models = fetch_models_raw(&base_url, key.as_deref(), &kind).await?;
+    // Connectivity only — use the bare catalogue so a MoleAPI provider isn't
+    // reported as broken when the separate price-list endpoint is unavailable.
+    let models = fetch_models_bare(&base_url, key.as_deref(), &kind).await?;
     Ok(format!("连接成功，可用模型 {} 个", models.len()))
 }
 

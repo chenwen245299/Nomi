@@ -49,8 +49,8 @@ use papers::{
 };
 use providers::{
     create_provider, delete_provider, fetch_provider_models, list_providers, provider_balance,
-    provider_has_key, set_default_model, set_provider_enabled, set_provider_key, test_provider,
-    update_provider,
+    provider_has_access_token, provider_has_key, set_default_model, set_provider_access_token,
+    set_provider_enabled, set_provider_key, test_provider, update_provider,
 };
 use storage::{get_storage_status, get_storage_usage, set_storage_root};
 use todos::{
@@ -135,6 +135,8 @@ pub fn run() {
             delete_provider,
             set_provider_key,
             provider_has_key,
+            set_provider_access_token,
+            provider_has_access_token,
             test_provider,
             fetch_provider_models,
             provider_balance,

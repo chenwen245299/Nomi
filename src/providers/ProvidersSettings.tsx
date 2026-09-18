@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Pressable,
   ScrollView,
@@ -36,6 +37,7 @@ import {
   MODEL_CATEGORIES,
   PROVIDER_KINDS,
   PROVIDER_PRESETS,
+  fetchedModelCnyPrices,
   findDefaultModel,
   inferModelCapabilities,
   inferModelCategory,
@@ -58,6 +60,72 @@ type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
 
 function formatAmount(value: number): string {
   return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatBalanceDate(unixSeconds: number): string {
+  return new Date(unixSeconds * 1000).toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+}
+
+/** Resolve a balance's expiry into a rendered date + past/future flag. Kept out
+ * of the component body so the `now` read isn't an impure call during render. */
+function balanceExpiry(balance: ProviderBalance): { text: string; expired: boolean } | null {
+  const at = balance.expiresAt ?? null;
+  if (at == null) return null;
+  const expired = at * 1000 <= Date.now();
+  return {
+    expired,
+    text: expired ? `已于 ${formatBalanceDate(at)} 过期` : `有效期至 ${formatBalanceDate(at)}`,
+  };
+}
+
+/**
+ * The account-balance card. DeepSeek/OpenRouter fill the granted/credits inline
+ * detail; MoleAPI instead reports `unlimited` (无限额度 keys have no ceiling, so
+ * "不限额" replaces the amount), an optional expiry, and packs its 已用/密钥剩余
+ * breakdown into `note`.
+ */
+function BalanceCard({ balance }: { balance: ProviderBalance }) {
+  const { styles } = useProviderStyles();
+  const expiry = balanceExpiry(balance);
+  return (
+    <View style={styles.balanceCard}>
+      <View style={styles.balanceRow}>
+        <Text style={styles.balanceAmount}>
+          {balance.unlimited ? "不限额" : `${formatAmount(balance.remaining)} ${balance.currency}`}
+        </Text>
+        {balance.granted != null || balance.toppedUp != null ? (
+          <Text style={styles.balanceDetail}>
+            充值 {formatAmount(balance.toppedUp ?? 0)} · 赠金 {formatAmount(balance.granted ?? 0)}
+          </Text>
+        ) : balance.totalCredits != null || balance.totalUsage != null ? (
+          <Text style={styles.balanceDetail}>
+            额度 {formatAmount(balance.totalCredits ?? 0)} · 已用{" "}
+            {formatAmount(balance.totalUsage ?? 0)}
+          </Text>
+        ) : null}
+      </View>
+      {balance.note ? <Text style={styles.balanceDetail}>{balance.note}</Text> : null}
+      {expiry ? (
+        <Text style={expiry.expired ? styles.testResultErr : styles.balanceDetail}>
+          {expiry.text}
+        </Text>
+      ) : null}
+      {balance.otherCurrencies?.map((info) => (
+        <View key={info.currency} style={styles.balanceRow}>
+          <Text style={styles.balanceAmount}>
+            {formatAmount(info.remaining)} {info.currency}
+          </Text>
+        </View>
+      ))}
+      {!balance.isAvailable && !balance.unlimited && !expiry?.expired && (
+        <Text style={styles.testResultErr}>余额不足，接口调用可能被拒绝。</Text>
+      )}
+    </View>
+  );
 }
 
 const isTauriRuntime = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -1258,6 +1326,9 @@ function ProviderDetail({
         const capabilities = [
           ...new Set([...model.capabilities, ...inferModelCapabilities(model.id)]),
         ];
+        // MoleAPI reports USD rates in the catalogue; convert to the CNY price
+        // fields. Providers that don't report prices leave these null (unset).
+        const { inputPrice, outputPrice } = fetchedModelCnyPrices(model);
         return {
           id: model.id,
           name: model.name || model.id,
@@ -1270,6 +1341,8 @@ function ProviderDetail({
           contextLength: model.contextLength,
           inputModalities: model.inputModalities,
           outputModalities: model.outputModalities,
+          inputPrice,
+          outputPrice,
         };
       });
     if (added.length) {
@@ -1290,6 +1363,11 @@ function ProviderDetail({
           ...inferModelCapabilities(model.id),
         ]),
       ];
+      // Refresh only the objective catalogue metadata (name/caps/category/context/
+      // modalities). Prices are user-maintained and are filled once, at add time
+      // (see addModels): a refresh must not touch them, otherwise a price the user
+      // deliberately cleared would come back — the backend serialises an unset
+      // price as `null`, so a cleared price and a never-set one are indistinguishable.
       const next: ProviderModel = {
         ...model,
         name: !model.name.trim() || model.name === model.id ? fresh.name || model.id : model.name,
@@ -1396,6 +1474,13 @@ function ProviderDetail({
         <ApiKeyField controller={controller} provider={provider} />
       </View>
 
+      {provider.supportsAccessToken && (
+        <View>
+          <Text style={styles.fieldLabel}>系统访问令牌（可选）</Text>
+          <AccessTokenField controller={controller} provider={provider} />
+        </View>
+      )}
+
       <View>
         <Text style={styles.fieldLabel}>API 地址</Text>
         <TextInput
@@ -1465,34 +1550,7 @@ function ProviderDetail({
           {balanceState === "error" ? (
             <Text style={styles.testResultErr}>{balanceError}</Text>
           ) : balance ? (
-            <View style={styles.balanceCard}>
-              <View style={styles.balanceRow}>
-                <Text style={styles.balanceAmount}>
-                  {formatAmount(balance.remaining)} {balance.currency}
-                </Text>
-                {balance.granted != null || balance.toppedUp != null ? (
-                  <Text style={styles.balanceDetail}>
-                    充值 {formatAmount(balance.toppedUp ?? 0)} · 赠金{" "}
-                    {formatAmount(balance.granted ?? 0)}
-                  </Text>
-                ) : balance.totalCredits != null || balance.totalUsage != null ? (
-                  <Text style={styles.balanceDetail}>
-                    额度 {formatAmount(balance.totalCredits ?? 0)} · 已用{" "}
-                    {formatAmount(balance.totalUsage ?? 0)}
-                  </Text>
-                ) : null}
-              </View>
-              {balance.otherCurrencies?.map((info) => (
-                <View key={info.currency} style={styles.balanceRow}>
-                  <Text style={styles.balanceAmount}>
-                    {formatAmount(info.remaining)} {info.currency}
-                  </Text>
-                </View>
-              ))}
-              {!balance.isAvailable && (
-                <Text style={styles.testResultErr}>余额不足，接口调用可能被拒绝。</Text>
-              )}
-            </View>
+            <BalanceCard balance={balance} />
           ) : null}
         </View>
       )}
@@ -1770,6 +1828,111 @@ function ApiKeyField({
           <Text style={styles.ghostButtonText}>取消</Text>
         </Pressable>
       )}
+    </View>
+  );
+}
+
+/**
+ * MoleAPI's optional 系统访问令牌 — a second encrypted secret. A key issued as
+ * 无限额度 can't report its own balance, but this console token can read the
+ * account's. Mirrors {@link ApiKeyField}, with a hint + a link to where to mint it.
+ */
+function AccessTokenField({
+  controller,
+  provider,
+}: {
+  controller: ProvidersController;
+  provider: Provider;
+}) {
+  const { styles, theme } = useProviderStyles();
+  const [editing, setEditing] = useState(!provider.hasAccessToken);
+  const [value, setValue] = useState("");
+  const [focused, setFocused] = useState(false);
+
+  return (
+    <View style={{ gap: 6 } as ViewStyle}>
+      {provider.hasAccessToken && !editing ? (
+        <View style={styles.keyRow}>
+          <Text style={styles.keyDots}>••••••••</Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              setEditing(true);
+              setValue("");
+            }}
+            style={({ hovered, pressed }: PressState) => [
+              styles.smallButton,
+              motion,
+              hovered && styles.smallButtonHover,
+              pressed && ({ opacity: 0.8 } as ViewStyle),
+            ]}
+          >
+            <Text style={styles.smallButtonText}>修改令牌</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <View style={styles.keyRow}>
+          <TextInput
+            autoCapitalize="none"
+            onChangeText={setValue}
+            onBlur={() => setFocused(false)}
+            onFocus={() => setFocused(true)}
+            placeholder="填入后可显示账户余额（无限额度密钥适用）"
+            placeholderTextColor={theme.t.textTertiary}
+            secureTextEntry
+            style={[styles.input, { flex: 1 } as ViewStyle, focused && styles.inputFocused]}
+            value={value}
+          />
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              void controller.saveAccessToken(provider.id, value).then(() => {
+                setValue("");
+                setEditing(false);
+              });
+            }}
+            style={({ hovered, pressed }: PressState) => [
+              styles.primaryButton,
+              motion,
+              hovered && ({ filter: "brightness(1.06)" } as ViewStyle),
+              pressed && ({ opacity: 0.9 } as ViewStyle),
+            ]}
+          >
+            <Text style={styles.primaryButtonText}>保存</Text>
+          </Pressable>
+          {provider.hasAccessToken && (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                setEditing(false);
+                setValue("");
+              }}
+              style={({ hovered, pressed }: PressState) => [
+                styles.ghostButton,
+                motion,
+                hovered && ({ backgroundColor: theme.t.controlHover } as ViewStyle),
+                pressed && ({ opacity: 0.7 } as ViewStyle),
+              ]}
+            >
+              <Text style={styles.ghostButtonText}>取消</Text>
+            </Pressable>
+          )}
+        </View>
+      )}
+      <Text style={styles.modalHint}>
+        密钥设为「无限额度」时本身查不到余额；填入系统访问令牌即可显示账户余额与已用金额。获取方式：MoleAPI
+        控制台 → 安全 → 系统访问令牌 → 生成。
+      </Text>
+      <Pressable
+        accessibilityRole="link"
+        onPress={() => void openUrl("https://home.moleapi.com/security")}
+        style={({ hovered }: PressState) => [
+          { alignSelf: "flex-start" } as ViewStyle,
+          hovered && ({ opacity: 0.8 } as ViewStyle),
+        ]}
+      >
+        <Text style={styles.smallButtonText}>打开 MoleAPI 安全页 ↗</Text>
+      </Pressable>
     </View>
   );
 }

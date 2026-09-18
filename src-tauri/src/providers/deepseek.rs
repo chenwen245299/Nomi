@@ -70,6 +70,7 @@ impl ProviderSpec for DeepSeek {
         &self,
         base_url: &str,
         api_key: &str,
+        _access_token: Option<&str>,
     ) -> Result<ProviderBalance, String> {
         // The balance endpoint sits at the API root, not under `/v1`, so drop a
         // trailing `/v1` if the user configured the chat base URL with one.
@@ -96,6 +97,9 @@ impl ProviderSpec for DeepSeek {
                     remaining: parse_amount(&info.total_balance),
                 })
                 .collect(),
+            unlimited: false,
+            expires_at: None,
+            note: None,
         })
     }
 

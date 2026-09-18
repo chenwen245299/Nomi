@@ -26,7 +26,9 @@ use base64::Engine;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
-use super::{FetchedProviderModel, deepseek, generic, mimo, minimax, openrouter, qwen, zhipu};
+use super::{
+    FetchedProviderModel, deepseek, generic, mimo, minimax, moleapi, openrouter, qwen, zhipu,
+};
 use crate::providers::ChatTarget;
 
 // ── Balance DTO (the shape the webview renders) ──────────────────────────────
@@ -61,6 +63,21 @@ pub struct ProviderBalance {
     /// Any other currencies DeepSeek reported. Empty for everyone else.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub other_currencies: Vec<CurrencyBalance>,
+    /// MoleAPI: the key is issued as 无限额度 and has no ceiling of its own, so no
+    /// remaining figure exists — the webview shows "不限额" rather than a wrong $0.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unlimited: bool,
+    /// MoleAPI: key expiry as Unix seconds; `None` means it never expires.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+    /// A secondary human-readable line (MoleAPI packs 已用 / 密钥剩余 / 无限额度
+    /// notes here). Rendered under the amount when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -87,6 +104,22 @@ pub(crate) trait ProviderSpec: Send + Sync {
     /// The generic path keeps the parsed response unchanged.
     fn enrich_fetched_model(&self, model: FetchedProviderModel) -> FetchedProviderModel {
         model
+    }
+
+    /// Enrich the whole fetched catalogue at once, with a chance to make one
+    /// network call (MoleAPI fetches its public price list here) and to drop rows
+    /// the relay cannot actually serve on `/chat/completions`. Default: apply the
+    /// per-model [`enrich_fetched_model`](Self::enrich_fetched_model), no I/O.
+    async fn enrich_fetched_models(
+        &self,
+        _base_url: &str,
+        _api_key: Option<&str>,
+        models: Vec<FetchedProviderModel>,
+    ) -> Result<Vec<FetchedProviderModel>, String> {
+        Ok(models
+            .into_iter()
+            .map(|model| self.enrich_fetched_model(model))
+            .collect())
     }
 
     /// The chat completions endpoint. Default: `{base}/chat/completions`.
@@ -181,10 +214,15 @@ pub(crate) trait ProviderSpec: Send + Sync {
     }
 
     /// Look up the account balance. Default: this provider publishes none.
+    ///
+    /// `access_token` is an optional *second* secret some relays need to read the
+    /// account (MoleAPI's 系统访问令牌); providers that bill straight off the API
+    /// key ignore it.
     async fn fetch_balance(
         &self,
         _base_url: &str,
         _api_key: &str,
+        _access_token: Option<&str>,
     ) -> Result<ProviderBalance, String> {
         Err("该服务商不提供余额查询。".into())
     }
@@ -192,6 +230,13 @@ pub(crate) trait ProviderSpec: Send + Sync {
     /// Whether [`fetch_balance`](Self::fetch_balance) will return a figure. Used
     /// to gate the balance UI without making a request. Default: false.
     fn supports_balance(&self) -> bool {
+        false
+    }
+
+    /// Whether this provider accepts an optional second secret (MoleAPI's
+    /// 系统访问令牌) used to read the *account* balance a 无限额度 key hides.
+    /// Gates the second-secret field in settings. Default: false.
+    fn supports_access_token(&self) -> bool {
         false
     }
 }
@@ -203,12 +248,25 @@ pub(crate) fn spec_for(kind: &str) -> &'static dyn ProviderSpec {
     match kind {
         "deepseek" => &deepseek::DeepSeek,
         "minimax" => &minimax::MiniMax,
+        "moleapi" => &moleapi::MoleApi,
         "openrouter" => &openrouter::OpenRouter,
         "qwen" => &qwen::Qwen,
         "zhipu" => &zhipu::Zhipu,
         "mimo" => &mimo::Mimo,
         _ => &generic::OpenAiCompatible,
     }
+}
+
+/// Like [`spec_for`], but also recognises MoleAPI by its host — so a relay a user
+/// added as a plain "openai"-compatible provider still gets quota + price
+/// enrichment. Use this wherever the provider's `base_url` is known (balance,
+/// model fetch, the `supports_*` flags). The chat runtime keys off `kind` alone
+/// via [`spec_for`], which is fine: MoleAPI needs no chat-time deviations.
+pub(crate) fn spec_for_provider(kind: &str, base_url: &str) -> &'static dyn ProviderSpec {
+    if kind != "moleapi" && moleapi::is_moleapi_url(base_url) {
+        return &moleapi::MoleApi;
+    }
+    spec_for(kind)
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────────

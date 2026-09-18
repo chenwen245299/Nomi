@@ -93,6 +93,9 @@ mod tests {
             context_length: None,
             input_modalities: Vec::new(),
             output_modalities: Vec::new(),
+            input_price_usd_per_million: None,
+            output_price_usd_per_million: None,
+            is_free: false,
         }
     }
 

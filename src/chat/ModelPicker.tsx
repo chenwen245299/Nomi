@@ -91,6 +91,8 @@ function balanceLabel(state: LoadState | undefined, provider: Provider): string 
   if (!state) return "--";
   if (state.status === "loading") return "";
   if (state.status === "error") return "查询失败";
+  // A MoleAPI 无限额度 key has no meaningful remaining figure.
+  if (state.balance.unlimited) return "不限额";
   const { currency, remaining } = state.balance;
   return `${currencySymbol(currency)}${formatAmount(remaining)}`;
 }
