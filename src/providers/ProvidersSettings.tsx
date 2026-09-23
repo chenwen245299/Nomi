@@ -1047,7 +1047,7 @@ export function ProvidersSettings({ providers }: { providers: ProvidersControlle
   );
 }
 
-/** Ask for a name, infer the kind from it, and pre-fill any preset (DeepSeek). */
+/** Ask for a name, infer the kind from it, and pre-fill any known provider URL. */
 function NewProviderModal({
   onClose,
   onCreate,
@@ -1279,8 +1279,9 @@ function ProviderDetail({
     void controller.save({ ...provider, name, baseUrl, models });
   }
 
-  // Switching to a known kind (e.g. DeepSeek) fills its fixed base URL and preset
-  // models when those are still empty — never clobbering what the user has typed.
+  // Switching to a known kind fills its base URL and any preset models when
+  // those are still empty — never clobbering what the user has typed. Providers
+  // such as MiMo keep the preset model list empty and fetch `/models` live.
   function changeKind(kind: string) {
     const preset = PROVIDER_PRESETS[kind];
     const patch: Partial<Provider> = { kind };

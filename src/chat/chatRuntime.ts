@@ -49,8 +49,10 @@ export interface StreamingMessage {
 
 /** A main-chat conversation that an AI sidebar may use as read-only context. */
 export interface ConversationContextSource {
-  assistantId: string;
-  chatId: string;
+  assistantId?: string;
+  chatId?: string;
+  /** Read-only snapshot of a non-chat feature page (history year/selection, etc.). */
+  text?: string;
 }
 
 /** Everything a conversation view needs, per conversation key. */
@@ -329,6 +331,7 @@ export async function send(
         reasoningEffort,
         contextAssistantId: contextSource?.assistantId,
         contextChatId: contextSource?.chatId,
+        contextText: contextSource?.text,
       },
       (event) => handleStreamEvent(k, event),
     );
@@ -459,6 +462,7 @@ export async function generateVariant(
         reasoningEffort,
         contextAssistantId: contextSource?.assistantId,
         contextChatId: contextSource?.chatId,
+        contextText: contextSource?.text,
       },
       (event) => handleStreamEvent(k, event),
     );

@@ -1608,6 +1608,7 @@ function NoteEditor({
           onImageUpload={onImageUpload}
           onReady={onReady}
           onSave={() => void flush()}
+          optimizeSelectAll
           placeholder="开始写点什么…"
           toolbar={NOTES_TOOLBAR}
           toolbarHost={toolbarHost}

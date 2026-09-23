@@ -11,11 +11,12 @@ const CONFIG_DIRECTORY: &str = ".nomi";
 const CONFIG_FILENAME: &str = "config.json";
 const LOCATOR_FILENAME: &str = "storage-location.json";
 const SCHEMA_VERSION: u32 = 1;
-const FEATURES: [(&str, &str); 5] = [
+const FEATURES: [(&str, &str); 6] = [
     ("chat", "chat"),
     ("notes", "notes"),
     ("todo", "todo"),
     ("travel", "travel"),
+    ("history", "history"),
     ("finance", "finance"),
 ];
 

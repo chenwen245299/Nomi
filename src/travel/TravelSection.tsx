@@ -20,21 +20,17 @@ import {
   RiExternalLinkLine,
   RiFilter3Line,
   RiFolderOpenLine,
-  RiGlobalLine,
   RiMap2Line,
   RiMapPin2Fill,
   RiMapPin2Line,
   RiRoadMapLine,
   RiSearch2Line,
-  RiStackLine,
   RiTimeLine,
-  RiTrafficLightLine,
 } from "@remixicon/react";
 import { EmptyIllustration } from "../illustrations";
 import { motion, useTheme, type Accent, type Theme } from "../theme";
 import { MapView, type MapHandle, type MapMarker, type MapRoute } from "./MapView";
 import type { MapLayerId } from "./mapStyle";
-import { OfflineMaps } from "./OfflineMaps";
 import { TravelNoteEditor } from "./TravelNoteEditor";
 import { LocationPicker } from "./LocationPicker";
 import { StarChip } from "../ratings";
@@ -60,15 +56,8 @@ const MAP_LAYER_OPTIONS: {
   id: MapLayerId;
   label: string;
   description: string;
-  onlineOnly?: boolean;
   preview: { background: string; detail: string; water: string };
 }[] = [
-  {
-    id: "auto",
-    label: "自动",
-    description: "使用推荐的标准地图",
-    preview: { background: "#E9E4D8", detail: "#D6B77C", water: "#A9C9E8" },
-  },
   {
     id: "standard",
     label: "标准",
@@ -85,14 +74,12 @@ const MAP_LAYER_OPTIONS: {
     id: "terrain",
     label: "地形",
     description: "突出山地、水系与自然地貌",
-    onlineOnly: true,
     preview: { background: "#D7E0C8", detail: "#91A478", water: "#9DBED0" },
   },
   {
     id: "satellite",
     label: "卫星",
     description: "Sentinel-2 卫星影像",
-    onlineOnly: true,
     preview: { background: "#567052", detail: "#A28E64", water: "#426D82" },
   },
   {
@@ -208,12 +195,14 @@ const isTauriRuntime = () => typeof window !== "undefined" && "__TAURI_INTERNALS
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 function readMapLayerSelection(): MapLayerId {
-  if (typeof window === "undefined") return "auto";
+  if (typeof window === "undefined") return "standard";
   try {
     const saved = window.localStorage.getItem(MAP_LAYER_SELECTION_KEY);
-    return MAP_LAYER_OPTIONS.some((option) => option.id === saved) ? (saved as MapLayerId) : "auto";
+    return MAP_LAYER_OPTIONS.some((option) => option.id === saved)
+      ? (saved as MapLayerId)
+      : "standard";
   } catch {
-    return "auto";
+    return "standard";
   }
 }
 
@@ -949,7 +938,6 @@ export function TravelMainColumn({
   const styles = useMemo(() => makeStyles(theme, accent), [theme, accent]);
   const [view, setView] = useState<TravelView>("map");
   const [showFullNote, setShowFullNote] = useState(false);
-  const [showOffline, setShowOffline] = useState(false);
   const [mapLayer, setMapLayer] = useState<MapLayerId>(readMapLayerSelection);
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
   const [planPreview, setPlanPreview] = useState<TravelPlan | null>(null);
@@ -980,7 +968,6 @@ export function TravelMainColumn({
         setPlanningMapInitial({ ...center, zoom: 4 });
         mapHandle.current = null;
         setMapReady(false);
-        setShowOffline(false);
       }
       setView(next);
     },
@@ -988,10 +975,7 @@ export function TravelMainColumn({
   );
 
   const basemap = travel.settings?.basemap ?? "online";
-  const effectiveMapLayer =
-    basemap !== "online" && (mapLayer === "satellite" || mapLayer === "terrain")
-      ? "auto"
-      : mapLayer;
+  const effectiveMapLayer = mapLayer;
   // A selected note shows as a docked panel over the current view — no dedicated
   // tab, no view switch (the panel just appears on top).
   const openNote = travel.findNote(selectedId);
@@ -1219,24 +1203,8 @@ export function TravelMainColumn({
               </View>
 
               <View pointerEvents="box-none" style={styles.planningMapControls}>
-                <Pressable
-                  accessibilityLabel="地图来源与离线地图"
-                  accessibilityRole="button"
-                  onPress={() => setShowOffline(true)}
-                  style={({ hovered }: PressState) => [
-                    styles.mapChipButton,
-                    motion,
-                    hovered && styles.mapChipButtonHover,
-                  ]}
-                >
-                  <RiGlobalLine color={theme.t.textSecondary} size={16} />
-                  <Text style={styles.mapChipText}>
-                    {basemap === "online" ? "在线地图" : basemap}
-                  </Text>
-                </Pressable>
                 <MapLayersControl
                   accent={accent}
-                  basemap={basemap}
                   value={effectiveMapLayer}
                   styles={styles}
                   theme={theme}
@@ -1255,17 +1223,6 @@ export function TravelMainColumn({
                     </Text>
                   </View>
                 </View>
-              ) : null}
-
-              {showOffline ? (
-                <OfflineMaps
-                  accent={accent}
-                  basemap={basemap}
-                  maps={travel.maps}
-                  onChanged={() => void travel.refreshMaps()}
-                  onClose={() => setShowOffline(false)}
-                  onSelectBasemap={(next) => void travel.setBasemap(next)}
-                />
               ) : null}
             </View>
 
@@ -1308,24 +1265,6 @@ export function TravelMainColumn({
 
           {/* Floating controls (transparent to the map except on the chrome itself) */}
           <View pointerEvents="box-none" style={styles.overlayTop}>
-            <View pointerEvents="box-none" style={styles.overlayLeft}>
-              <Pressable
-                accessibilityLabel="地图来源与离线地图"
-                accessibilityRole="button"
-                onPress={() => setShowOffline(true)}
-                style={({ hovered }: PressState) => [
-                  styles.mapChipButton,
-                  motion,
-                  hovered && styles.mapChipButtonHover,
-                ]}
-              >
-                <RiGlobalLine color={theme.t.textSecondary} size={16} />
-                <Text style={styles.mapChipText}>
-                  {basemap === "online" ? "在线地图" : basemap}
-                </Text>
-              </Pressable>
-            </View>
-
             <View pointerEvents="box-none" style={styles.centerControls}>
               {viewSwitcher}
 
@@ -1361,7 +1300,6 @@ export function TravelMainColumn({
             <View pointerEvents="box-none" style={styles.overlayRight}>
               <MapLayersControl
                 accent={accent}
-                basemap={basemap}
                 value={effectiveMapLayer}
                 styles={styles}
                 theme={theme}
@@ -1386,17 +1324,6 @@ export function TravelMainColumn({
                 </Text>
               </View>
             </View>
-          ) : null}
-
-          {showOffline ? (
-            <OfflineMaps
-              accent={accent}
-              basemap={basemap}
-              maps={travel.maps}
-              onChanged={() => void travel.refreshMaps()}
-              onClose={() => setShowOffline(false)}
-              onSelectBasemap={(next) => void travel.setBasemap(next)}
-            />
           ) : null}
         </View>
       )}
@@ -1480,14 +1407,12 @@ function SegmentButton({
 
 function MapLayersControl({
   accent,
-  basemap,
   value,
   styles,
   theme,
   onChange,
 }: {
   accent: Accent;
-  basemap: string;
   value: MapLayerId;
   styles: TravelStyles;
   theme: Theme;
@@ -1497,7 +1422,6 @@ function MapLayersControl({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const activeOption =
     MAP_LAYER_OPTIONS.find((option) => option.id === value) ?? MAP_LAYER_OPTIONS[0];
-  const online = basemap === "online";
 
   useEffect(() => {
     if (!open) return;
@@ -1518,7 +1442,7 @@ function MapLayersControl({
   return (
     <div ref={rootRef} style={{ display: "flex", position: "relative" }}>
       <Pressable
-        accessibilityLabel={`地图图层：${activeOption.label}`}
+        accessibilityLabel={`选择底图，当前：${activeOption.label}`}
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
         onPress={() => setOpen((value) => !value)}
@@ -1529,29 +1453,30 @@ function MapLayersControl({
           hovered && styles.mapChipButtonHover,
         ]}
       >
-        <RiStackLine color={open ? accent.accentText : theme.t.textSecondary} size={16} />
-        <Text style={[styles.mapChipText, open && { color: accent.accentText }]}>图层</Text>
-        <Text style={styles.layerActiveText}>{activeOption.label}</Text>
+        <RiMap2Line color={open ? accent.accentText : theme.t.textSecondary} size={16} />
+        <Text style={[styles.mapChipText, open && { color: accent.accentText }]}>
+          {activeOption.label}地图
+        </Text>
       </Pressable>
 
       {open ? (
         <View style={styles.layerMenu}>
           <View style={styles.layerMenuHeader}>
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={styles.layerMenuTitle}>地图图层</Text>
-              <Text style={styles.layerMenuSubtitle}>选择地图类型；旅行笔记标记会始终保留</Text>
+              <Text style={styles.layerMenuTitle}>选择底图</Text>
+              <Text style={styles.layerMenuSubtitle}>
+                无需下载，选择后立即切换；地点标记始终保留
+              </Text>
             </View>
           </View>
 
           <View style={styles.layerOptionGrid}>
             {MAP_LAYER_OPTIONS.map((option) => {
               const active = option.id === value;
-              const disabled = Boolean(option.onlineOnly && !online);
               return (
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityState={{ disabled, selected: active }}
-                  disabled={disabled}
+                  accessibilityState={{ selected: active }}
                   key={option.id}
                   onPress={() => {
                     onChange(option.id);
@@ -1561,8 +1486,7 @@ function MapLayersControl({
                     styles.layerOption,
                     motion,
                     active && styles.layerOptionActive,
-                    hovered && !active && !disabled && styles.filterChipHover,
-                    disabled && styles.layerOptionDisabled,
+                    hovered && !active && styles.filterChipHover,
                   ]}
                 >
                   <View
@@ -1588,23 +1512,12 @@ function MapLayersControl({
                       {active ? <RiCheckLine color={accent.accentText} size={13} /> : null}
                     </View>
                     <Text numberOfLines={2} style={styles.layerOptionDescription}>
-                      {disabled ? "仅在线地图可用" : option.description}
+                      {option.description}
                     </Text>
                   </View>
                 </Pressable>
               );
             })}
-          </View>
-
-          <View style={styles.trafficLayerRow}>
-            <View style={styles.trafficLayerIcon}>
-              <RiTrafficLightLine color={theme.t.textTertiary} size={16} />
-            </View>
-            <View style={styles.layerOptionCopy}>
-              <Text style={styles.trafficLayerTitle}>实时路况</Text>
-              <Text style={styles.layerOptionDescription}>需要接入实时路况数据服务</Text>
-            </View>
-            <Text style={styles.trafficLayerStatus}>暂不可用</Text>
           </View>
         </View>
       ) : null}

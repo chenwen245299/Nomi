@@ -13,7 +13,7 @@ import type { ViewStyle } from "react-native";
 //
 // Nomi ships light-mode only — there is no dark palette.
 
-export type FeatureId = "chat" | "notes" | "papers" | "todo" | "travel" | "finance";
+export type FeatureId = "chat" | "notes" | "papers" | "todo" | "travel" | "history" | "finance";
 export type SectionId = FeatureId | "settings";
 
 /** Shared shell header height so the rail, collection and content dividers align. */
@@ -181,6 +181,14 @@ const ACCENTS: Record<SectionId, Accent> = {
     iconBadge: "rgba(31,160,137,0.13)",
     wash: "rgba(31,160,137,0.07)",
     rgb: "31,160,137",
+  },
+  history: {
+    accent: "#9B6248",
+    accentText: "#754733",
+    selectedFill: "rgba(155,98,72,0.15)",
+    iconBadge: "rgba(155,98,72,0.13)",
+    wash: "rgba(155,98,72,0.07)",
+    rgb: "155,98,72",
   },
   finance: {
     accent: "#C2507A",

@@ -995,6 +995,8 @@ export interface SendMessageParams {
   /** Optional main-chat transcript supplied as read-only context to an AI sidebar. */
   contextAssistantId?: string | null;
   contextChatId?: string | null;
+  /** Optional read-only snapshot from a feature page shown beside the sidebar. */
+  contextText?: string | null;
   reasoningEffort?: string | null;
 }
 
@@ -1098,6 +1100,7 @@ export interface GenerateMessageVariantParams {
   /** Optional main-chat transcript supplied as read-only context to an AI sidebar. */
   contextAssistantId?: string | null;
   contextChatId?: string | null;
+  contextText?: string | null;
   /** Effort already mapped to this variant model's scale (null = thinking off). */
   reasoningEffort?: string | null;
 }

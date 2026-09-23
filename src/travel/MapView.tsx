@@ -66,12 +66,15 @@ export interface MapViewProps {
   routeLines?: MapRoute[];
   /** Filled "lit-up" administrative regions (trajectory view), or null to hide. */
   regions?: RegionCollection | null;
+  /** Clickable region id (`properties.id`) for historical/admin overlays. */
+  selectedRegionId?: string | null;
   selectedId?: string | null;
   /** A transient pin for "picking" a location (the crosshair result). */
   pick?: { lat: number; lng: number } | null;
   /** Merge nearby pins into a numbered cluster when zoomed out. */
   cluster?: boolean;
   onMarkerClick?: (id: string) => void;
+  onRegionClick?: (id: string) => void;
   onMapClick?: (lat: number, lng: number) => void;
   onViewBoxChange?: (viewBox: ViewBox) => void;
   onReady?: (handle: MapHandle) => void;
@@ -162,10 +165,12 @@ export function MapView({
   routeLine,
   routeLines,
   regions,
+  selectedRegionId,
   selectedId,
   pick,
   cluster = false,
   onMarkerClick,
+  onRegionClick,
   onMapClick,
   onViewBoxChange,
   onReady,
@@ -180,9 +185,8 @@ export function MapView({
   const appliedStyleRef = useRef(`${basemap}:${mapLayer}`);
   const accent = accentRgb ? `rgb(${accentRgb})` : TRAVEL_ACCENT;
 
-  // A blank ("white") map is almost always the basemap failing to load — the
-  // online OpenFreeMap CDN being unreachable (offline / blocked / slow), or a bad
-  // offline archive. Track load status so we can show guidance instead of a void.
+  // A blank ("white") map is almost always the hosted map service being
+  // unreachable. Track load status so we can show guidance instead of a void.
   const [mapStatus, setMapStatus] = useState<"loading" | "ready" | "error">("loading");
   const statusRef = useRef<"loading" | "ready" | "error">("loading");
   const errorCountRef = useRef(0);
@@ -215,11 +219,13 @@ export function MapView({
   // without listing routeLine as a dependency, which would rebuild the style).
   const latest = useRef({
     onMarkerClick,
+    onRegionClick,
     onMapClick,
     onViewBoxChange,
     routeLine,
     routeLines,
     regions,
+    selectedRegionId,
     accent,
     basemap,
     mapLayer,
@@ -227,11 +233,13 @@ export function MapView({
   useEffect(() => {
     latest.current = {
       onMarkerClick,
+      onRegionClick,
       onMapClick,
       onViewBoxChange,
       routeLine,
       routeLines,
       regions,
+      selectedRegionId,
       accent,
       basemap,
       mapLayer,
@@ -265,6 +273,14 @@ export function MapView({
 
     map.on("click", (event: MapMouseEvent) => {
       if (disposed) return;
+      if (map.getLayer(REGION_FILL)) {
+        const hit = map.queryRenderedFeatures(event.point, { layers: [REGION_FILL] })[0];
+        const id = hit?.properties?.id;
+        if (id != null) {
+          latest.current.onRegionClick?.(String(id));
+          return;
+        }
+      }
       latest.current.onMapClick?.(event.lngLat.lat, event.lngLat.lng);
     });
     const emitViewBox = () => {
@@ -278,7 +294,7 @@ export function MapView({
       readyRef.current = true;
       window.clearTimeout(loadTimerRef.current);
       setStatus("ready");
-      applyRegions(map, latest.current.regions ?? null);
+      applyRegions(map, latest.current.regions ?? null, latest.current.selectedRegionId ?? null);
       applyRoutes(
         map,
         latest.current.routeLines,
@@ -308,7 +324,7 @@ export function MapView({
     map.on("style.load", () => {
       if (disposed) return;
       readyRef.current = true;
-      applyRegions(map, latest.current.regions ?? null);
+      applyRegions(map, latest.current.regions ?? null, latest.current.selectedRegionId ?? null);
       applyRoutes(
         map,
         latest.current.routeLines,
@@ -518,8 +534,8 @@ export function MapView({
   // Keep the lit-up regions in sync on live updates.
   useEffect(() => {
     const map = mapRef.current;
-    if (map && readyRef.current) applyRegions(map, regions ?? null);
-  }, [regions]);
+    if (map && readyRef.current) applyRegions(map, regions ?? null, selectedRegionId ?? null);
+  }, [regions, selectedRegionId]);
 
   return (
     <div style={{ background: "#f8f4f0", position: "absolute", inset: 0 }}>
@@ -573,13 +589,9 @@ export function MapView({
               }}
             >
               <RiErrorWarningLine color="#B24D4D" size={22} />
-              <div style={{ color: "#1f2734", fontSize: 13.5, fontWeight: 600 }}>
-                {basemap === "online" ? "在线地图加载失败" : "离线地图加载失败"}
-              </div>
+              <div style={{ color: "#1f2734", fontSize: 13.5, fontWeight: 600 }}>地图加载失败</div>
               <div style={{ color: "#6b7280", fontSize: 12, lineHeight: 1.5 }}>
-                {basemap === "online"
-                  ? "无法连接在线地图服务，请检查网络连接；若网络受限，可点右上角「在线地图」下载离线地图后使用。"
-                  : "地图文件可能损坏或不完整，请在「离线地图」中重新下载。"}
+                无法连接地图服务，请检查网络连接后重试。历史区域数据仍保存在本地，不会受影响。
               </div>
               <button
                 onClick={retryMap}
@@ -613,8 +625,25 @@ export function MapView({
 
 /** Add / update / remove the "lit-up" region fill + outline. Warm orange so it
  *  reads as "visited" and stays distinct from the teal accent. */
-function applyRegions(map: MapLibreMap, regions: RegionCollection | null): void {
-  const data = (regions ?? { type: "FeatureCollection", features: [] }) as unknown as GeoData;
+function applyRegions(
+  map: MapLibreMap,
+  regions: RegionCollection | null,
+  selectedRegionId: string | null,
+): void {
+  const withSelection = regions
+    ? {
+        ...regions,
+        features: regions.features.map((feature) => ({
+          ...feature,
+          properties: {
+            ...feature.properties,
+            selected:
+              selectedRegionId != null && String(feature.properties.id) === selectedRegionId,
+          },
+        })),
+      }
+    : { type: "FeatureCollection", features: [] };
+  const data = withSelection as unknown as GeoData;
   const source = map.getSource(REGION_SOURCE) as GeoJSONSource | undefined;
   if (source) {
     source.setData(data);
@@ -626,14 +655,21 @@ function applyRegions(map: MapLibreMap, regions: RegionCollection | null): void 
     id: REGION_FILL,
     type: "fill",
     source: REGION_SOURCE,
-    paint: { "fill-color": "#F2994A", "fill-opacity": 0.38 },
+    paint: {
+      "fill-color": ["coalesce", ["get", "color"], "#F2994A"],
+      "fill-opacity": ["case", ["boolean", ["get", "selected"], false], 0.5, 0.34],
+    },
   });
   map.addLayer({
     id: REGION_LINE,
     type: "line",
     source: REGION_SOURCE,
     layout: { "line-join": "round" },
-    paint: { "line-color": "#DE7B2C", "line-width": 1.3, "line-opacity": 0.9 },
+    paint: {
+      "line-color": ["coalesce", ["get", "color"], "#DE7B2C"],
+      "line-width": ["case", ["boolean", ["get", "selected"], false], 3, 1.4],
+      "line-opacity": 0.95,
+    },
   });
 }
 

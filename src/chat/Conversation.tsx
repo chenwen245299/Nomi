@@ -1,10 +1,13 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -254,10 +257,42 @@ function findScrollableParent(target: unknown): HTMLElement | null {
 function selectionIsInside(root: HTMLElement | null): boolean {
   const selection = document.getSelection();
   if (!root || !selection || selection.isCollapsed) return false;
-  return Boolean(
+  if (
     (selection.anchorNode && root.contains(selection.anchorNode)) ||
-    (selection.focusNode && root.contains(selection.focusNode)),
-  );
+    (selection.focusNode && root.contains(selection.focusNode))
+  ) {
+    return true;
+  }
+
+  // A selection can start and end outside `root` while still crossing it.
+  // `intersectsNode` covers that case, which matters when dragging across
+  // multiple chat bubbles.
+  try {
+    for (let index = 0; index < selection.rangeCount; index += 1) {
+      if (selection.getRangeAt(index).intersectsNode(root)) return true;
+    }
+  } catch {
+    // WebKit can briefly expose a stale range while React replaces a node.
+  }
+  return false;
+}
+
+function copyTranscriptSelection(event: ReactClipboardEvent<HTMLDivElement>): void {
+  const selection = document.getSelection();
+  if (!selection || selection.isCollapsed || !selectionIsInside(event.currentTarget)) return;
+
+  const text = selection.toString();
+  if (!text) return;
+
+  try {
+    // Writing through the native `copy` event is synchronous in WKWebView and,
+    // unlike a temporary textarea + execCommand, never steals or collapses the
+    // user's visible selection.
+    event.clipboardData.setData("text/plain", text);
+    event.preventDefault();
+  } catch {
+    // Let WebKit's default copy path run if clipboardData is unavailable.
+  }
 }
 
 function isNearScrollBottom(element: HTMLElement): boolean {
@@ -305,15 +340,45 @@ async function openChatExternalHref(href: string): Promise<void> {
 function MarkdownView({ content, color }: { content: string; color: string }) {
   const html = useMemo(() => renderMarkdown(content), [content]);
   const elementRef = useRef<HTMLDivElement | null>(null);
+  const latestHtmlRef = useRef(html);
+  const renderedHtmlRef = useRef<string | null>(null);
+  const selectingRef = useRef(false);
 
-  useEffect(() => {
+  const flushLatestHtml = useCallback(() => {
     const element = elementRef.current;
-    if (!element?.querySelector(".language-math")) return;
-    Vditor.mathRender(element, {
-      cdn: VDITOR_CDN,
-      math: { engine: "KaTeX" },
-    });
-  }, [html]);
+    const nextHtml = latestHtmlRef.current;
+    if (!element) return false;
+    if (renderedHtmlRef.current === nextHtml) return true;
+    if (selectingRef.current || selectionIsInside(element)) return false;
+
+    // Keep React away from the live innerHTML after the first render. Replacing
+    // it on every streaming token destroys WebKit's Range and makes dragged text
+    // appear to deselect at random.
+    if (element.innerHTML !== nextHtml) element.innerHTML = nextHtml;
+    renderedHtmlRef.current = nextHtml;
+    if (element.querySelector(".language-math")) {
+      Vditor.mathRender(element, {
+        cdn: VDITOR_CDN,
+        math: { engine: "KaTeX" },
+      });
+    }
+    return true;
+  }, []);
+
+  useLayoutEffect(() => {
+    latestHtmlRef.current = html;
+    if (flushLatestHtml()) return;
+
+    // If this particular Markdown block is selected, hold its last DOM until
+    // the user moves/collapses the selection, then catch up to the latest stream.
+    const flushWhenSelectionLeaves = () => {
+      if (selectingRef.current || selectionIsInside(elementRef.current)) return;
+      flushLatestHtml();
+      document.removeEventListener("selectionchange", flushWhenSelectionLeaves);
+    };
+    document.addEventListener("selectionchange", flushWhenSelectionLeaves);
+    return () => document.removeEventListener("selectionchange", flushWhenSelectionLeaves);
+  }, [flushLatestHtml, html]);
 
   const handleLinkClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || event.button !== 0) return;
@@ -331,10 +396,21 @@ function MarkdownView({ content, color }: { content: string; color: string }) {
   return (
     <div
       className="nomi-chat-selectable nomi-md"
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        selectingRef.current = true;
+        const finishSelection = () => {
+          selectingRef.current = false;
+          flushLatestHtml();
+          document.removeEventListener("pointerup", finishSelection);
+          document.removeEventListener("pointercancel", finishSelection);
+        };
+        document.addEventListener("pointerup", finishSelection);
+        document.addEventListener("pointercancel", finishSelection);
+      }}
       onClick={handleLinkClick}
       ref={elementRef}
       style={{ color, lineHeight: 1.65, wordBreak: "break-word" }}
-      dangerouslySetInnerHTML={{ __html: html }}
     />
   );
 }
@@ -1563,16 +1639,20 @@ function ToolCallCard({
         <View style={styles.toolBody}>
           <View>
             <Text style={styles.toolSectionLabel}>参数</Text>
-            <Text selectable style={styles.code}>
-              {prettyArgs(args) || "（无）"}
-            </Text>
+            <div className="nomi-chat-selectable">
+              <Text selectable style={styles.code}>
+                {prettyArgs(args) || "（无）"}
+              </Text>
+            </div>
           </View>
           {result != null && (
             <View>
               <Text style={styles.toolSectionLabel}>结果</Text>
-              <Text selectable style={styles.code}>
-                {result || "（无）"}
-              </Text>
+              <div className="nomi-chat-selectable">
+                <Text selectable style={styles.code}>
+                  {result || "（无）"}
+                </Text>
+              </div>
             </View>
           )}
         </View>
@@ -1785,6 +1865,7 @@ function ReasoningBlock({
       {open && (
         <div
           aria-label="思考过程内容，可滚动"
+          className="nomi-chat-selectable"
           role="region"
           style={{
             borderTop: `1px solid ${theme.t.separator}`,
@@ -2652,7 +2733,7 @@ function MessageBubble({
             ) : message.content ? (
               <div style={{ maxWidth: "100%", position: "relative" }}>
                 <div
-                  className={`nomi-user-message-text${
+                  className={`nomi-chat-selectable nomi-user-message-text${
                     userOverflows && !userExpanded ? " is-collapsed" : ""
                   }`}
                   ref={userTextRef}
@@ -2925,6 +3006,10 @@ export function ConversationView({
   } | null>(null);
   const [attachmentPreviewError, setAttachmentPreviewError] = useState<string | null>(null);
   const [inputFocused, setInputFocused] = useState(false);
+  const [transcriptSelectionLock, setTranscriptSelectionLock] = useState<{
+    messages: ChatMessage[];
+    streaming: StreamingMessage | null;
+  } | null>(null);
   const [thinkingSelection, setThinkingSelection] = useState<{
     modelKey: string;
     effort: ThinkingEffort;
@@ -2977,6 +3062,8 @@ export function ConversationView({
     !uploading &&
     (text.trim().length > 0 || readyAttachments.length > 0);
   const latestMessageId = convo.messages[convo.messages.length - 1]?.id ?? "";
+  const displayedMessages = transcriptSelectionLock?.messages ?? convo.messages;
+  const displayedStreaming = transcriptSelectionLock?.streaming ?? convo.streaming;
   const streamingActivity = convo.streaming
     ? [
         convo.streaming.id,
@@ -3057,6 +3144,7 @@ export function ConversationView({
         stickToBottomRef.current = false;
         return;
       }
+      setTranscriptSelectionLock(null);
       const scroller = transcriptScrollRef.current;
       if (scroller) stickToBottomRef.current = isNearScrollBottom(scroller);
     };
@@ -3319,18 +3407,23 @@ export function ConversationView({
           >
             <div
               className="nomi-chat-transcript"
+              onCopy={copyTranscriptSelection}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 const target = event.target as HTMLElement;
                 if (!target.closest(".nomi-chat-selectable")) return;
                 selectingTextRef.current = true;
                 stickToBottomRef.current = false;
+                setTranscriptSelectionLock({
+                  messages: convo.messages,
+                  streaming: convo.streaming,
+                });
                 transcriptScrollRef.current = findScrollableParent(event.currentTarget);
               }}
               ref={transcriptRef}
               style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}
             >
-              {convo.loaded && convo.messages.length === 0 && !convo.streaming ? (
+              {convo.loaded && displayedMessages.length === 0 && !displayedStreaming ? (
                 <View style={styles.empty}>
                   <Text style={styles.emptyText}>开始和「{assistantName}」对话吧。</Text>
                   <Text style={styles.emptyText}>可上传 PDF，模型会用工具读取全文或渲染页面。</Text>
@@ -3338,7 +3431,7 @@ export function ConversationView({
               ) : (
                 (() => {
                   const seenGroups = new Set<string>();
-                  return convo.messages.flatMap((message) => {
+                  return displayedMessages.flatMap((message) => {
                     if (message.role === "context_marker") {
                       return [
                         <ContextMarker
@@ -3378,7 +3471,7 @@ export function ConversationView({
                     const groupId = message.responseGroupId ?? message.id;
                     if (seenGroups.has(groupId)) return [];
                     seenGroups.add(groupId);
-                    const groupMessages = convo.messages.filter(
+                    const groupMessages = displayedMessages.filter(
                       (candidate) =>
                         candidate.role === "assistant" &&
                         (candidate.responseGroupId ?? candidate.id) === groupId,
@@ -3425,7 +3518,9 @@ export function ConversationView({
                         providerName={providerName}
                         providers={providers}
                         streaming={
-                          convo.streaming?.responseGroupId === groupId ? convo.streaming : null
+                          displayedStreaming?.responseGroupId === groupId
+                            ? displayedStreaming
+                            : null
                         }
                         styles={styles}
                         theme={theme}
@@ -3434,10 +3529,10 @@ export function ConversationView({
                   });
                 })()
               )}
-              {convo.streaming && !convo.streaming.replaceMessageId && (
+              {displayedStreaming && !displayedStreaming.replaceMessageId && (
                 <StreamingBubble
                   accent={accent}
-                  draft={convo.streaming}
+                  draft={displayedStreaming}
                   modelId={conversation.modelId}
                   providerKind={providerKind}
                   providerName={providerName}

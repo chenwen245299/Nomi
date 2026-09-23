@@ -79,7 +79,7 @@ export interface PlanInput {
 
 export interface TravelSettings {
   schemaVersion: number;
-  /** "online" (Protomaps hosted) or the name of a downloaded offline map. */
+  /** Legacy basemap preference. New builds always use the hosted map styles. */
   basemap: string;
   categories: string[];
 }
@@ -328,12 +328,6 @@ export async function deleteMap(name: string): Promise<void> {
     await invoke("travel_delete_map", { name });
     return;
   }
-}
-
-/** Read a byte range from an offline `.pmtiles`, as base64 — backs the PMTiles
- *  source that lets a selected offline map render with no network. */
-export async function mapReadRange(name: string, offset: number, length: number): Promise<string> {
-  return invoke<string>("travel_map_read_range", { name, offset, length });
 }
 
 export async function revealMaps(): Promise<void> {

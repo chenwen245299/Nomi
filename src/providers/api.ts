@@ -352,16 +352,19 @@ export const DEEPSEEK_PEAK_TIME_RANGES: PricingTimeRange[] = [
 ];
 
 export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
-  // MiniMax and Zhipu pre-fill only the base URL. Their model line-ups (chat,
-  // speech, image, video) change often and a hand-kept list goes stale and
-  // incomplete, so we leave the models empty — the user fetches the live
-  // catalogue ("获取模型列表") or adds one by hand.
+  // These providers pre-fill only the base URL. Their model line-ups change
+  // often, so models stay empty and come from each provider's live `/models`
+  // catalogue ("获取模型列表") instead of a hand-maintained list.
   minimax: {
     baseUrl: "https://api.minimax.cn/v1",
     models: [],
   },
   zhipu: {
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    models: [],
+  },
+  mimo: {
+    baseUrl: "https://api.xiaomimimo.com/v1",
     models: [],
   },
   // MoleAPI relays several hundred models; the line-up changes constantly and the

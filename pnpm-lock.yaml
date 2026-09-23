@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@protomaps/basemaps':
-        specifier: ^5.7.2
-        version: 5.7.2
       '@remixicon/react':
         specifier: ^4.9.0
         version: 4.9.0(react@19.2.3)
@@ -47,9 +44,6 @@ importers:
       marked:
         specifier: ^18.0.10
         version: 18.0.10
-      pmtiles:
-        specifier: ^4.5.0
-        version: 4.5.0
       react:
         specifier: ^19.2.3
         version: 19.2.3
@@ -485,10 +479,6 @@ packages:
     cpu: [x64]
     os: [linux]
     libc: [glibc]
-
-  '@protomaps/basemaps@5.7.2':
-    resolution: {integrity: sha512-K1Yk6bWdULulYg+R2QRVXx4NzJZan5YQhpejEG0c1/sXruJrfPIPZuakpf3jwAgVmjIRVQwAv+yRafDeN0aaUQ==}
-    hasBin: true
 
   '@react-native/asset-utils@0.87.0':
     resolution: {integrity: sha512-XUSXMnBmQuBMuMWNWaXMGt4tLzb2yraCVO4b7TFCvEqiCg3ByhbQA0QNmPp+cdWgvmPmptCJwOrBWjPxppXgOA==}
@@ -1688,9 +1678,6 @@ packages:
     resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
     engines: {node: '>=12'}
 
-  pmtiles@4.5.0:
-    resolution: {integrity: sha512-CBeD4SoUluFziGdy/8k7FOjQxQy486n+929W/tWophauvMICpkZ26vGBWhDt/6b1FZQWNaf4jFdT/5+q0Wii5w==}
-
   postcss-value-parser@4.2.0:
     resolution: {integrity: sha512-1NNCs6uurfkVbeXG4S8JFT9t19m45ICnif8zWLd5oPSZ50QnwMfK+H3jv408d4jw/7Bttv5axS5IiHoLaVNHeQ==}
 
@@ -2424,8 +2411,6 @@ snapshots:
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
-
-  '@protomaps/basemaps@5.7.2': {}
 
   '@react-native/asset-utils@0.87.0': {}
 
@@ -3709,10 +3694,6 @@ snapshots:
   picomatch@2.3.2: {}
 
   picomatch@4.0.5: {}
-
-  pmtiles@4.5.0:
-    dependencies:
-      fflate: 0.8.3
 
   postcss-value-parser@4.2.0: {}
 

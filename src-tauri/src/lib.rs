@@ -2,6 +2,7 @@ mod chat;
 mod chat_agent;
 mod exa;
 mod finance;
+mod history;
 mod llm;
 mod markdown_assets;
 mod mcp;
@@ -34,6 +35,12 @@ use finance::{
     finance_confirm_drafts, finance_delete_record, finance_find_duplicates, finance_list_messages,
     finance_list_months, finance_list_records, finance_read_receipt, finance_reveal_path,
     finance_set_model, finance_status, finance_update_record,
+};
+use history::{
+    history_create_version, history_delete_event, history_delete_layer, history_delete_person,
+    history_delete_relation, history_import_map, history_inspect_import, history_load,
+    history_reveal, history_save_event, history_save_person, history_save_relation,
+    history_set_settings, history_update_feature, history_update_layer,
 };
 use mcp::{mcp_get_client_config, mcp_get_status, mcp_set_enabled};
 use notes::{
@@ -198,6 +205,21 @@ pub fn run() {
             finance_find_duplicates,
             finance_read_receipt,
             finance_reveal_path,
+            history_load,
+            history_inspect_import,
+            history_import_map,
+            history_update_layer,
+            history_update_feature,
+            history_save_event,
+            history_delete_event,
+            history_save_person,
+            history_delete_person,
+            history_save_relation,
+            history_delete_relation,
+            history_create_version,
+            history_delete_layer,
+            history_set_settings,
+            history_reveal,
             travel_list_notes,
             travel_create_note,
             travel_read_note,

@@ -383,6 +383,25 @@
   background: rgba(var(--nomi-editor-accent), 0.18);
 }
 
+/* Large formulas and diagrams expand into hundreds of decorative DOM nodes.
+   While Cmd/Ctrl+A is active, exclude those rendered previews from WebKit's
+   per-glyph selection painting; MarkdownEditor copies the original Markdown
+   snapshot instead, so formulas and diagrams are still copied losslessly. */
+.nomi-editor--fast-select-all .vditor-wysiwyg__preview,
+.nomi-editor--fast-select-all .vditor-ir__preview,
+.nomi-editor--fast-select-all .katex,
+.nomi-editor--fast-select-all svg,
+.nomi-editor--fast-select-all canvas {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+.nomi-editor--fast-select-all .vditor-wysiwyg__preview,
+.nomi-editor--fast-select-all .vditor-ir__preview {
+  background: rgba(var(--nomi-editor-accent), 0.1);
+  border-radius: 4px;
+}
+
 /* A checked Markdown task is complete, so strike the text that follows its
    checkbox in both editable and read-only surfaces. This is deliberately visual
    only: unchecking the item restores the text without rewriting the Markdown. */

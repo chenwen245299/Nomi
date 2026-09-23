@@ -58,6 +58,11 @@ pdf-extract = "0.7"
 pdfium-render = { version = "0.8", features = ["image"] }
 # JPEG joins PNG so phone photos of receipts decode too (screenshots are PNG).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Historical map import stays fully local: Shapefile/DBF, zipped datasets and
+# KML are converted into Nomi's normalized GeoJSON-shaped history document.
+shapefile = { version = "0.9", features = ["encoding_rs"] }
+zip = { version = "4.6", default-features = false, features = ["deflate"] }
+quick-xml = "0.41"
 
 # Receipt OCR for when the chosen model has no vision. Both desktop targets ship
 # a text recogniser inside the OS, so the fallback works the moment the app is

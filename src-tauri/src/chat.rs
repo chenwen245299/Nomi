@@ -204,6 +204,7 @@ fn safe_scope(scope: &str) -> Result<&'static str, String> {
         "papers" => Ok("papers"),
         "todo" => Ok("todo"),
         "travel" => Ok("travel"),
+        "history" => Ok("history"),
         _ => Err("未知的侧边栏作用域。".into()),
     }
 }

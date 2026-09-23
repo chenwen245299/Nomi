@@ -79,6 +79,9 @@ export interface MarkdownEditorProps {
   onImageUpload?: (files: File[]) => Promise<UploadedImage[]>;
   /** Fires once the async init completes, with a ready-to-use handle. */
   onReady?: (handle: MarkdownEditorHandle) => void;
+  /** Use a lightweight whole-document selection path for large rendered notes.
+   *  This avoids asking WebKit to paint and serialise every KaTeX/diagram node. */
+  optimizeSelectAll?: boolean;
   /** Receives the imperative handle (React-19 style: passed as an explicit prop so
    *  it never collides with the internal container ref). */
   handleRef?: Ref<MarkdownEditorHandle>;
@@ -112,6 +115,7 @@ export function MarkdownEditor({
   onBlur,
   onImageUpload,
   onReady,
+  optimizeSelectAll = false,
   handleRef,
   toolbarHost,
   className,
@@ -120,6 +124,8 @@ export function MarkdownEditor({
   const vditorRef = useRef<Vditor | null>(null);
   const toolbarHostRef = useRef<HTMLElement | null>(toolbarHost ?? null);
   const portaledToolbarRef = useRef<HTMLElement | null>(null);
+  const markdownSnapshotRef = useRef(cleanMarkdownFromEditor(value ?? ""));
+  const wholeDocumentSelectedRef = useRef(false);
   // WYSIWYG sticky-format guard (wired in `after`, torn down on unmount).
   const stickyFormatRef = useRef(false);
   const suppressStickyRef = useRef(false);
@@ -146,8 +152,10 @@ export function MarkdownEditor({
   const makeHandle = useCallback(
     (): MarkdownEditorHandle => ({
       getValue: () => cleanMarkdownFromEditor(vditorRef.current?.getValue() ?? ""),
-      setValue: (markdown, clearStack) =>
-        vditorRef.current?.setValue(prepareMarkdownForEditor(markdown), clearStack),
+      setValue: (markdown, clearStack) => {
+        markdownSnapshotRef.current = cleanMarkdownFromEditor(markdown);
+        vditorRef.current?.setValue(prepareMarkdownForEditor(markdown), clearStack);
+      },
       insertValue: (markdown) => vditorRef.current?.insertValue(prepareMarkdownForEditor(markdown)),
       focus: () => vditorRef.current?.focus(),
       blur: () => vditorRef.current?.blur(),
@@ -205,10 +213,14 @@ export function MarkdownEditor({
         }) as unknown as UploadHandler,
       },
       input(next) {
-        cbRef.current.onChange?.(cleanMarkdownFromEditor(next));
+        const clean = cleanMarkdownFromEditor(next);
+        markdownSnapshotRef.current = clean;
+        cbRef.current.onChange?.(clean);
       },
       blur(next) {
-        cbRef.current.onBlur?.(cleanMarkdownFromEditor(next));
+        const clean = cleanMarkdownFromEditor(next);
+        markdownSnapshotRef.current = clean;
+        cbRef.current.onBlur?.(clean);
       },
       keydown(event: KeyboardEvent) {
         if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "s") {
@@ -312,13 +324,139 @@ export function MarkdownEditor({
             suppressStickyRef.current = false;
           }
         };
+
+        // A rendered formula is hundreds of nested KaTeX nodes. Native Cmd+A in
+        // WKWebView paints a selection fragment for every one of them, then
+        // Vditor's copy handler clones the entire rendered DOM and converts it
+        // back to Markdown. Large technical notes can therefore block the UI
+        // twice. Keep the native text selection for familiar behaviour, but
+        // temporarily exclude expensive preview subtrees from selection paint
+        // and serve copy/cut from the already-current Markdown snapshot.
+        const clearWholeDocumentSelection = () => {
+          if (!wholeDocumentSelectedRef.current) return;
+          wholeDocumentSelectedRef.current = false;
+          element.classList.remove("nomi-editor--fast-select-all");
+        };
+        const replaceWholeDocument = (markdown: string) => {
+          const clean = cleanMarkdownFromEditor(markdown);
+          clearWholeDocumentSelection();
+          markdownSnapshotRef.current = clean;
+          instance.setValue(prepareMarkdownForEditor(clean));
+          cbRef.current.onChange?.(clean);
+          window.requestAnimationFrame(() => instance.focus());
+        };
+        const writeWholeDocumentClipboard = (event: ClipboardEvent) => {
+          if (!wholeDocumentSelectedRef.current || !event.clipboardData) return false;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          event.clipboardData.setData("text/plain", markdownSnapshotRef.current);
+          event.clipboardData.setData("text/html", "");
+          return true;
+        };
+        const onFastSelectKeydown = (event: KeyboardEvent) => {
+          if (!optimizeSelectAll) return;
+          const command = event.metaKey || event.ctrlKey;
+          if (command && !event.altKey && event.key.toLowerCase() === "a") {
+            const selection = window.getSelection();
+            const anchorElement =
+              selection?.anchorNode?.nodeType === Node.ELEMENT_NODE
+                ? (selection.anchorNode as Element)
+                : selection?.anchorNode?.parentElement;
+            // Vditor intentionally makes the first Cmd+A inside a fenced code
+            // block select that block only. Preserve that useful behaviour.
+            if (anchorElement?.closest("pre") && element.contains(anchorElement)) return;
+            wholeDocumentSelectedRef.current = true;
+            element.classList.add("nomi-editor--fast-select-all");
+            return;
+          }
+          if (!wholeDocumentSelectedRef.current) return;
+          if (command && event.key.toLowerCase() === "x") {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            // Dispatch copy while the cached whole-document selection is still
+            // active, then clear the editor ourselves instead of making Vditor
+            // delete and reparse the rendered DOM.
+            document.execCommand("copy");
+            replaceWholeDocument("");
+            return;
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            clearWholeDocumentSelection();
+            window.getSelection()?.removeAllRanges();
+            instance.focus();
+            return;
+          }
+          if (!command && (event.key === "Backspace" || event.key === "Delete")) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            replaceWholeDocument("");
+          }
+        };
+        const onFastCopy = (event: ClipboardEvent) => {
+          writeWholeDocumentClipboard(event);
+        };
+        const onFastCut = (event: ClipboardEvent) => {
+          if (!writeWholeDocumentClipboard(event)) return;
+          replaceWholeDocument("");
+        };
+        const onFastPaste = (event: ClipboardEvent) => {
+          if (!wholeDocumentSelectedRef.current) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          replaceWholeDocument(event.clipboardData?.getData("text/plain") ?? "");
+        };
+        const onFastBeforeInput = (event: Event) => {
+          if (!wholeDocumentSelectedRef.current) return;
+          const inputEvent = event as InputEvent;
+          if (inputEvent.inputType.startsWith("history")) {
+            clearWholeDocumentSelection();
+            return;
+          }
+          if (inputEvent.inputType === "insertFromPaste") return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          const replacement = inputEvent.inputType.startsWith("insert")
+            ? (inputEvent.data ?? "")
+            : "";
+          replaceWholeDocument(replacement);
+        };
+        const onFastPointerDown = () => clearWholeDocumentSelection();
+        const onFastSelectionChange = () => {
+          if (!wholeDocumentSelectedRef.current) return;
+          const selection = window.getSelection();
+          if (
+            !selection ||
+            selection.rangeCount === 0 ||
+            selection.isCollapsed ||
+            !element.contains(selection.anchorNode) ||
+            !element.contains(selection.focusNode)
+          ) {
+            clearWholeDocumentSelection();
+          }
+        };
         // Capture phase on the stable container so a mode switch (sv⇄wysiwyg) that
         // swaps the inner editable can't drop the listeners.
         element.addEventListener("input", onFormatInput, true);
         element.addEventListener("keydown", onEditKeydown, true);
+        element.addEventListener("keydown", onFastSelectKeydown, true);
+        element.addEventListener("copy", onFastCopy, true);
+        element.addEventListener("cut", onFastCut, true);
+        element.addEventListener("paste", onFastPaste, true);
+        element.addEventListener("beforeinput", onFastBeforeInput, true);
+        element.addEventListener("pointerdown", onFastPointerDown, true);
+        document.addEventListener("selectionchange", onFastSelectionChange);
         stickyCleanupRef.current = () => {
+          clearWholeDocumentSelection();
           element.removeEventListener("input", onFormatInput, true);
           element.removeEventListener("keydown", onEditKeydown, true);
+          element.removeEventListener("keydown", onFastSelectKeydown, true);
+          element.removeEventListener("copy", onFastCopy, true);
+          element.removeEventListener("cut", onFastCut, true);
+          element.removeEventListener("paste", onFastPaste, true);
+          element.removeEventListener("beforeinput", onFastBeforeInput, true);
+          element.removeEventListener("pointerdown", onFastPointerDown, true);
+          document.removeEventListener("selectionchange", onFastSelectionChange);
         };
 
         const toolbarElement = element.querySelector<HTMLElement>(".vditor-toolbar");
