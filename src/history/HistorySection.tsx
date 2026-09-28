@@ -15,7 +15,9 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   RiAddLine,
+  RiArrowDownSLine,
   RiArrowLeftRightLine,
+  RiArrowRightSLine,
   RiCheckLine,
   RiCloseLine,
   RiDeleteBinLine,
@@ -74,6 +76,46 @@ type TimelineEntry = {
 const MIN_SENTINEL = -10_000;
 const MAX_SENTINEL = 10_000;
 const CHGIS_DOWNLOAD_URL = "https://chgis.fas.harvard.edu/data/chgis/v6/";
+const LEGACY_DYNASTIES = [
+  "五代十国",
+  "南北朝",
+  "春秋战国",
+  "西汉",
+  "东汉",
+  "西晋",
+  "东晋",
+  "北宋",
+  "南宋",
+  "西周",
+  "东周",
+  "西夏",
+  "三国",
+  "春秋",
+  "战国",
+  "秦朝",
+  "新朝",
+  "隋朝",
+  "唐朝",
+  "辽朝",
+  "金朝",
+  "元朝",
+  "明朝",
+  "清朝",
+  "民国",
+] as const;
+
+function inferLegacyDynasty(title: string, tags: string[]): string | null {
+  const titleText = title.trim();
+  for (const dynasty of LEGACY_DYNASTIES) {
+    if (titleText === dynasty || titleText.startsWith(`${dynasty}·`)) return dynasty;
+    if (tags.some((tag) => tag.trim() === dynasty)) return dynasty;
+  }
+  return null;
+}
+
+function eventDynasty(event: HistoryEvent): string {
+  return event.dynasty?.trim() || inferLegacyDynasty(event.title, event.tags) || "未归类";
+}
 
 function openExternalUrl(url: string): void {
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
@@ -146,13 +188,21 @@ export function HistoryCollection({
   const theme = useTheme();
   const styles = useMemo(() => makeStyles(theme, accent), [theme, accent]);
   const [query, setQuery] = useState("");
+  const [collapsedDynasties, setCollapsedDynasties] = useState<Set<string>>(() => new Set());
   const [editing, setEditing] = useState<HistoryEvent | "new" | null>(null);
   const events = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return [...(history.document?.events ?? [])]
       .filter((event) => {
         if (!needle) return true;
-        return [event.title, event.summary, event.location, ...event.people, ...event.tags]
+        return [
+          event.title,
+          eventDynasty(event),
+          event.summary,
+          event.location,
+          ...event.people,
+          ...event.tags,
+        ]
           .join(" ")
           .toLowerCase()
           .includes(needle);
@@ -161,6 +211,16 @@ export function HistoryCollection({
         (left, right) => left.startYear - right.startYear || left.title.localeCompare(right.title),
       );
   }, [history.document?.events, query]);
+  const dynastyGroups = useMemo(() => {
+    const grouped = new Map<string, HistoryEvent[]>();
+    for (const event of events) {
+      const dynasty = eventDynasty(event);
+      const group = grouped.get(dynasty) ?? [];
+      group.push(event);
+      grouped.set(dynasty, group);
+    }
+    return [...grouped].map(([dynasty, items]) => ({ dynasty, items }));
+  }, [events]);
 
   return (
     <View style={styles.collection}>
@@ -201,48 +261,84 @@ export function HistoryCollection({
             </Text>
           </View>
         ) : (
-          events.map((event) => (
-            <Pressable
-              accessibilityRole="button"
-              key={event.id}
-              onPress={() => {
-                history.setCurrentYear(event.startYear);
-                onSelectEvent(event.id);
-              }}
-              style={({ hovered }: PressState) => [
-                styles.eventSidebarRow,
-                selectedEventId === event.id && styles.eventSidebarRowActive,
-                hovered && selectedEventId !== event.id && styles.layerRowHover,
-              ]}
-            >
-              <View style={styles.eventSidebarYear}>
-                <Text style={styles.eventSidebarYearText}>{shortYearLabel(event.startYear)}</Text>
+          dynastyGroups.map(({ dynasty, items }) => {
+            const collapsed = !query.trim() && collapsedDynasties.has(dynasty);
+            return (
+              <View key={dynasty} style={styles.dynastyGroup}>
+                <Pressable
+                  accessibilityLabel={`${dynasty}，${items.length} 个事件，${collapsed ? "展开" : "折叠"}`}
+                  accessibilityRole="button"
+                  onPress={() =>
+                    setCollapsedDynasties((current) => {
+                      const next = new Set(current);
+                      if (next.has(dynasty)) next.delete(dynasty);
+                      else next.add(dynasty);
+                      return next;
+                    })
+                  }
+                  style={({ hovered }: PressState) => [
+                    styles.dynastyHeader,
+                    hovered && styles.layerRowHover,
+                  ]}
+                >
+                  {collapsed ? (
+                    <RiArrowRightSLine color={accent.accentText} size={16} />
+                  ) : (
+                    <RiArrowDownSLine color={accent.accentText} size={16} />
+                  )}
+                  <Text numberOfLines={1} style={styles.dynastyName}>
+                    {dynasty}
+                  </Text>
+                  <Text style={styles.dynastyCount}>{items.length}</Text>
+                </Pressable>
+                {!collapsed &&
+                  items.map((event) => (
+                    <Pressable
+                      accessibilityRole="button"
+                      key={event.id}
+                      onPress={() => {
+                        history.setCurrentYear(event.startYear);
+                        onSelectEvent(event.id);
+                      }}
+                      style={({ hovered }: PressState) => [
+                        styles.eventSidebarRow,
+                        selectedEventId === event.id && styles.eventSidebarRowActive,
+                        hovered && selectedEventId !== event.id && styles.layerRowHover,
+                      ]}
+                    >
+                      <View style={styles.eventSidebarYear}>
+                        <Text style={styles.eventSidebarYearText}>
+                          {shortYearLabel(event.startYear)}
+                        </Text>
+                      </View>
+                      <View style={styles.layerText}>
+                        <Text numberOfLines={1} style={styles.layerName}>
+                          {event.title}
+                        </Text>
+                        <Text numberOfLines={1} style={styles.layerMeta}>
+                          {event.location ||
+                            event.people.join("、") ||
+                            rangeLabel(event.startYear, event.endYear)}
+                        </Text>
+                      </View>
+                      <Pressable
+                        accessibilityLabel="编辑事件"
+                        onPress={(pressEvent) => {
+                          pressEvent.stopPropagation();
+                          setEditing(event);
+                        }}
+                        style={({ hovered }: PressState) => [
+                          styles.eventEditButton,
+                          hovered && styles.controlHover,
+                        ]}
+                      >
+                        <Text style={styles.eventEditText}>编辑</Text>
+                      </Pressable>
+                    </Pressable>
+                  ))}
               </View>
-              <View style={styles.layerText}>
-                <Text numberOfLines={1} style={styles.layerName}>
-                  {event.title}
-                </Text>
-                <Text numberOfLines={1} style={styles.layerMeta}>
-                  {event.location ||
-                    event.people.join("、") ||
-                    rangeLabel(event.startYear, event.endYear)}
-                </Text>
-              </View>
-              <Pressable
-                accessibilityLabel="编辑事件"
-                onPress={(pressEvent) => {
-                  pressEvent.stopPropagation();
-                  setEditing(event);
-                }}
-                style={({ hovered }: PressState) => [
-                  styles.eventEditButton,
-                  hovered && styles.controlHover,
-                ]}
-              >
-                <Text style={styles.eventEditText}>编辑</Text>
-              </Pressable>
-            </Pressable>
-          ))
+            );
+          })
         )}
       </ScrollView>
 
@@ -299,6 +395,9 @@ function EventDialog({
   theme: Theme;
 }) {
   const [title, setTitle] = useState(event?.title ?? "");
+  const [dynasty, setDynasty] = useState(
+    event ? (eventDynasty(event) === "未归类" ? "" : eventDynasty(event)) : "",
+  );
   const [startYear, setStartYear] = useState(String(event?.startYear ?? history.currentYear));
   const [endYear, setEndYear] = useState(String(event?.endYear ?? history.currentYear));
   const [location, setLocation] = useState(event?.location ?? "");
@@ -313,6 +412,8 @@ function EventDialog({
   const parsedEnd = Number(endYear);
   const invalidYears =
     !Number.isInteger(parsedStart) || !Number.isInteger(parsedEnd) || parsedStart > parsedEnd;
+  const resolvedDynasty = dynasty.trim() || inferLegacyDynasty(title, splitList(tags)) || "";
+  const invalidDynasty = !resolvedDynasty;
   const selectedRegion = history.selectedFeature;
   const selectedRegionLinked = selectedRegion ? regionIds.includes(selectedRegion.regionId) : false;
 
@@ -322,6 +423,7 @@ function EventDialog({
       const saved = await history.saveEvent({
         id: event?.id ?? null,
         title,
+        dynasty: resolvedDynasty,
         summary,
         startYear: parsedStart,
         endYear: parsedEnd,
@@ -361,6 +463,22 @@ function EventDialog({
               style={styles.input}
               value={title}
             />
+          </Field>
+          <Field label="所属朝代" styles={styles}>
+            <TextInput
+              onChangeText={setDynasty}
+              placeholder="例如：西汉、东汉、唐朝"
+              placeholderTextColor={theme.t.textTertiary}
+              style={styles.input}
+              value={dynasty}
+            />
+            <Text style={styles.pickerHint}>
+              {dynasty.trim()
+                ? "同一朝代的事件会显示在同一个分组下。"
+                : resolvedDynasty
+                  ? `将归入“${resolvedDynasty}”；也可以手动修改。`
+                  : "请填写朝代或时期，用于整理左侧事件列表。"}
+            </Text>
           </Field>
           <View style={styles.yearFields}>
             <Field label="开始年份" styles={styles}>
@@ -473,6 +591,7 @@ function EventDialog({
           {invalidYears ? (
             <Text style={styles.errorText}>年份必须是整数，且开始不能晚于结束。</Text>
           ) : null}
+          {invalidDynasty ? <Text style={styles.errorText}>请填写所属朝代或时期。</Text> : null}
           {history.error ? <Text style={styles.errorText}>{history.error}</Text> : null}
         </ScrollView>
         <View style={styles.eventEditorFooter}>
@@ -494,11 +613,11 @@ function EventDialog({
               <Text style={styles.cancelText}>取消</Text>
             </Pressable>
             <Pressable
-              disabled={busy || !title.trim() || invalidYears}
+              disabled={busy || !title.trim() || invalidYears || invalidDynasty}
               onPress={() => void save()}
               style={[
                 styles.confirmButton,
-                (busy || !title.trim() || invalidYears) && styles.disabled,
+                (busy || !title.trim() || invalidYears || invalidDynasty) && styles.disabled,
               ]}
             >
               {busy ? (
@@ -2012,6 +2131,11 @@ function PeopleNetworkView({
                   aria-label={`查看人物 ${person.name}`}
                   key={person.id}
                   onClick={() => setSelectedPersonId(person.id)}
+                  title={
+                    person.courtesyName
+                      ? `${person.name} · 字/号 ${person.courtesyName}`
+                      : person.name
+                  }
                   style={{
                     alignItems: "center",
                     background: selected || highlighted ? accent.accent : theme.t.cardSurface,
@@ -2023,13 +2147,12 @@ function PeopleNetworkView({
                     color: selected || highlighted ? theme.t.onAccent : theme.t.textPrimary,
                     cursor: "pointer",
                     display: "flex",
-                    flexDirection: "column",
-                    fontSize: 11,
+                    fontSize: 11.5,
                     fontWeight: 650,
                     height: 58,
                     justifyContent: "center",
                     left: `${position.x}%`,
-                    lineHeight: 1.1,
+                    lineHeight: 1.25,
                     padding: 4,
                     position: "absolute",
                     top: `${position.y}%`,
@@ -2039,12 +2162,17 @@ function PeopleNetworkView({
                   }}
                   type="button"
                 >
-                  {person.name.slice(0, 5)}
-                  {person.courtesyName ? (
-                    <small style={{ fontSize: 8, fontWeight: 500, opacity: 0.8 }}>
-                      字 {person.courtesyName.slice(0, 5)}
-                    </small>
-                  ) : null}
+                  <span
+                    style={{
+                      display: "block",
+                      maxWidth: "100%",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {person.name}
+                  </span>
                 </button>
               );
             })}
@@ -2063,10 +2191,10 @@ function PeopleNetworkView({
                   </View>
                   <View style={styles.personHeadingCopy}>
                     <Text style={styles.personName}>{selectedPerson.name}</Text>
-                    <Text style={styles.personMeta}>
-                      {selectedPerson.courtesyName ? `字/号 ${selectedPerson.courtesyName} · ` : ""}
-                      {personYears(selectedPerson)}
-                    </Text>
+                    {selectedPerson.courtesyName ? (
+                      <Text style={styles.personMeta}>字/号 {selectedPerson.courtesyName}</Text>
+                    ) : null}
+                    <Text style={styles.personMeta}>{personYears(selectedPerson)}</Text>
                   </View>
                   <Pressable
                     onPress={() => setEditingPerson(selectedPerson)}
@@ -2596,12 +2724,35 @@ function makeStyles(theme: Theme, accent: Accent) {
       paddingHorizontal: 9,
     },
     eventSearchInput: { color: t.textPrimary, flex: 1, fontSize: 11.5, minWidth: 0, padding: 0 },
-    eventSidebarList: { gap: 4, padding: 8 },
+    eventSidebarList: { gap: 8, padding: 8 },
+    dynastyGroup: { gap: 3 },
+    dynastyHeader: {
+      alignItems: "center",
+      borderRadius: 9,
+      flexDirection: "row",
+      gap: 5,
+      minHeight: 34,
+      paddingHorizontal: 9,
+    },
+    dynastyName: { color: accent.accentText, flex: 1, fontSize: 11.5, fontWeight: "700" },
+    dynastyCount: {
+      backgroundColor: accent.iconBadge,
+      borderRadius: 999,
+      color: accent.accentText,
+      fontSize: 10,
+      fontWeight: "700",
+      minWidth: 20,
+      overflow: "hidden",
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      textAlign: "center",
+    },
     eventSidebarRow: {
       alignItems: "center",
       borderRadius: 10,
       flexDirection: "row",
       gap: 8,
+      marginLeft: 9,
       minHeight: 58,
       paddingHorizontal: 8,
     },
@@ -2921,7 +3072,7 @@ function makeStyles(theme: Theme, accent: Accent) {
     disabled: { opacity: 0.42 },
     loading: { alignItems: "center", flex: 1, gap: 10, justifyContent: "center" },
     loadingText: { color: t.textSecondary, fontSize: 12 },
-    main: { backgroundColor: t.mainSurface, flex: 1, minHeight: 0 },
+    main: { backgroundColor: t.mainSurface, flex: 1, minHeight: 0, minWidth: 0 },
     mainHeader: {
       alignItems: "center",
       borderBottomColor: t.separator,
@@ -3055,7 +3206,7 @@ function makeStyles(theme: Theme, accent: Accent) {
     rangeYear: { color: t.textTertiary, fontSize: 10, fontVariant: ["tabular-nums"] },
     timelineHelp: { fontSize: 9.5, textAlign: "center" },
     timelinePage: { flex: 1, minHeight: 0 },
-    peoplePage: { flex: 1, minHeight: 0 },
+    peoplePage: { flex: 1, minHeight: 0, minWidth: 0 },
     peopleToolbar: {
       alignItems: "center",
       borderBottomColor: t.separator,
@@ -3090,11 +3241,12 @@ function makeStyles(theme: Theme, accent: Accent) {
       paddingHorizontal: 10,
     },
     primaryActionText: { color: t.onAccent, fontSize: 11, fontWeight: "600" },
-    peopleWorkspace: { flex: 1, flexDirection: "row", minHeight: 0 },
+    peopleWorkspace: { flex: 1, flexDirection: "row", minHeight: 0, minWidth: 0 },
     networkCanvas: {
       backgroundColor: t.mainSurface,
       flex: 1,
       minHeight: 0,
+      minWidth: 0,
       overflow: "hidden",
       position: "relative",
     },
@@ -3109,22 +3261,24 @@ function makeStyles(theme: Theme, accent: Accent) {
       backgroundColor: t.cardSurface,
       borderLeftColor: t.separator,
       borderLeftWidth: StyleSheet.hairlineWidth,
+      flexShrink: 0,
       minHeight: 0,
       width: 300,
     },
     personInspectorBody: { gap: 13, padding: 14 },
-    personHeading: { alignItems: "center", flexDirection: "row", gap: 9 },
+    personHeading: { alignItems: "flex-start", flexDirection: "row", gap: 9 },
     personAvatar: {
       alignItems: "center",
       backgroundColor: accent.iconBadge,
       borderRadius: 12,
       height: 42,
       justifyContent: "center",
+      flexShrink: 0,
       width: 42,
     },
-    personHeadingCopy: { flex: 1, gap: 3, minWidth: 0 },
-    personName: { color: t.textPrimary, fontSize: 15, fontWeight: "700" },
-    personMeta: { color: t.textTertiary, fontSize: 9.5 },
+    personHeadingCopy: { flex: 1, gap: 2, minWidth: 0 },
+    personName: { color: t.textPrimary, fontSize: 15, fontWeight: "700", lineHeight: 21 },
+    personMeta: { color: t.textTertiary, fontSize: 10.5, lineHeight: 16 },
     personDetail: { color: t.textSecondary, fontSize: 11, lineHeight: 16 },
     personBiography: {
       backgroundColor: t.controlIdle,

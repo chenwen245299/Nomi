@@ -106,7 +106,9 @@ fn parse_usage(u: &Value) -> Usage {
         prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0),
         completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0),
         total_tokens: u["total_tokens"].as_u64().unwrap_or(0),
-        cache_hit_tokens: u["prompt_cache_hit_tokens"].as_u64(),
+        cache_hit_tokens: u["prompt_cache_hit_tokens"]
+            .as_u64()
+            .or_else(|| u["cached_tokens"].as_u64()),
         cache_miss_tokens: u["prompt_cache_miss_tokens"].as_u64(),
         // OpenRouter reports the actual credits spent here when asked (usage.include).
         cost: u["cost"].as_f64(),
@@ -253,7 +255,8 @@ pub async fn stream_chat(
                     .unwrap_or("未知错误");
                 return Err(format!("模型返回错误：{msg}"));
             }
-            // The final chunk carries `usage` (with empty `choices`); capture it.
+            // Capture the latest usage. Some providers send it only in a final
+            // empty-choices chunk; StepFun includes cumulative usage throughout.
             if let Some(u) = json.get("usage")
                 && u.is_object()
             {
@@ -815,6 +818,18 @@ mod tests {
         assert_eq!(usage.completion_tokens, 20);
         assert_eq!(usage.cache_hit_tokens, Some(64));
         assert_eq!(usage.cache_miss_tokens, Some(36));
+    }
+
+    #[test]
+    fn parses_stepfun_cached_tokens() {
+        let usage = parse_usage(&serde_json::json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "cached_tokens": 64
+        }));
+        assert_eq!(usage.cache_hit_tokens, Some(64));
+        assert_eq!(usage.cache_miss_tokens, None);
     }
 
     #[tokio::test]

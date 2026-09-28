@@ -86,6 +86,15 @@ function findPaperNode(root: Element, id: string): HTMLElement | null {
   );
 }
 
+function paperIdUnderPointer(target: EventTarget | null): string | null {
+  if (!(target instanceof Element)) return null;
+  return (
+    target.closest<HTMLElement>("[data-paper-id]")?.dataset.paperId ??
+    target.closest<HTMLElement>("[data-edge-node-id]")?.dataset.edgeNodeId ??
+    null
+  );
+}
+
 interface Transform {
   x: number;
   y: number;
@@ -189,6 +198,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
   const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, k: 1 });
   const [linkCursor, setLinkCursor] = useState<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [hoveredPaperId, setHoveredPaperId] = useState<string | null>(null);
 
   const dragRef = useRef<DragSession | null>(null);
   // Screen-space edge polylines, read by the context-menu hit test (which runs
@@ -381,7 +391,14 @@ export function GraphCanvas(props: GraphCanvasProps) {
 
   const onPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
-    if (!drag || event.pointerId !== drag.pointerId) return;
+    if (!drag) {
+      if (event.pointerType === "mouse") {
+        const paperId = paperIdUnderPointer(event.target);
+        setHoveredPaperId((current) => (current === paperId ? current : paperId));
+      }
+      return;
+    }
+    if (event.pointerId !== drag.pointerId) return;
     const el = viewportRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -415,6 +432,11 @@ export function GraphCanvas(props: GraphCanvasProps) {
     if (!drag || event.pointerId !== drag.pointerId) return;
     dragRef.current = null;
     viewportRef.current?.releasePointerCapture(event.pointerId);
+    setHoveredPaperId(
+      event.pointerType === "mouse"
+        ? paperIdUnderPointer(document.elementFromPoint(event.clientX, event.clientY))
+        : null,
+    );
     const p = latest.current.props;
 
     if (drag.mode === "node" && drag.nodeId) {
@@ -615,6 +637,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
       ref={viewportRef}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
+      onPointerLeave={() => setHoveredPaperId(null)}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onContextMenu={onContextMenu}
@@ -633,9 +656,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
     >
       <style>{`
         .nomi-paper-node .nomi-connect-handle { opacity: 0; transition: opacity 120ms ease, box-shadow 120ms ease; }
-        .nomi-paper-node:hover .nomi-connect-handle,
-        .nomi-paper-node[data-selected="true"] .nomi-connect-handle,
-        .nomi-paper-node[data-dock-target="true"] .nomi-connect-handle { opacity: 1; }
+        .nomi-paper-node[data-hovered="true"] .nomi-connect-handle { opacity: 1; }
         .nomi-connect-handle-dot {
           align-items: center;
           background: ${accent.accent};
@@ -757,13 +778,13 @@ export function GraphCanvas(props: GraphCanvasProps) {
           const meta = statusMeta(paper.status);
           const selected = paper.id === selectedId;
           const dockingHere = dockDrag?.nodeId === paper.id;
+          const hovered = hoveredPaperId === paper.id;
           return (
             <div
               key={paper.id}
               ref={(el) => measureNode(paper.id, el)}
               data-paper-id={paper.id}
-              data-selected={selected ? "true" : undefined}
-              data-dock-target={dockingHere ? "true" : undefined}
+              data-hovered={hovered ? "true" : undefined}
               className="nomi-paper-node"
               style={{
                 position: "absolute",
@@ -886,6 +907,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
                       alignItems: "center",
                       justifyContent: "center",
                       cursor: "crosshair",
+                      pointerEvents: hovered ? "auto" : "none",
                       transform: `scale(${1 / transform.k})`,
                       transformOrigin: "center",
                     }}
@@ -901,44 +923,44 @@ export function GraphCanvas(props: GraphCanvasProps) {
         })}
       </div>
 
-      {/* Existing edge endpoints stay visible and can be dragged around their
-          own card. This makes rerouting a link a direct manipulation instead of
-          a hidden context-menu setting. */}
+      {/* Edge endpoints appear with their card and can be dragged to reroute a link. */}
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 7 }}>
         {rendered.flatMap(({ edge, points, active }) => {
           const endpoints: { end: EdgeEnd; nodeId: string; point: Point }[] = [
             { end: "from", nodeId: edge.from, point: points[0] },
             { end: "to", nodeId: edge.to, point: points[points.length - 1] },
           ];
-          return endpoints.map(({ end, nodeId, point }) => (
-            <div
-              key={`${edge.id}:${end}`}
-              data-edge-endpoint={edge.id}
-              data-edge-end={end}
-              data-edge-node-id={nodeId}
-              data-dragging={
-                dockDrag?.edgeId === edge.id && dockDrag.end === end ? "true" : undefined
-              }
-              className="nomi-edge-endpoint"
-              title={`拖动以调整${end === "from" ? "起点" : "终点"}连接侧边`}
-              style={{
-                position: "absolute",
-                left: point.x,
-                top: point.y,
-                alignItems: "center",
-                display: "flex",
-                height: 24,
-                justifyContent: "center",
-                width: 24,
-                cursor: "grab",
-                opacity: active || dockDrag?.edgeId === edge.id ? 0.78 : 0.54,
-                pointerEvents: "auto",
-                transform: "translate(-50%, -50%)",
-              }}
-            >
-              <span className="nomi-edge-endpoint-dot" />
-            </div>
-          ));
+          return endpoints.map(({ end, nodeId, point }) => {
+            const dragging = dockDrag?.edgeId === edge.id && dockDrag.end === end;
+            const visible = hoveredPaperId === nodeId || dragging;
+            return (
+              <div
+                key={`${edge.id}:${end}`}
+                data-edge-endpoint={edge.id}
+                data-edge-end={end}
+                data-edge-node-id={nodeId}
+                data-dragging={dragging ? "true" : undefined}
+                className="nomi-edge-endpoint"
+                title={`拖动以调整${end === "from" ? "起点" : "终点"}连接侧边`}
+                style={{
+                  position: "absolute",
+                  left: point.x,
+                  top: point.y,
+                  alignItems: "center",
+                  display: "flex",
+                  height: 24,
+                  justifyContent: "center",
+                  width: 24,
+                  cursor: "grab",
+                  opacity: visible ? (active || dragging ? 0.78 : 0.54) : 0,
+                  pointerEvents: visible ? "auto" : "none",
+                  transform: "translate(-50%, -50%)",
+                }}
+              >
+                <span className="nomi-edge-endpoint-dot" />
+              </div>
+            );
+          });
         })}
       </div>
 

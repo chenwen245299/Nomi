@@ -13,7 +13,10 @@ const modelModules = import.meta.glob("../assets/models/*.svg", {
 function byBasename(modules: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [path, url] of Object.entries(modules)) {
-    const base = path.split("/").pop()?.replace(/\.svg$/, "");
+    const base = path
+      .split("/")
+      .pop()
+      ?.replace(/\.svg$/, "");
     if (base) {
       out[base.toLowerCase()] = url;
     }
@@ -30,6 +33,7 @@ const BRAND_RULES: { keys: string[]; icon: string }[] = [
   { keys: ["deepseek"], icon: "deepseek" },
   { keys: ["openrouter"], icon: "openrouter" },
   { keys: ["moonshot", "kimi"], icon: "kimi" },
+  { keys: ["stepfun", "阶跃星辰", "阶跃", "step-", "stepaudio"], icon: "stepfun" },
   { keys: ["ollama"], icon: "ollama-color" },
   { keys: ["lmstudio", "lm studio"], icon: "lmstudio" },
   { keys: ["gemma"], icon: "gemma" },

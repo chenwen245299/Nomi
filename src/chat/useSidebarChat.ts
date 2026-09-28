@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   DEFAULT_ASSISTANT_ID,
@@ -27,6 +27,7 @@ export interface SidebarChat {
   loading: boolean;
   error: string | null;
   select: (id: string) => void;
+  openConversation: (conversation: Conversation) => void;
   newConversation: () => Promise<void>;
   removeConversation: (id: string) => Promise<void>;
   setModel: (providerId: string, modelId: string) => Promise<void>;
@@ -43,6 +44,7 @@ export function useSidebarChat(scope: string): SidebarChat {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const preferredIdRef = useRef<string | null>(null);
 
   // Load this scope's conversations; seed a blank one when the store is empty so
   // the panel always opens with a conversation ready to receive the first message.
@@ -66,8 +68,13 @@ export function useSidebarChat(scope: string): SidebarChat {
         }
       }
       if (cancelled) return;
-      setConversations(list);
-      setActiveId(list[0]?.id ?? null);
+      setConversations((current) =>
+        byActivity([
+          ...list,
+          ...current.filter((item) => !list.some((saved) => saved.id === item.id)),
+        ]),
+      );
+      setActiveId(preferredIdRef.current ?? list[0]?.id ?? null);
       setLoading(false);
     })();
     return () => {
@@ -122,16 +129,28 @@ export function useSidebarChat(scope: string): SidebarChat {
     };
   }, [scope]);
 
-  const select = useCallback((id: string) => setActiveId(id), []);
+  const select = useCallback((id: string) => {
+    preferredIdRef.current = id;
+    setActiveId(id);
+  }, []);
+
+  const openConversation = useCallback((conversation: Conversation) => {
+    preferredIdRef.current = conversation.id;
+    setConversations((current) =>
+      byActivity([conversation, ...current.filter((item) => item.id !== conversation.id)]),
+    );
+    setActiveId(conversation.id);
+  }, []);
 
   const newConversation = useCallback(async () => {
     // Reuse the current conversation if it's still blank rather than stacking
     // empty conversations — matches the reference sidebar's "＋ 新对话" behaviour.
     const active = conversations.find((c) => c.id === activeId);
-    if (active && active.lastMessageAt == null) return;
+    if (active && active.lastMessageAt == null && !active.detailSource) return;
     try {
       const created = await createDefaultConversation("新对话", scope);
       setConversations((current) => byActivity([created, ...current]));
+      preferredIdRef.current = created.id;
       setActiveId(created.id);
     } catch (err) {
       setError(String(err));
@@ -150,6 +169,7 @@ export function useSidebarChat(scope: string): SidebarChat {
         }
       }
       setConversations(next);
+      if (preferredIdRef.current === id) preferredIdRef.current = next[0]?.id ?? null;
       setActiveId((active) => (active === id || !active ? (next[0]?.id ?? null) : active));
     },
     [scope],
@@ -179,6 +199,7 @@ export function useSidebarChat(scope: string): SidebarChat {
     loading,
     error,
     select,
+    openConversation,
     newConversation,
     removeConversation,
     setModel,

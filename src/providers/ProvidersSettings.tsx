@@ -1109,7 +1109,11 @@ function NewProviderModal({
           />
           <Text style={styles.modalDetected}>
             识别类型：{kindLabel(kind)}
-            {preset ? "（将预填 API 地址与模型）" : ""}
+            {preset
+              ? preset.models.length > 0
+                ? "（将预填 API 地址与模型）"
+                : "（将预填 API 地址，可获取模型列表）"
+              : ""}
           </Text>
           <View style={styles.modalActions}>
             <Pressable

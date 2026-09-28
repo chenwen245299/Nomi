@@ -48,6 +48,8 @@ export function AiChatPanel({
   providers,
   onBalance,
   contextSource,
+  detailError,
+  detailFocus,
 }: {
   /** The active tab id — routes this panel to `<tab>/ai-sidebar/…`. */
   scope: SectionId;
@@ -56,11 +58,26 @@ export function AiChatPanel({
   onBalance: (providerId: string) => Promise<ProviderBalance>;
   /** Current main-chat conversation; only the chat sidebar supplies this. */
   contextSource?: ConversationContextSource | null;
+  detailError?: string | null;
+  detailFocus?: { conversation: Conversation; quote: string; nonce: number } | null;
 }) {
   const theme = useTheme();
   const styles = useMemo(() => makeStyles(theme, accent), [theme, accent]);
   const sidebar = useSidebarChat(scope);
+  const { openConversation } = sidebar;
   const [historyOpen, setHistoryOpen] = useState(false);
+  useEffect(() => {
+    if (!detailFocus || scope !== "chat") return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      openConversation(detailFocus.conversation);
+      setHistoryOpen(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailFocus, scope, openConversation]);
 
   // Question counts for the history subtitles ("N 问"). Loaded lazily each time
   // the panel opens so the flat conversation list stays a single cheap call.
@@ -128,6 +145,15 @@ export function AiChatPanel({
         </View>
       </View>
 
+      {active?.detailSource ? (
+        <View style={styles.detailSource}>
+          <Text style={styles.detailSourceLabel}>针对这条回答 · 历史已固定</Text>
+          <Text numberOfLines={2} style={styles.detailSourceExcerpt}>
+            {active.detailSource.excerpt || "原回答"}
+          </Text>
+        </View>
+      ) : null}
+
       <View style={styles.body}>
         {/* The model picker genuinely floats above the conversation. */}
         <View style={styles.modelFloat} pointerEvents="box-none">
@@ -150,6 +176,11 @@ export function AiChatPanel({
               assistantName="AI 助手"
               conversation={active}
               contextSource={contextSource}
+              composerInsert={
+                detailFocus?.conversation.id === active.id && detailFocus.quote
+                  ? { nonce: detailFocus.nonce, quote: detailFocus.quote }
+                  : undefined
+              }
               hideFeedback
               key={active.id}
               onNewConversation={() => void sidebar.newConversation()}
@@ -168,7 +199,9 @@ export function AiChatPanel({
           </View>
         )}
       </View>
-      {sidebar.error ? <Text style={styles.error}>{sidebar.error}</Text> : null}
+      {sidebar.error || detailError ? (
+        <Text style={styles.error}>{detailError ?? sidebar.error}</Text>
+      ) : null}
 
       {/* Full-height drawer that slides in from the right, covering the panel. */}
       {historyOpen ? (
@@ -409,6 +442,16 @@ function makeStyles(theme: Theme, accent: Accent) {
       width: 30,
     },
     headerBtnHover: { backgroundColor: t.controlHover },
+    detailSource: {
+      backgroundColor: accent.wash,
+      borderBottomColor: t.separator,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      gap: 3,
+      paddingHorizontal: 13,
+      paddingVertical: 9,
+    },
+    detailSourceLabel: { color: accent.accentText, fontSize: 11, fontWeight: "700" },
+    detailSourceExcerpt: { color: t.textSecondary, fontSize: 11.5, lineHeight: 17 },
     // The model picker genuinely floats above the conversation (no divider, no row).
     modelFloat: {
       alignItems: "center",

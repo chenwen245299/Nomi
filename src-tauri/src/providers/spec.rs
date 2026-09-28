@@ -27,7 +27,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use super::{
-    FetchedProviderModel, deepseek, generic, mimo, minimax, moleapi, openrouter, qwen, zhipu,
+    FetchedProviderModel, deepseek, generic, mimo, minimax, moleapi, openrouter, qwen, stepfun,
+    zhipu,
 };
 use crate::providers::ChatTarget;
 
@@ -253,6 +254,7 @@ pub(crate) fn spec_for(kind: &str) -> &'static dyn ProviderSpec {
         "qwen" => &qwen::Qwen,
         "zhipu" => &zhipu::Zhipu,
         "mimo" => &mimo::Mimo,
+        "stepfun" => &stepfun::StepFun,
         _ => &generic::OpenAiCompatible,
     }
 }

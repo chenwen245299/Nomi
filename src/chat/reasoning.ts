@@ -25,7 +25,25 @@ export function thinkingCanBeDisabled(
   if (provider?.kind === "zhipu" && /^glm-5\.3(?:-flash)?$/i.test(id)) return false;
   // M3 exposes an explicit disabled mode; M2.x always thinks.
   if (provider?.kind === "minimax" && /^minimax-m2(?:\.|$)/i.test(id)) return false;
+  if (
+    provider?.kind === "stepfun" &&
+    /^(?:step-5-preview|step-3\.7-flash|step-3\.5-flash-2603)$/i.test(id)
+  ) {
+    return false;
+  }
   return true;
+}
+
+/** The effort sent when a model has no API-supported "off" setting. */
+export function defaultThinkingEffort(
+  provider: Provider | undefined,
+  modelId: string | null | undefined,
+): ThinkingEffort {
+  if (provider?.kind === "stepfun") {
+    if (/^(?:step-5-preview|step-3\.7-flash)$/i.test(modelId ?? "")) return "medium";
+    if (/^step-3\.5-flash-2603$/i.test(modelId ?? "")) return "high";
+  }
+  return "max";
 }
 
 /**
@@ -39,6 +57,10 @@ export function effortScaleFor(
 ): ThinkingEffort[] {
   const model = provider?.models.find((candidate) => candidate.id === modelId);
   if (!model?.capabilities.includes("reasoning")) return [];
+  if (provider?.kind === "stepfun") {
+    if (/^step-3\.5-flash$/i.test(model.id)) return [];
+    if (/^step-3\.5-flash-2603$/i.test(model.id)) return ["low", "high"];
+  }
   if (provider?.kind === "deepseek") return ["high", "max"];
   if (provider?.kind === "zhipu" && /^glm-5\.3(?:-flash)?$/i.test(model.id)) {
     return ["low", "high", "max"];

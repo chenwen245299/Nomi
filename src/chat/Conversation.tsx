@@ -29,6 +29,7 @@ import {
   RiAtLine,
   RiBrainAi3Line,
   RiCheckLine,
+  RiChatQuoteLine,
   RiCloseLine,
   RiCollapseDiagonalLine,
   RiDatabase2Line,
@@ -81,7 +82,9 @@ import {
 import { useConversation, type DraftToolCall, type StreamingMessage } from "./useConversation";
 import type { ConversationContextSource } from "./chatRuntime";
 import { renderMarkdown } from "./markdown";
+import { requestDetailInquiry } from "./detailInquiry";
 import {
+  defaultThinkingEffort,
   effortScaleFor,
   mapEffort,
   thinkingCanBeDisabled,
@@ -127,6 +130,7 @@ const USER_MESSAGE_LINE_HEIGHT = 26;
 const USER_MESSAGE_COLLAPSED_HEIGHT = USER_MESSAGE_COLLAPSED_LINES * USER_MESSAGE_LINE_HEIGHT;
 const CHAT_SCROLL_STORAGE_KEY = "nomi.chat.scroll-positions.v1";
 const MAX_SAVED_CHAT_SCROLL_POSITIONS = 200;
+const appliedDetailComposerInserts = new Set<string>();
 
 interface SavedChatScrollPosition {
   atBottom: boolean;
@@ -1975,6 +1979,7 @@ function AnswerSurface({
   onEdit,
   onFeedback,
   onGenerate,
+  onAskDetails,
   onReasoningViewStateChange,
   providerKind,
   providerName,
@@ -1996,6 +2001,7 @@ function AnswerSurface({
     modelId: string,
     replace: boolean,
   ) => Promise<void>;
+  onAskDetails?: (messageId: string, quote: string, providerId?: string, modelId?: string) => void;
   onReasoningViewStateChange: (state: ReasoningViewState) => void;
   providerKind?: string | null;
   providerName?: string | null;
@@ -2010,6 +2016,8 @@ function AnswerSurface({
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelMenuPlacement, setModelMenuPlacement] = useState<"up" | "down">("down");
   const modelMenuAnchorRef = useRef<HTMLDivElement | null>(null);
+  const answerRef = useRef<HTMLDivElement | null>(null);
+  const selectedTextRef = useRef("");
   const iconColor = theme.t.textTertiary;
   const currentProvider = providerForMessage(message, providers, fallbackProviderId);
   const currentModelId = message.usage?.modelId ?? message.model ?? "";
@@ -2024,6 +2032,22 @@ function AnswerSurface({
 
   return (
     <div
+      ref={answerRef}
+      onMouseUp={() => {
+        const selection = window.getSelection();
+        const root = answerRef.current;
+        if (
+          root &&
+          selection &&
+          !selection.isCollapsed &&
+          selection.anchorNode &&
+          selection.focusNode &&
+          root.contains(selection.anchorNode) &&
+          root.contains(selection.focusNode)
+        ) {
+          selectedTextRef.current = selection.toString().trim().slice(0, 1200);
+        }
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => {
         setHovered(false);
@@ -2099,6 +2123,23 @@ function AnswerSurface({
               styles={styles}
               theme={theme}
             />
+            {onAskDetails ? (
+              <AnswerAction
+                icon={<RiChatQuoteLine color={iconColor} size={13} />}
+                label="询问这条回答的细节"
+                onPress={() => {
+                  onAskDetails(
+                    message.id,
+                    selectedTextRef.current,
+                    currentProvider?.id,
+                    currentModelId,
+                  );
+                  selectedTextRef.current = "";
+                }}
+                styles={styles}
+                theme={theme}
+              />
+            ) : null}
             <AnswerAction
               active={editing}
               icon={<RiEditLine color={iconColor} size={13} />}
@@ -2253,6 +2294,7 @@ function SplitAnswerPanel({
   hideFeedback = false,
   message,
   onFeedback,
+  onAskDetails,
   onReasoningViewStateChange,
   providerKind,
   providerName,
@@ -2267,6 +2309,7 @@ function SplitAnswerPanel({
   hideFeedback?: boolean;
   message: ChatMessage;
   onFeedback: (messageId: string, feedback: "good" | "bad" | null) => Promise<void>;
+  onAskDetails?: (messageId: string, quote: string, providerId?: string, modelId?: string) => void;
   onReasoningViewStateChange: (state: ReasoningViewState) => void;
   providerKind?: string | null;
   providerName?: string | null;
@@ -2336,6 +2379,15 @@ function SplitAnswerPanel({
               styles={styles}
               theme={theme}
             />
+            {onAskDetails ? (
+              <AnswerAction
+                icon={<RiChatQuoteLine color={iconColor} size={13} />}
+                label="询问这条回答的细节"
+                onPress={() => onAskDetails(message.id, "", currentProvider?.id, modelId)}
+                styles={styles}
+                theme={theme}
+              />
+            ) : null}
             {!hideFeedback && (
               <>
                 <AnswerAction
@@ -2398,6 +2450,7 @@ function ResponseGroup({
   onEdit,
   onFeedback,
   onGenerate,
+  onAskDetails,
   onSelect,
   providerKind,
   providerName,
@@ -2420,6 +2473,7 @@ function ResponseGroup({
     modelId: string,
     replace: boolean,
   ) => Promise<void>;
+  onAskDetails?: (messageId: string, quote: string, providerId?: string, modelId?: string) => void;
   onSelect: (groupId: string, messageId: string, layout: "tabs" | "split") => Promise<void>;
   providerKind?: string | null;
   providerName?: string | null;
@@ -2491,6 +2545,7 @@ function ResponseGroup({
                     hideFeedback={hideFeedback}
                     message={message}
                     onFeedback={onFeedback}
+                    onAskDetails={onAskDetails}
                     onReasoningViewStateChange={setReasoningViewState}
                     providerKind={providerKind}
                     providerName={providerName}
@@ -2528,6 +2583,7 @@ function ResponseGroup({
                 onEdit={onEdit}
                 onFeedback={onFeedback}
                 onGenerate={generate}
+                onAskDetails={onAskDetails}
                 onReasoningViewStateChange={setReasoningViewState}
                 providerKind={providerKind}
                 providerName={providerName}
@@ -2971,6 +3027,7 @@ export function ConversationView({
   providers,
   scope = "",
   contextSource,
+  composerInsert,
   hideFeedback = false,
 }: {
   accent: Accent;
@@ -2985,6 +3042,7 @@ export function ConversationView({
   scope?: string;
   /** Main conversation shown to the left of an AI sidebar, used as model context. */
   contextSource?: ConversationContextSource | null;
+  composerInsert?: { nonce: number; quote: string };
   /** Hide the 👍/👎 feedback buttons (used by the compact AI sidebar). */
   hideFeedback?: boolean;
 }) {
@@ -2994,6 +3052,28 @@ export function ConversationView({
   const thinkingModelKey = `${conversation.id}/${conversation.providerId ?? ""}/${conversation.modelId ?? ""}`;
 
   const [text, setText] = useState("");
+  const insertNonce = composerInsert?.nonce;
+  const insertQuote = composerInsert?.quote;
+  useEffect(() => {
+    if (!insertQuote) return;
+    const insertKey = `${scope}/${conversation.id}/${insertNonce}/${insertQuote}`;
+    if (appliedDetailComposerInserts.has(insertKey)) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled || appliedDetailComposerInserts.has(insertKey)) return;
+      appliedDetailComposerInserts.add(insertKey);
+      if (appliedDetailComposerInserts.size > 200) {
+        appliedDetailComposerInserts.delete(appliedDetailComposerInserts.values().next().value!);
+      }
+      setText((current) => {
+        const prefix = current.trim() ? `${current.trimEnd()}\n\n` : "";
+        return `${prefix}引用原回答：${insertQuote}\n\n问题：`;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversation.id, insertNonce, insertQuote, scope]);
   const [pending, setPending] = useState<PendingAttachment[]>([]);
   const [attachmentPreview, setAttachmentPreview] = useState<{
     kind: AttachmentPreviewKind;
@@ -3042,10 +3122,12 @@ export function ConversationView({
   const canDisableThinking = thinkingCanBeDisabled(selectedProvider, conversation.modelId);
   const selectedThinkingEffort =
     thinkingSelection.modelKey === thinkingModelKey ? thinkingSelection.effort : "off";
-  // GLM-5.3 models reject `thinking: disabled`; show their real default instead
-  // of presenting an "off" state the API cannot honour.
+  // Some models have no "off" setting; show a supported default instead of
+  // presenting a state their API cannot honour.
   const thinkingEffort =
-    !canDisableThinking && selectedThinkingEffort === "off" ? "max" : selectedThinkingEffort;
+    !canDisableThinking && selectedThinkingEffort === "off"
+      ? defaultThinkingEffort(selectedProvider, conversation.modelId)
+      : selectedThinkingEffort;
   const thinkingMenuOpen = thinkingMenuFor === thinkingModelKey;
   const lastContextMarker = convo.messages.reduce(
     (last, message, index) => (message.role === "context_marker" ? index : last),
@@ -3486,6 +3568,19 @@ export function ConversationView({
                         onDelete={convo.remove}
                         onEdit={convo.edit}
                         onFeedback={convo.feedback}
+                        onAskDetails={
+                          scope === ""
+                            ? (messageId, quote, providerId, modelId) =>
+                                requestDetailInquiry({
+                                  assistantId,
+                                  chatId: conversation.id,
+                                  messageId,
+                                  quote,
+                                  providerId,
+                                  modelId,
+                                })
+                            : undefined
+                        }
                         onGenerate={(
                           sourceMessageId,
                           responseGroupId,
@@ -3502,7 +3597,7 @@ export function ConversationView({
                           );
                           const targetEffort =
                             mapped === "off" && !thinkingCanBeDisabled(targetProvider, modelId)
-                              ? "max"
+                              ? defaultThinkingEffort(targetProvider, modelId)
                               : mapped;
                           return convo.generateVariant(
                             sourceMessageId,
@@ -3678,7 +3773,7 @@ export function ConversationView({
                     title={
                       thinkingEfforts.length > 0
                         ? `思考模式：${THINKING_LABEL[thinkingEffort]}`
-                        : "当前模型不支持思考模式"
+                        : "当前模型不支持调节思考强度"
                     }
                   >
                     <Pressable

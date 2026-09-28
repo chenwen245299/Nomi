@@ -27,6 +27,7 @@ mod minimax;
 mod moleapi;
 mod openrouter;
 mod qwen;
+mod stepfun;
 mod zhipu;
 
 pub(crate) use spec::{ProviderBalance, ProviderSpec, spec_for, spec_for_provider};

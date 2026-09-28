@@ -40,6 +40,7 @@ export interface HistoryFeature {
 export interface HistoryEvent {
   id: string;
   title: string;
+  dynasty: string;
   summary: string;
   startYear: number;
   endYear: number;
@@ -136,6 +137,7 @@ export interface HistoryImportInput {
 export interface SaveHistoryEventInput {
   id: string | null;
   title: string;
+  dynasty: string;
   summary: string;
   startYear: number;
   endYear: number;

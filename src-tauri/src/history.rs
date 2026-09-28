@@ -104,6 +104,8 @@ pub struct HistoryEvent {
     pub id: String,
     pub title: String,
     #[serde(default)]
+    pub dynasty: String,
+    #[serde(default)]
     pub summary: String,
     pub start_year: i32,
     pub end_year: i32,
@@ -239,6 +241,8 @@ pub struct UpdateHistoryFeatureInput {
 pub struct SaveHistoryEventInput {
     pub id: Option<String>,
     pub title: String,
+    #[serde(default)]
+    pub dynasty: String,
     #[serde(default)]
     pub summary: String,
     pub start_year: i32,
@@ -1573,6 +1577,7 @@ pub fn history_save_event(
     let event = HistoryEvent {
         id: input.id.clone().unwrap_or_else(|| new_id("event")),
         title,
+        dynasty: input.dynasty.trim().chars().take(40).collect(),
         summary: input.summary.trim().chars().take(4_000).collect(),
         start_year,
         end_year,
@@ -1918,6 +1923,7 @@ mod tests {
         }))
         .unwrap();
         migrate_people(&mut document);
+        assert!(document.events[0].dynasty.is_empty());
         assert_eq!(document.people.len(), 2);
         assert_eq!(document.events[0].person_ids.len(), 2);
         assert_eq!(document.events[0].people, vec!["曹操", "袁绍"]);

@@ -793,9 +793,13 @@ async fn run_variant(
     let target = providers::resolve_chat_target(app, provider_id, model_id)?;
     let exa_key = exa::stored_key(app)?;
     let reasoning_effort = normalize_reasoning_effort(reasoning_effort.as_deref())?;
-    let (_assistant_name, system_prompt) = chat::assistant_profile(app, scope, assistant_id)?;
     let conv_dir = chat::conversation_dir(app, scope, assistant_id, chat_id)?;
-    let reference = load_conversation_reference(app, scope, context_assistant_id, context_chat_id)?;
+    let detail = chat::load_detail_context(app, scope, assistant_id, chat_id)?;
+    let reference = if detail.is_some() {
+        None
+    } else {
+        load_conversation_reference(app, scope, context_assistant_id, context_chat_id)?
+    };
     let mut messages = chat::load_messages(&conv_dir);
     let source_index = messages
         .iter()
@@ -827,19 +831,44 @@ async fn run_variant(
             collect_all_pdfs(&reference.directory, &reference.messages),
         );
     }
-    let (tools_enabled, tool_ids) = chat::assistant_tool_config(app, scope, assistant_id)?;
-    let mut oa_messages = build_oa_messages_with_reference(
-        &system_prompt,
-        &history,
-        target.supports_vision,
-        target.supports_video,
-        &conv_dir,
-        target.spec(),
-        reference
-            .as_ref()
-            .map(|reference| (reference.messages.as_slice(), reference.directory.as_path())),
-    );
-    add_feature_page_context(&mut oa_messages, context_text);
+    let (tools_enabled, tool_ids, mut oa_messages) = if let Some(detail) = &detail {
+        let source_dir = detail_source_directory(app, detail, &conv_dir);
+        extend_unique_pdfs(&mut pdfs, collect_all_pdfs(&source_dir, &detail.messages));
+        (
+            detail.tools_enabled,
+            detail.tool_ids.clone(),
+            build_oa_messages_with_detail(
+                detail,
+                &history,
+                target.supports_vision,
+                target.supports_video,
+                &conv_dir,
+                &source_dir,
+                target.spec(),
+            ),
+        )
+    } else {
+        let (_, system_prompt) = chat::assistant_profile(app, scope, assistant_id)?;
+        let (tools_enabled, tool_ids) = chat::assistant_tool_config(app, scope, assistant_id)?;
+        (
+            tools_enabled,
+            tool_ids,
+            build_oa_messages_with_reference(
+                &system_prompt,
+                &history,
+                target.supports_vision,
+                target.supports_video,
+                &conv_dir,
+                target.spec(),
+                reference.as_ref().map(|reference| {
+                    (reference.messages.as_slice(), reference.directory.as_path())
+                }),
+            ),
+        )
+    };
+    if detail.is_none() {
+        add_feature_page_context(&mut oa_messages, context_text);
+    }
     let mut assistant = generate_assistant(
         &target,
         model_id,
@@ -922,13 +951,18 @@ async fn run_chat(
     let target = providers::resolve_chat_target(app, &provider_id, &model_id)?;
     let exa_key = exa::stored_key(app)?;
     let reasoning_effort = normalize_reasoning_effort(reasoning_effort.as_deref())?;
-    let (_assistant_name, system_prompt) = chat::assistant_profile(app, scope, assistant_id)?;
     let conv_dir = chat::conversation_dir(app, scope, assistant_id, chat_id)?;
-    let reference = load_conversation_reference(app, scope, context_assistant_id, context_chat_id)?;
+    let detail = chat::load_detail_context(app, scope, assistant_id, chat_id)?;
+    let reference = if detail.is_some() {
+        None
+    } else {
+        load_conversation_reference(app, scope, context_assistant_id, context_chat_id)?
+    };
 
     // 1. Persist the user's message.
     let mut messages = chat::load_messages(&conv_dir);
-    let is_first_user_message = !messages.iter().any(|message| message.role == "user");
+    let is_first_user_message =
+        detail.is_none() && !messages.iter().any(|message| message.role == "user");
     let title_source = is_first_user_message.then(|| {
         if !text.trim().is_empty() {
             text.clone()
@@ -973,19 +1007,44 @@ async fn run_chat(
             collect_all_pdfs(&reference.directory, &reference.messages),
         );
     }
-    let (tools_enabled, tool_ids) = chat::assistant_tool_config(app, scope, assistant_id)?;
-    let mut oa_messages = build_oa_messages_with_reference(
-        &system_prompt,
-        &messages,
-        target.supports_vision,
-        target.supports_video,
-        &conv_dir,
-        target.spec(),
-        reference
-            .as_ref()
-            .map(|reference| (reference.messages.as_slice(), reference.directory.as_path())),
-    );
-    add_feature_page_context(&mut oa_messages, context_text);
+    let (tools_enabled, tool_ids, mut oa_messages) = if let Some(detail) = &detail {
+        let source_dir = detail_source_directory(app, detail, &conv_dir);
+        extend_unique_pdfs(&mut pdfs, collect_all_pdfs(&source_dir, &detail.messages));
+        (
+            detail.tools_enabled,
+            detail.tool_ids.clone(),
+            build_oa_messages_with_detail(
+                detail,
+                &messages,
+                target.supports_vision,
+                target.supports_video,
+                &conv_dir,
+                &source_dir,
+                target.spec(),
+            ),
+        )
+    } else {
+        let (_, system_prompt) = chat::assistant_profile(app, scope, assistant_id)?;
+        let (tools_enabled, tool_ids) = chat::assistant_tool_config(app, scope, assistant_id)?;
+        (
+            tools_enabled,
+            tool_ids,
+            build_oa_messages_with_reference(
+                &system_prompt,
+                &messages,
+                target.supports_vision,
+                target.supports_video,
+                &conv_dir,
+                target.spec(),
+                reference.as_ref().map(|reference| {
+                    (reference.messages.as_slice(), reference.directory.as_path())
+                }),
+            ),
+        )
+    };
+    if detail.is_none() {
+        add_feature_page_context(&mut oa_messages, context_text);
+    }
     let response_group_id = new_id("response");
     let assistant = generate_assistant(
         &target,
@@ -1315,6 +1374,57 @@ fn build_oa_messages_with_reference(
         false,
     );
     out
+}
+
+/// The saved source answer and everything before it form an immutable prefix.
+/// Sidebar turns follow that prefix so questions about the same answer can
+/// reuse provider-side prompt caches.
+fn build_oa_messages_with_detail(
+    detail: &chat::DetailContext,
+    detail_messages: &[ChatMessage],
+    supports_vision: bool,
+    supports_video: bool,
+    detail_dir: &Path,
+    source_dir: &Path,
+    spec: &dyn providers::ProviderSpec,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    if !detail.system_prompt.trim().is_empty() {
+        out.push(json!({ "role": "system", "content": detail.system_prompt }));
+    }
+    append_oa_history(
+        &mut out,
+        detail.messages.iter(),
+        supports_vision,
+        supports_video,
+        source_dir,
+        spec,
+        false,
+    );
+    append_oa_history(
+        &mut out,
+        active_context(detail_messages).iter(),
+        supports_vision,
+        supports_video,
+        detail_dir,
+        spec,
+        false,
+    );
+    out
+}
+
+fn detail_source_directory(
+    app: &AppHandle,
+    detail: &chat::DetailContext,
+    fallback: &Path,
+) -> PathBuf {
+    chat::conversation_dir(
+        app,
+        None,
+        detail.source.assistant_id(),
+        detail.source.chat_id(),
+    )
+    .unwrap_or_else(|_| fallback.to_path_buf())
 }
 
 /// Add a bounded, request-only snapshot of the feature page shown beside an AI
@@ -3383,6 +3493,47 @@ mod tests {
         assert_eq!(history[2]["content"], "[左侧对话·助手]\n第五章的完整解释。");
         assert_eq!(history[3]["content"], "[左侧对话·用户]\n继续讲第六章。");
         assert_eq!(history[4]["content"], "第五章这里我没听懂。");
+    }
+
+    #[test]
+    fn detail_questions_share_the_source_answer_prefix() {
+        let original_question = text_message("source-user", "user", "解释这个方法。");
+        let original_answer = text_message("source-answer", "assistant", "方法分为甲和乙两步。");
+        let detail: chat::DetailContext = serde_json::from_value(json!({
+            "source": {
+                "assistantId": "main-assistant",
+                "chatId": "main-chat",
+                "messageId": "source-answer",
+                "excerpt": "方法分为甲和乙两步。"
+            },
+            "systemPrompt": "原助手指令",
+            "toolsEnabled": true,
+            "toolIds": null,
+            "messages": [original_question, original_answer]
+        }))
+        .unwrap();
+        let build = |messages: &[ChatMessage]| {
+            build_oa_messages_with_detail(
+                &detail,
+                messages,
+                false,
+                false,
+                Path::new("."),
+                Path::new("."),
+                providers::spec_for("openai"),
+            )
+        };
+        let first = build(&[text_message("detail-user-1", "user", "甲是什么？")]);
+        let second = build(&[
+            text_message("detail-user-1", "user", "甲是什么？"),
+            text_message("detail-answer-1", "assistant", "甲是第一步。"),
+            text_message("detail-user-2", "user", "乙是什么？"),
+        ]);
+        assert_eq!(&first[..3], &second[..3]);
+        assert_eq!(first[2]["content"], "方法分为甲和乙两步。");
+        assert_eq!(first[3]["content"], "甲是什么？");
+        assert_eq!(second[3]["content"], "甲是什么？");
+        assert_eq!(second[5]["content"], "乙是什么？");
     }
 
     #[test]

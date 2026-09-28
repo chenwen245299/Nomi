@@ -164,6 +164,7 @@ export const PROVIDER_KINDS: { value: string; label: string }[] = [
   { value: "mimo", label: "小米 MiMo" },
   { value: "moleapi", label: "MoleAPI" },
   { value: "kimi", label: "Kimi / Moonshot" },
+  { value: "stepfun", label: "阶跃星辰 / StepFun" },
   { value: "ollama", label: "Ollama" },
   { value: "anthropic", label: "Anthropic Claude" },
   { value: "custom", label: "自定义" },
@@ -317,6 +318,9 @@ const KIND_KEYWORDS: [string, string][] = [
   ["moleapi", "moleapi"],
   ["kimi", "kimi"],
   ["moonshot", "kimi"],
+  ["stepfun", "stepfun"],
+  ["阶跃星辰", "stepfun"],
+  ["阶跃", "stepfun"],
   ["ollama", "ollama"],
   ["claude", "anthropic"],
   ["anthropic", "anthropic"],
@@ -365,6 +369,10 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
   },
   mimo: {
     baseUrl: "https://api.xiaomimimo.com/v1",
+    models: [],
+  },
+  stepfun: {
+    baseUrl: "https://api.stepfun.com/v1",
     models: [],
   },
   // MoleAPI relays several hundred models; the line-up changes constantly and the

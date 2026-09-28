@@ -19,6 +19,7 @@ const CONVERSATION_FILE: &str = "conversation.json";
 const ASSETS_DIR: &str = "assets";
 const CHAT_SETTINGS_FILE: &str = "chat-settings.json";
 const CHAT_GROUPS_FILE: &str = "groups.json";
+const DETAIL_CONTEXT_FILE: &str = "detail-context.json";
 const UNTITLED_CONVERSATION: &str = "新对话";
 const ASSISTANT_EMOJIS: [&str; 16] = [
     "✨", "🌟", "🧠", "🪄", "🦉", "🐳", "🦊", "🐼", "🌈", "🚀", "🎯", "📝", "🔭", "🎨", "🌿", "💡",
@@ -85,12 +86,43 @@ pub struct Conversation {
     /// Optional user-defined group in the main conversation collection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     group_id: Option<String>,
+    /// A sidebar conversation dedicated to questions about one saved answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail_source: Option<DetailSource>,
     created_at: u64,
     updated_at: u64,
     /// Timestamp of the newest persisted user/assistant message. Kept separate
     /// from `updated_at`, which also changes for metadata edits.
     #[serde(default)]
     last_message_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailSource {
+    assistant_id: String,
+    chat_id: String,
+    message_id: String,
+    excerpt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DetailContext {
+    pub(crate) source: DetailSource,
+    pub(crate) system_prompt: String,
+    pub(crate) tools_enabled: bool,
+    pub(crate) tool_ids: Option<Vec<String>>,
+    pub(crate) messages: Vec<ChatMessage>,
+}
+
+impl DetailSource {
+    pub(crate) fn assistant_id(&self) -> &str {
+        &self.assistant_id
+    }
+    pub(crate) fn chat_id(&self) -> &str {
+        &self.chat_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -750,6 +782,131 @@ pub fn create_default_conversation(
     })
 }
 
+/// Reuse one sidebar conversation per source answer. Its immutable history
+/// snapshot keeps the same model-input prefix for every detailed question.
+#[tauri::command]
+pub fn create_detail_conversation(
+    app: AppHandle,
+    source_assistant_id: String,
+    source_chat_id: String,
+    source_message_id: String,
+    provider_id: Option<String>,
+    model_id: Option<String>,
+) -> Result<Conversation, String> {
+    let source_dir = conversation_dir(&app, None, &source_assistant_id, &source_chat_id)?;
+    let source_messages = load_messages(&source_dir);
+    let source_index = source_messages
+        .iter()
+        .position(|message| message.id == source_message_id && message.role == "assistant")
+        .ok_or_else(|| "要追问的回答不存在。".to_string())?;
+    let source_answer = &source_messages[source_index];
+    let source_conversation: Conversation = read_json(&source_dir.join(CONVERSATION_FILE))?;
+    let (_, system_prompt) = assistant_profile(&app, None, &source_assistant_id)?;
+    let (tools_enabled, tool_ids) = assistant_tool_config(&app, None, &source_assistant_id)?;
+
+    ensure_default_assistant(&app, Some("chat"))?;
+    let existing = list_conversations(
+        app.clone(),
+        Some("chat".to_string()),
+        DEFAULT_ASSISTANT_ID.to_string(),
+    )?;
+    if let Some(conversation) = existing.into_iter().find(|conversation| {
+        conversation.detail_source.as_ref().is_some_and(|source| {
+            source.assistant_id == source_assistant_id
+                && source.chat_id == source_chat_id
+                && source.message_id == source_message_id
+        })
+    }) {
+        return Ok(conversation);
+    }
+
+    let excerpt = source_answer
+        .content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(180)
+        .collect();
+    let source = DetailSource {
+        assistant_id: source_assistant_id,
+        chat_id: source_chat_id,
+        message_id: source_message_id.clone(),
+        excerpt,
+    };
+    let mut snapshot = source_messages[..=source_index].to_vec();
+    let group_id = source_answer
+        .response_group_id
+        .as_deref()
+        .unwrap_or(&source_answer.id);
+    for message in &mut snapshot {
+        if message.role == "assistant"
+            && message.response_group_id.as_deref().unwrap_or(&message.id) == group_id
+        {
+            message.selected_for_context = Some(message.id == source_message_id);
+        }
+    }
+    let answer_number = snapshot
+        .iter()
+        .filter(|message| {
+            message.role == "assistant" && message.selected_for_context != Some(false)
+        })
+        .count();
+    let detail_context = DetailContext {
+        source: source.clone(),
+        system_prompt,
+        tools_enabled,
+        tool_ids,
+        messages: snapshot,
+    };
+
+    let source_title = source_conversation.title.trim();
+    let title = format!(
+        "追问 · {} · 回答 {answer_number}",
+        source_title.chars().take(18).collect::<String>()
+    );
+    let mut conversation = create_conversation(
+        app.clone(),
+        Some("chat".to_string()),
+        DEFAULT_ASSISTANT_ID.to_string(),
+        title,
+    )?;
+    let detail_dir = conversation_dir(&app, Some("chat"), DEFAULT_ASSISTANT_ID, &conversation.id)?;
+    let model = provider_id
+        .filter(|value| !value.is_empty())
+        .zip(model_id.filter(|value| !value.is_empty()))
+        .or_else(|| {
+            source_conversation
+                .provider_id
+                .zip(source_conversation.model_id)
+        });
+    if let Some((provider_id, model_id)) = model {
+        conversation.provider_id = Some(provider_id);
+        conversation.model_id = Some(model_id);
+    }
+    conversation.detail_source = Some(source);
+    write_json(&detail_dir.join(DETAIL_CONTEXT_FILE), &detail_context)?;
+    write_json(&detail_dir.join(CONVERSATION_FILE), &conversation)?;
+    Ok(conversation)
+}
+
+pub(crate) fn load_detail_context(
+    app: &AppHandle,
+    scope: Option<&str>,
+    assistant_id: &str,
+    chat_id: &str,
+) -> Result<Option<DetailContext>, String> {
+    if scope != Some("chat") || assistant_id != DEFAULT_ASSISTANT_ID {
+        return Ok(None);
+    }
+    let path = conversation_dir(app, scope, assistant_id, chat_id)?.join(DETAIL_CONTEXT_FILE);
+    if path.exists() {
+        read_json(&path).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 /// Configure the system prompt and model inherited by ordinary conversations
 /// created from "全部对话". Null model values inherit the global default.
 #[tauri::command]
@@ -810,6 +967,7 @@ pub fn create_conversation(
         provider_id,
         model_id,
         group_id: None,
+        detail_source: None,
         created_at: timestamp,
         updated_at: timestamp,
         last_message_at: None,
@@ -1416,6 +1574,7 @@ mod tests {
             provider_id: None,
             model_id: None,
             group_id: None,
+            detail_source: None,
             created_at: 100,
             updated_at: 500,
             last_message_at: None,

@@ -61,10 +61,18 @@ export interface Conversation {
   providerId?: string | null;
   modelId?: string | null;
   groupId?: string | null;
+  detailSource?: DetailSource | null;
   createdAt: number;
   updatedAt: number;
   /** Timestamp of the newest persisted user/assistant message. */
   lastMessageAt?: number | null;
+}
+
+export interface DetailSource {
+  assistantId: string;
+  chatId: string;
+  messageId: string;
+  excerpt: string;
 }
 
 /** A conversation plus the assistant it belongs to (for the "全部对话" list). */
@@ -487,6 +495,55 @@ export async function createDefaultConversation(
   ensurePreviewDefaultAssistant();
   const conversation = await createConversation(DEFAULT_ASSISTANT_ID, title, scope);
   return { ...conversation, assistantId: DEFAULT_ASSISTANT_ID, assistantName: "默认助手" };
+}
+
+export async function createDetailConversation(
+  sourceAssistantId: string,
+  sourceChatId: string,
+  sourceMessageId: string,
+  providerId?: string | null,
+  modelId?: string | null,
+): Promise<Conversation> {
+  if (isTauri()) {
+    return invoke<Conversation>("create_detail_conversation", {
+      sourceAssistantId,
+      sourceChatId,
+      sourceMessageId,
+      providerId,
+      modelId,
+    });
+  }
+  const existing = (preview.conversations[DEFAULT_ASSISTANT_ID] ?? []).find(
+    (conversation) =>
+      conversation.detailSource?.assistantId === sourceAssistantId &&
+      conversation.detailSource.chatId === sourceChatId &&
+      conversation.detailSource.messageId === sourceMessageId,
+  );
+  if (existing) return existing;
+  const answer = (preview.messages[previewChatKey(sourceAssistantId, sourceChatId)] ?? []).find(
+    (message) => message.id === sourceMessageId && message.role === "assistant",
+  );
+  if (!answer) throw new Error("要追问的回答不存在。");
+  const sourceConversation = (preview.conversations[sourceAssistantId] ?? []).find(
+    (conversation) => conversation.id === sourceChatId,
+  );
+  const conversation = await createDefaultConversation(
+    `追问 · ${(sourceConversation?.title ?? "回答").slice(0, 28)}`,
+    "chat",
+  );
+  conversation.detailSource = {
+    assistantId: sourceAssistantId,
+    chatId: sourceChatId,
+    messageId: sourceMessageId,
+    excerpt: answer.content.replace(/\s+/g, " ").slice(0, 180),
+  };
+  conversation.providerId = providerId ?? sourceConversation?.providerId ?? null;
+  conversation.modelId = modelId ?? sourceConversation?.modelId ?? null;
+  const stored = (preview.conversations[DEFAULT_ASSISTANT_ID] ?? []).find(
+    (item) => item.id === conversation.id,
+  );
+  if (stored) Object.assign(stored, conversation);
+  return conversation;
 }
 
 export async function createConversation(

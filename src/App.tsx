@@ -64,6 +64,8 @@ import {
 import { ConversationAssistantPicker } from "./chat/AssistantPicker";
 import { ConversationModelPicker } from "./chat/ModelPicker";
 import { AiChatPanel } from "./chat/AiChatPanel";
+import { createDetailConversation, type Conversation } from "./chat/api";
+import { subscribeDetailInquiry } from "./chat/detailInquiry";
 import { ChatSettings } from "./chat/ChatSettings";
 import { useChat, type ChatData } from "./chat/useChat";
 import { ProvidersSettings } from "./providers/ProvidersSettings";
@@ -1178,6 +1180,13 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
   const [collectionOpen, setCollectionOpen] = useState(readStoredCollectionOpen);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(readStoredSidebarWidth);
+  const [detailFocus, setDetailFocus] = useState<{
+    conversation: Conversation;
+    quote: string;
+    nonce: number;
+  } | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const detailFocusNonce = useRef(0);
   const [assistantEditor, setAssistantEditor] = useState<
     | { kind: "new" }
     | { kind: "assistant"; assistantId: string }
@@ -1189,6 +1198,30 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
   const activeSection = activeTab?.section ?? "chat";
   // Which tabs carry an AI-chat sidebar (finance has its own chat; settings none).
   const sidebarScope = SIDEBAR_SECTIONS.has(activeSection) ? activeSection : null;
+  useEffect(
+    () =>
+      subscribeDetailInquiry((request) => {
+        setSidebarOpen(true);
+        setDetailError(null);
+        void createDetailConversation(
+          request.assistantId,
+          request.chatId,
+          request.messageId,
+          request.providerId,
+          request.modelId,
+        )
+          .then((conversation) => {
+            detailFocusNonce.current += 1;
+            setDetailFocus({
+              conversation,
+              quote: request.quote,
+              nonce: detailFocusNonce.current,
+            });
+          })
+          .catch((error) => setDetailError(String(error)));
+      }),
+    [],
+  );
   const sidebarContext = useMemo(
     () =>
       sidebarScope === "chat" && activeTab?.conversationAssistantId && activeTab.conversationId
@@ -1818,6 +1851,8 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
                 <AiChatPanel
                   accent={accentFor(sidebarScope)}
                   contextSource={effectiveSidebarContext}
+                  detailError={sidebarScope === "chat" ? detailError : null}
+                  detailFocus={sidebarScope === "chat" ? detailFocus : null}
                   key={sidebarScope}
                   onBalance={providers.balance}
                   providers={providers.providers}
