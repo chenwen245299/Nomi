@@ -13,6 +13,7 @@ import { RiChatAiLine, RiCheckLine, RiResetLeftLine, RiSave3Line } from "@remixi
 import { accentFor, cardShadow, motion, useTheme, type Accent, type Theme } from "../theme";
 import { findDefaultModel, isChatModel, type Provider, type ProviderModel } from "../providers/api";
 import { DEFAULT_TITLE_GENERATION_PROMPT, getChatSettings, saveChatSettings } from "./api";
+import { ReadAloudSettings } from "../tts/ReadAloudSettings";
 
 type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
 type ModelOption = { provider: Provider; model: ProviderModel; value: string };
@@ -339,6 +340,8 @@ export function ChatSettings({ providers }: { providers: Provider[] }) {
         </View>
         {error ? <Text style={styles.error}>{error}</Text> : null}
       </View>
+
+      <ReadAloudSettings providers={providers} />
     </ScrollView>
   );
 }

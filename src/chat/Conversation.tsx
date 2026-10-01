@@ -56,6 +56,7 @@ import {
   RiThumbUpLine,
   RiToolsFill,
   RiVideoLine,
+  RiVolumeUpLine,
 } from "@remixicon/react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -67,6 +68,7 @@ import { accentFor, motion, useTheme, type Accent, type Theme } from "../theme";
 import { BrandIcon } from "../providers/BrandIcon";
 import { modelIconUrl, providerIconUrl } from "../providers/icons";
 import { UserAvatar } from "../profile/UserAvatar";
+import { toggleSpeech, useSpeechState } from "../tts/speech";
 import { isChatModel, type Provider } from "../providers/api";
 import {
   downloadAttachment,
@@ -81,7 +83,7 @@ import {
 } from "./api";
 import { useConversation, type DraftToolCall, type StreamingMessage } from "./useConversation";
 import type { ConversationContextSource } from "./chatRuntime";
-import { renderMarkdown } from "./markdown";
+import { markdownToPlainText, renderMarkdown } from "./markdown";
 import { requestDetailInquiry } from "./detailInquiry";
 import {
   defaultThinkingEffort,
@@ -1944,6 +1946,56 @@ function AnswerAction({
   );
 }
 
+/** Read-aloud toggle for one answer. Shares global playback state so only one
+ *  message speaks at a time; shows a spinner while synthesising, a stop glyph
+ *  while playing. Unconfigured voice models surface a toast via `toggleSpeech`. */
+function ReadAloudAction({
+  messageId,
+  text,
+  accent,
+  styles,
+  theme,
+}: {
+  messageId: string;
+  text: string;
+  accent: Accent;
+  styles: Styles;
+  theme: Theme;
+}) {
+  const speech = useSpeechState();
+  const iconColor = theme.t.textTertiary;
+  const playing = speech.playingId === messageId;
+  const pending = speech.pendingId === messageId;
+  const label = pending ? "正在合成语音…" : playing ? "停止朗读" : "朗读";
+  const icon = pending ? (
+    <div className="nomi-tool-running-spinner">
+      <RiLoader4Line color={iconColor} size={13} />
+    </div>
+  ) : playing ? (
+    <RiStopFill color={accent.accentText} size={13} />
+  ) : (
+    <RiVolumeUpLine color={iconColor} size={13} />
+  );
+  return (
+    <div title={label}>
+      <Pressable
+        accessibilityLabel={label}
+        accessibilityRole="button"
+        onPress={() => void toggleSpeech(messageId, markdownToPlainText(text))}
+        style={({ hovered, pressed }: PressState) => [
+          styles.answerAction,
+          motion,
+          (playing || pending) && styles.answerActionActive,
+          (hovered || pressed) && styles.answerActionHover,
+          pressed && { backgroundColor: theme.t.controlPressed },
+        ]}
+      >
+        {icon}
+      </Pressable>
+    </div>
+  );
+}
+
 function providerForMessage(
   message: ChatMessage,
   providers: Provider[],
@@ -2120,6 +2172,13 @@ function AnswerSurface({
               successLabel="已复制"
               label="复制回答"
               onPress={() => copyText(message.content)}
+              styles={styles}
+              theme={theme}
+            />
+            <ReadAloudAction
+              accent={accent}
+              messageId={message.id}
+              text={message.content}
               styles={styles}
               theme={theme}
             />
@@ -2376,6 +2435,13 @@ function SplitAnswerPanel({
               successLabel="已复制"
               label="复制回答"
               onPress={() => copyText(message.content)}
+              styles={styles}
+              theme={theme}
+            />
+            <ReadAloudAction
+              accent={accent}
+              messageId={message.id}
+              text={message.content}
               styles={styles}
               theme={theme}
             />

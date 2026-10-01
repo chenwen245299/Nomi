@@ -3,6 +3,11 @@ import Vditor from "vditor";
 import "vditor/dist/index.css";
 import "./editor.css";
 import {
+  cleanMarkdownFromEditor,
+  prepareMarkdownForEditor,
+  stabilizeEmptyTasks,
+} from "./emptyTasks";
+import {
   resolveToolbar,
   VDITOR_CDN,
   type EditorLang,
@@ -13,25 +18,6 @@ import {
 } from "./vditorAssets";
 
 type UploadHandler = NonNullable<NonNullable<VditorOptions["upload"]>["handler"]>;
-
-// Lute/Vditor does not consistently recognise a task marker with no content
-// after it when a document is parsed again. Give only those empty task lines an
-// invisible editor-side character, then remove it at every public/save boundary
-// so the Markdown file remains plain `- [ ]`.
-const EMPTY_TASK_PLACEHOLDER = "\u200B";
-const EMPTY_TASK_LINE = /^([ \t]*(?:[-+*]|\d+[.)])[ \t]+\[[ xX]\])[ \t]*(?=\r?$)/gm;
-const PLACEHOLDER_AFTER_TASK = new RegExp(
-  `^([ \\t]*(?:[-+*]|\\d+[.)])[ \\t]+\\[[ xX]\\][ \\t]*)${EMPTY_TASK_PLACEHOLDER}`,
-  "gm",
-);
-
-function prepareMarkdownForEditor(markdown: string): string {
-  return markdown.replace(EMPTY_TASK_LINE, `$1 ${EMPTY_TASK_PLACEHOLDER}`);
-}
-
-function cleanMarkdownFromEditor(markdown: string): string {
-  return markdown.replace(PLACEHOLDER_AFTER_TASK, "$1").replace(EMPTY_TASK_LINE, "$1");
-}
 
 /** One image the host resolved for an upload/paste/drop. `url` is whatever the
  * editor should reference in `![alt](url)` — normally a short local Blob URL
@@ -238,6 +224,67 @@ export function MarkdownEditor({
           return;
         }
         vditorRef.current = instance;
+        stabilizeEmptyTasks(instance.vditor.lute);
+
+        // WKWebView can report the Enter that confirms an IME candidate with
+        // isComposing=false (sometimes after compositionend). Catch it before
+        // Vditor's editable keydown handler turns it into a new paragraph.
+        let composing = false;
+        let compositionEndedAt = -Infinity;
+        let imeEnterAt = -Infinity;
+        const justFinishedComposing = () => performance.now() - compositionEndedAt < 100;
+        const onCompositionStart = (event: Event) => {
+          if (!(event.target instanceof HTMLElement) || !event.target.isContentEditable) return;
+          composing = true;
+          compositionEndedAt = -Infinity;
+        };
+        const onCompositionEnd = (event: Event) => {
+          if (!(event.target instanceof HTMLElement) || !event.target.isContentEditable) return;
+          composing = false;
+          compositionEndedAt = performance.now();
+        };
+        const onImeKeydown = (event: KeyboardEvent) => {
+          if (event.key !== "Enter" || !(event.target instanceof HTMLElement)) return;
+          if (!event.target.isContentEditable) return;
+          if (
+            !composing &&
+            !event.isComposing &&
+            event.keyCode !== 229 &&
+            !justFinishedComposing()
+          ) {
+            return;
+          }
+          imeEnterAt = performance.now();
+          // Leave the native IME confirmation alone while composition is active.
+          // If it already ended, this is the trailing Enter, so cancel its native
+          // paragraph insertion as well.
+          if (!composing && !event.isComposing && event.keyCode !== 229) {
+            event.preventDefault();
+          }
+          event.stopImmediatePropagation();
+        };
+        const onImeBeforeInput = (event: Event) => {
+          const inputEvent = event as InputEvent;
+          if (!(inputEvent.target instanceof HTMLElement) || !inputEvent.target.isContentEditable) {
+            return;
+          }
+          if (
+            inputEvent.inputType !== "insertParagraph" &&
+            inputEvent.inputType !== "insertLineBreak"
+          ) {
+            return;
+          }
+          if (
+            !composing &&
+            !inputEvent.isComposing &&
+            !justFinishedComposing() &&
+            performance.now() - imeEnterAt >= 100
+          ) {
+            return;
+          }
+          inputEvent.preventDefault();
+          inputEvent.stopImmediatePropagation();
+        };
 
         // WYSIWYG bold/italic/strike is applied with document.execCommand, which
         // leaves the browser's "typing stays bold" state on the contenteditable.
@@ -299,6 +346,7 @@ export function MarkdownEditor({
         };
         const onEditKeydown = (event: KeyboardEvent) => {
           if (!stickyFormatRef.current) return;
+          if (composing || event.isComposing || event.keyCode === 229) return;
           if (event.metaKey || event.ctrlKey || event.altKey || NAV_KEYS.has(event.key)) {
             return; // navigation / shortcut — wait for the actual content edit
           }
@@ -409,6 +457,13 @@ export function MarkdownEditor({
         const onFastBeforeInput = (event: Event) => {
           if (!wholeDocumentSelectedRef.current) return;
           const inputEvent = event as InputEvent;
+          if (inputEvent.isComposing || inputEvent.inputType.includes("Composition")) {
+            // Let the browser replace the selection across the whole IME
+            // session; replacing the document on each interim candidate loses
+            // earlier composition text and corrupts the undo stack.
+            clearWholeDocumentSelection();
+            return;
+          }
           if (inputEvent.inputType.startsWith("history")) {
             clearWholeDocumentSelection();
             return;
@@ -437,6 +492,10 @@ export function MarkdownEditor({
         };
         // Capture phase on the stable container so a mode switch (sv⇄wysiwyg) that
         // swaps the inner editable can't drop the listeners.
+        element.addEventListener("compositionstart", onCompositionStart, true);
+        element.addEventListener("compositionend", onCompositionEnd, true);
+        element.addEventListener("keydown", onImeKeydown, true);
+        element.addEventListener("beforeinput", onImeBeforeInput, true);
         element.addEventListener("input", onFormatInput, true);
         element.addEventListener("keydown", onEditKeydown, true);
         element.addEventListener("keydown", onFastSelectKeydown, true);
@@ -448,6 +507,10 @@ export function MarkdownEditor({
         document.addEventListener("selectionchange", onFastSelectionChange);
         stickyCleanupRef.current = () => {
           clearWholeDocumentSelection();
+          element.removeEventListener("compositionstart", onCompositionStart, true);
+          element.removeEventListener("compositionend", onCompositionEnd, true);
+          element.removeEventListener("keydown", onImeKeydown, true);
+          element.removeEventListener("beforeinput", onImeBeforeInput, true);
           element.removeEventListener("input", onFormatInput, true);
           element.removeEventListener("keydown", onEditKeydown, true);
           element.removeEventListener("keydown", onFastSelectKeydown, true);

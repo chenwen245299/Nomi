@@ -62,18 +62,19 @@ function completedOn(todo: Todo, day: string): boolean {
 }
 
 /**
- * Whether a todo belongs to `scope`. Open overdue work remains visible until it
- * is dealt with. A completed task only remains in 今天 / 未来七天 when it was
- * actually completed today; older completed work belongs in 已完成 instead.
+ * Whether a todo belongs to `scope`. Open overdue and undated work remains
+ * visible until it is dealt with. A completed task only remains in 今天 /
+ * 未来七天 when it was actually completed today; older completed work belongs
+ * in 已完成 instead.
  */
 export function inScope(todo: Todo, scope: TodoScope, today: string): boolean {
   switch (scope) {
     case "today":
-      return todo.done ? completedOn(todo, today) : todo.dueDate !== null && todo.dueDate <= today;
+      return todo.done ? completedOn(todo, today) : todo.dueDate === null || todo.dueDate <= today;
     case "week":
       return todo.done
         ? completedOn(todo, today)
-        : todo.dueDate !== null && todo.dueDate <= shiftKey(today, 6);
+        : todo.dueDate === null || todo.dueDate <= shiftKey(today, 6);
     case "all":
       return true;
     case "done":
@@ -91,14 +92,14 @@ function clockKey(todo: Todo): string {
   return todo.startTime ?? todo.endTime ?? "99:99";
 }
 
-/** Board order inside one quadrant: date first, then the day's 24-hour timeline.
- * Tasks without a time sit after timed tasks on the same date. */
+/** Board order inside one quadrant: unfinished tasks first, then date and the
+ * day's 24-hour timeline. Undated work follows dated work in each state. */
 export function sortForBoard(todos: Todo[]): Todo[] {
   return [...todos].sort(
     (a, b) =>
+      Number(a.done) - Number(b.done) ||
       (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99") ||
       clockKey(a).localeCompare(clockKey(b)) ||
-      Number(a.done) - Number(b.done) ||
       a.order - b.order ||
       a.createdAt - b.createdAt,
   );
@@ -200,6 +201,7 @@ export function groupForList(todos: Todo[], scope: TodoScope, today: string): To
     }
     return [
       ...group("overdue", "已逾期", overdue),
+      ...group("undated", "未安排日期", undated),
       ...[...byDay.entries()]
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([day, items]) => ({
@@ -207,28 +209,32 @@ export function groupForList(todos: Todo[], scope: TodoScope, today: string): To
           title: dayHeading(day, today),
           todos: sortForDay(items),
         })),
-      ...group("undated", "未安排日期", undated),
     ];
   }
 
   if (scope === "all") {
+    const open = rest.filter((todo) => !todo.done);
+    const done = todos.filter((todo) => todo.done);
     return [
       ...group("overdue", "已逾期", overdue),
       ...group(
         "today",
         "今天",
-        rest.filter((todo) => occupiesDay(todo, today)),
+        open.filter((todo) => occupiesDay(todo, today)),
         sortForDay,
       ),
       ...group(
         "upcoming",
         "即将到来",
-        rest.filter((todo) => todo.dueDate !== null && todo.dueDate > today),
+        open.filter((todo) => todo.dueDate !== null && todo.dueDate > today),
       ),
       ...group(
         "undated",
         "未安排日期",
-        rest.filter((todo) => todo.dueDate === null),
+        open.filter((todo) => todo.dueDate === null),
+      ),
+      ...group("completed", "已完成", done, (items) =>
+        [...items].sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)),
       ),
     ];
   }
@@ -242,8 +248,8 @@ export function groupForList(todos: Todo[], scope: TodoScope, today: string): To
 export function scopeCounts(todos: Todo[], today: string): Record<TodoScope, number> {
   const open = todos.filter((todo) => !todo.done);
   return {
-    today: open.filter((todo) => todo.dueDate !== null && todo.dueDate <= today).length,
-    week: open.filter((todo) => todo.dueDate !== null && todo.dueDate <= shiftKey(today, 6)).length,
+    today: open.filter((todo) => inScope(todo, "today", today)).length,
+    week: open.filter((todo) => inScope(todo, "week", today)).length,
     all: open.length,
     done: todos.filter((todo) => todo.done).length,
     q1: open.filter((todo) => todo.quadrant === 1).length,
@@ -287,7 +293,7 @@ export function scopeSubtitle(scope: TodoScope, today: string): string {
     case "today":
       return fullDateLabel(today);
     case "week":
-      return "今天起七天内到期的待办";
+      return "今天起七天内到期的待办，包括未安排日期的";
     case "done":
       return "已经完成的待办";
     default:

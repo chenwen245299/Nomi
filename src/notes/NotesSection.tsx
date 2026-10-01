@@ -162,12 +162,14 @@ function applyNoteViewMode(
   if (previewActive) previewButton?.click();
   if (mode === "wysiwyg") {
     instance.setPreviewMode("editor");
-    // Vditor's same-mode early return does not reconcile the inactive surfaces
-    // after async initialisation. A short round-trip guarantees one clean pane.
+    // setPreviewMode("editor") always shows the source pane, even when the
+    // current editor is WYSIWYG. Hide that pane directly instead of switching
+    // modes twice, which reparses the note and resets the caret/undo state.
     if (instance.getCurrentMode() === "wysiwyg") {
-      toolbarHost.querySelector<HTMLButtonElement>('button[data-mode="sv"]')?.click();
+      if (instance.vditor.sv) instance.vditor.sv.element.style.display = "none";
+    } else {
+      toolbarHost.querySelector<HTMLButtonElement>('button[data-mode="wysiwyg"]')?.click();
     }
-    toolbarHost.querySelector<HTMLButtonElement>('button[data-mode="wysiwyg"]')?.click();
     return;
   }
 

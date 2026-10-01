@@ -95,6 +95,43 @@ function paperIdUnderPointer(target: EventTarget | null): string | null {
   );
 }
 
+function linkTargetAt(
+  root: Element,
+  clientX: number,
+  clientY: number,
+  sourceId: string,
+): { id: string; side: PaperEdgeSide } | null {
+  const underPointer = document.elementFromPoint(clientX, clientY);
+  const directNode = underPointer?.closest<HTMLElement>("[data-paper-id]");
+  if (directNode?.dataset.paperId && directNode.dataset.paperId !== sourceId) {
+    const handleSide =
+      underPointer?.closest<HTMLElement>("[data-connect-handle]")?.dataset.connectSide;
+    return {
+      id: directNode.dataset.paperId,
+      side: isPaperEdgeSide(handleSide)
+        ? handleSide
+        : nearestNodeSide(directNode, clientX, clientY),
+    };
+  }
+
+  // Pointer capture retargets pointer events to the canvas. Accept a release
+  // over the visible handle even when another overlay wins elementFromPoint.
+  let nearest: { id: string; side: PaperEdgeSide; distance: number } | null = null;
+  for (const node of root.querySelectorAll<HTMLElement>("[data-paper-id]")) {
+    const id = node.dataset.paperId;
+    if (!id || id === sourceId) continue;
+    const side = nearestNodeSideWithin(node, clientX, clientY, 24);
+    if (!side) continue;
+    const rect = node.getBoundingClientRect();
+    const distance = Math.hypot(
+      Math.max(rect.left - clientX, 0, clientX - rect.right),
+      Math.max(rect.top - clientY, 0, clientY - rect.bottom),
+    );
+    if (!nearest || distance < nearest.distance) nearest = { id, side, distance };
+  }
+  return nearest ? { id: nearest.id, side: nearest.side } : null;
+}
+
 interface Transform {
   x: number;
   y: number;
@@ -199,6 +236,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
   const [linkCursor, setLinkCursor] = useState<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [hoveredPaperId, setHoveredPaperId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
   const dragRef = useRef<DragSession | null>(null);
   // Screen-space edge polylines, read by the context-menu hit test (which runs
@@ -209,6 +247,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
   // native dblclick to the viewport (not the node), so we time clicks ourselves.
   const lastClickRef = useRef<{ id: string; t: number } | null>(null);
   const [linkFrom, setLinkFrom] = useState<{ id: string; side: PaperEdgeSide } | null>(null);
+  const [linkTarget, setLinkTarget] = useState<{ id: string; side: PaperEdgeSide } | null>(null);
   const [dockDrag, setDockDrag] = useState<{
     edgeId: string;
     end: EdgeEnd;
@@ -237,6 +276,27 @@ export function GraphCanvas(props: GraphCanvasProps) {
   useEffect(() => {
     latest.current = { papers, edges, transform, size, props };
   });
+
+  useEffect(() => {
+    if (!selectedEdgeId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || target.closest("input, textarea, [contenteditable='true']"))
+      ) {
+        return;
+      }
+      if (!latest.current.edges.some((edge) => edge.id === selectedEdgeId)) return;
+      event.preventDefault();
+      latest.current.props.onDeleteEdge(selectedEdgeId);
+      setSelectedEdgeId(null);
+      setMenu(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedEdgeId]);
 
   const paperById = useMemo(() => {
     const map = new Map<string, Paper>();
@@ -305,10 +365,19 @@ export function GraphCanvas(props: GraphCanvasProps) {
     const rect = el.getBoundingClientRect();
     const sx = event.clientX - rect.left;
     const sy = event.clientY - rect.top;
-    const target = event.target as HTMLElement;
+    const target = event.target as Element;
     // Floating controls (＋ / zoom / fit / legend) handle their own clicks — don't
     // capture the pointer for them, or the capture steals their click event.
     if (target.closest("button, [data-graph-ui]")) return;
+    const clickedEdgeId = target
+      .closest("[data-graph-edge-id]")
+      ?.getAttribute("data-graph-edge-id");
+    if (clickedEdgeId) {
+      setSelectedEdgeId(clickedEdgeId);
+      setMenu({ kind: "edge", id: clickedEdgeId, x: event.clientX, y: event.clientY });
+      latest.current.props.onSelect(null);
+      return;
+    }
     const handleEl = target.closest<HTMLElement>("[data-connect-handle]");
     const endpointEl = target.closest<HTMLElement>("[data-edge-endpoint]");
     const nodeEl = target.closest("[data-paper-id]") as HTMLElement | null;
@@ -316,6 +385,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
     const fromSide = handleEl?.dataset.connectSide;
 
     setMenu(null);
+    setSelectedEdgeId(null);
     el.setPointerCapture(event.pointerId);
 
     const edgeId = endpointEl?.dataset.edgeEndpoint;
@@ -356,6 +426,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
         fromSide,
       };
       setLinkFrom({ id: nodeId, side: fromSide });
+      setLinkTarget(null);
       setLinkCursor({ x: sx, y: sy });
       return;
     }
@@ -419,6 +490,12 @@ export function GraphCanvas(props: GraphCanvasProps) {
       latest.current.props.onMoveLocal(drag.nodeId, wx, wy);
     } else if (drag.mode === "link") {
       setLinkCursor({ x: sx, y: sy });
+      if (drag.fromId) {
+        const target = linkTargetAt(el, event.clientX, event.clientY, drag.fromId);
+        setLinkTarget((current) =>
+          current?.id === target?.id && current?.side === target?.side ? current : target,
+        );
+      }
     } else if (drag.mode === "edge-endpoint" && drag.edgeNodeId) {
       setLinkCursor({ x: sx, y: sy });
       const node = findPaperNode(el, drag.edgeNodeId);
@@ -458,20 +535,15 @@ export function GraphCanvas(props: GraphCanvasProps) {
         p.onCommitMove(drag.nodeId, wx, wy);
       }
     } else if (drag.mode === "link" && drag.fromId && drag.fromSide) {
-      const hitElement = document.elementFromPoint(event.clientX, event.clientY);
-      const hit = hitElement?.closest("[data-paper-id]");
-      const toId = hit?.getAttribute("data-paper-id") ?? null;
-      const hitSide =
-        hitElement?.closest<HTMLElement>("[data-connect-handle]")?.dataset.connectSide;
-      const toSide = isPaperEdgeSide(hitSide)
-        ? hitSide
-        : hit
-          ? nearestNodeSide(hit, event.clientX, event.clientY)
-          : null;
-      if (toId && toId !== drag.fromId && toSide) {
-        p.onAddEdge(drag.fromId, toId, drag.fromSide, toSide);
+      const viewport = viewportRef.current;
+      const target = viewport
+        ? linkTargetAt(viewport, event.clientX, event.clientY, drag.fromId)
+        : null;
+      if (target) {
+        p.onAddEdge(drag.fromId, target.id, drag.fromSide, target.side);
       }
       setLinkFrom(null);
+      setLinkTarget(null);
       setLinkCursor(null);
     } else if (drag.mode === "edge-endpoint" && drag.edgeId && drag.edgeEnd && drag.edgeNodeId) {
       const edge = latest.current.edges.find((item) => item.id === drag.edgeId);
@@ -495,6 +567,19 @@ export function GraphCanvas(props: GraphCanvasProps) {
     }
   }, []);
 
+  const onPointerCancel = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    const viewport = viewportRef.current;
+    if (viewport?.hasPointerCapture(event.pointerId))
+      viewport.releasePointerCapture(event.pointerId);
+    setLinkFrom(null);
+    setLinkTarget(null);
+    setLinkCursor(null);
+    setDockDrag(null);
+    setDockTargetSide(null);
+  }, []);
+
   const onContextMenu = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       event.preventDefault();
@@ -505,9 +590,19 @@ export function GraphCanvas(props: GraphCanvasProps) {
       const sy = event.clientY - rect.top;
       const { transform: tf } = latest.current;
 
-      const nodeEl = (event.target as HTMLElement).closest("[data-paper-id]");
+      const target = event.target as Element;
+      const explicitEdgeId =
+        target.closest("[data-graph-edge-id]")?.getAttribute("data-graph-edge-id") ??
+        target.closest("[data-edge-endpoint]")?.getAttribute("data-edge-endpoint");
+      if (explicitEdgeId) {
+        setSelectedEdgeId(explicitEdgeId);
+        setMenu({ kind: "edge", id: explicitEdgeId, x: event.clientX, y: event.clientY });
+        return;
+      }
+      const nodeEl = target.closest("[data-paper-id]");
       const nodeId = nodeEl?.getAttribute("data-paper-id");
       if (nodeId) {
+        setSelectedEdgeId(null);
         setMenu({ kind: "node", id: nodeId, x: event.clientX, y: event.clientY });
         return;
       }
@@ -524,9 +619,11 @@ export function GraphCanvas(props: GraphCanvasProps) {
         if (d < 14 && (!best || d < best.d)) best = { id: edge.id, d };
       }
       if (best) {
+        setSelectedEdgeId(best.id);
         setMenu({ kind: "edge", id: best.id, x: event.clientX, y: event.clientY });
         return;
       }
+      setSelectedEdgeId(null);
       const world = toWorld(sx, sy, tf);
       setMenu({
         kind: "canvas",
@@ -594,11 +691,12 @@ export function GraphCanvas(props: GraphCanvasProps) {
           x: transform.x + k * pt.x,
           y: transform.y + k * pt.y,
         }));
-        const active = selectedId === edge.from || selectedId === edge.to;
+        const active =
+          selectedEdgeId === edge.id || selectedId === edge.from || selectedId === edge.to;
         return { edge, points, active };
       })
       .filter((v): v is NonNullable<typeof v> => v !== null);
-  }, [edges, routes, transform, selectedId]);
+  }, [edges, routes, transform, selectedEdgeId, selectedId]);
 
   useEffect(() => {
     renderedRef.current = rendered;
@@ -639,7 +737,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
       onPointerMove={onPointerMove}
       onPointerLeave={() => setHoveredPaperId(null)}
       onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerCancel={onPointerCancel}
       onContextMenu={onContextMenu}
       style={{
         position: "relative",
@@ -656,7 +754,8 @@ export function GraphCanvas(props: GraphCanvasProps) {
     >
       <style>{`
         .nomi-paper-node .nomi-connect-handle { opacity: 0; transition: opacity 120ms ease, box-shadow 120ms ease; }
-        .nomi-paper-node[data-hovered="true"] .nomi-connect-handle { opacity: 1; }
+        .nomi-paper-node[data-hovered="true"] .nomi-connect-handle,
+        .nomi-paper-node[data-link-target="true"] .nomi-connect-handle { opacity: 1; }
         .nomi-connect-handle-dot {
           align-items: center;
           background: ${accent.accent};
@@ -672,15 +771,21 @@ export function GraphCanvas(props: GraphCanvasProps) {
         }
         .nomi-connect-handle-plus { opacity: 0; transform: scale(0.65); transition: opacity 80ms ease, transform 120ms ease; }
         .nomi-connect-handle:hover .nomi-connect-handle-dot,
-        .nomi-connect-handle[data-dock-active="true"] .nomi-connect-handle-dot {
+        .nomi-connect-handle[data-dock-active="true"] .nomi-connect-handle-dot,
+        .nomi-connect-handle[data-link-active="true"] .nomi-connect-handle-dot {
           border-width: 2px;
           box-shadow: 0 0 0 4px rgba(${accent.rgb},0.14), 0 2px 6px rgba(16,24,36,0.22);
           height: 22px;
           width: 22px;
         }
         .nomi-connect-handle:hover .nomi-connect-handle-plus,
-        .nomi-connect-handle[data-dock-active="true"] .nomi-connect-handle-plus { opacity: 1; transform: scale(1); }
-        .nomi-paper-node:hover { z-index: 5; }
+        .nomi-connect-handle[data-dock-active="true"] .nomi-connect-handle-plus,
+        .nomi-connect-handle[data-link-active="true"] .nomi-connect-handle-plus { opacity: 1; transform: scale(1); }
+        /* Lift a hovered node above the edge-endpoint layer (z-index 7) so its
+           connect handles stay grabbable even on a side that already has an
+           edge — otherwise the overlapping endpoint swallows the press and a new
+           connection can never be started from that side. */
+        .nomi-paper-node:hover { z-index: 8; }
         .nomi-edge-endpoint { transition: opacity 120ms ease; }
         .nomi-edge-endpoint-dot {
           background: ${t.cardSurface};
@@ -729,9 +834,24 @@ export function GraphCanvas(props: GraphCanvasProps) {
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
-              <polygon points={`${end.x},${end.y} ${ax1},${ay1} ${ax2},${ay2}`} fill={color} />
+              <path
+                data-graph-edge-id={edge.id}
+                d={orthoPath(points, cornerRadius)}
+                fill="none"
+                pointerEvents="stroke"
+                stroke="transparent"
+                strokeWidth={18}
+                style={{ cursor: "pointer" }}
+              />
+              <polygon
+                data-graph-edge-id={edge.id}
+                points={`${end.x},${end.y} ${ax1},${ay1} ${ax2},${ay2}`}
+                fill={color}
+                pointerEvents="auto"
+                style={{ cursor: "pointer" }}
+              />
               {edge.label ? (
-                <g>
+                <g data-graph-edge-id={edge.id} pointerEvents="auto" style={{ cursor: "pointer" }}>
                   <rect
                     x={mid.x - edge.label.length * 6 - 6}
                     y={mid.y - 10}
@@ -779,12 +899,14 @@ export function GraphCanvas(props: GraphCanvasProps) {
           const selected = paper.id === selectedId;
           const dockingHere = dockDrag?.nodeId === paper.id;
           const hovered = hoveredPaperId === paper.id;
+          const availableTarget = !!linkFrom && linkFrom.id !== paper.id;
           return (
             <div
               key={paper.id}
               ref={(el) => measureNode(paper.id, el)}
               data-paper-id={paper.id}
               data-hovered={hovered ? "true" : undefined}
+              data-link-target={availableTarget ? "true" : undefined}
               className="nomi-paper-node"
               style={{
                 position: "absolute",
@@ -892,6 +1014,9 @@ export function GraphCanvas(props: GraphCanvasProps) {
                     data-connect-handle
                     data-connect-side={side}
                     data-dock-active={dockingHere && dockTargetSide === side ? "true" : undefined}
+                    data-link-active={
+                      linkTarget?.id === paper.id && linkTarget.side === side ? "true" : undefined
+                    }
                     className="nomi-connect-handle"
                     title={
                       dockingHere
@@ -907,7 +1032,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
                       alignItems: "center",
                       justifyContent: "center",
                       cursor: "crosshair",
-                      pointerEvents: hovered ? "auto" : "none",
+                      pointerEvents: hovered || availableTarget ? "auto" : "none",
                       transform: `scale(${1 / transform.k})`,
                       transformOrigin: "center",
                     }}
@@ -932,7 +1057,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
           ];
           return endpoints.map(({ end, nodeId, point }) => {
             const dragging = dockDrag?.edgeId === edge.id && dockDrag.end === end;
-            const visible = hoveredPaperId === nodeId || dragging;
+            const visible = selectedEdgeId === edge.id || dragging;
             return (
               <div
                 key={`${edge.id}:${end}`}
@@ -1130,7 +1255,10 @@ export function GraphCanvas(props: GraphCanvasProps) {
                 p.onSetStatus(menu.id, action.slice("status:".length) as PaperStatus);
             } else if (menu.kind === "edge") {
               if (action === "rename") p.onRenameEdge(menu.id);
-              else if (action === "delete") p.onDeleteEdge(menu.id);
+              else if (action === "delete") {
+                setSelectedEdgeId(null);
+                p.onDeleteEdge(menu.id);
+              }
             } else if (menu.kind === "canvas" && action === "create") {
               p.onCreateAt(menu.worldX, menu.worldY);
             }

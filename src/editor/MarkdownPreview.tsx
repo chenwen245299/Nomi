@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import Vditor from "vditor";
 import "vditor/dist/index.css";
 import "./editor.css";
+import { prepareMarkdownForEditor } from "./emptyTasks";
 import { VDITOR_CDN, type EditorLang } from "./vditorAssets";
 
 export interface MarkdownPreviewProps {
@@ -30,7 +31,7 @@ export function MarkdownPreview({
     if (!element) {
       return;
     }
-    void Vditor.preview(element, value ?? "", {
+    void Vditor.preview(element, prepareMarkdownForEditor(value ?? ""), {
       mode: "light",
       cdn: VDITOR_CDN,
       lang,

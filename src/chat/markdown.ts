@@ -49,3 +49,15 @@ export function renderMarkdown(md: string): string {
   const raw = marked.parse(md ?? "", { async: false }) as string;
   return DOMPurify.sanitize(raw);
 }
+
+/**
+ * Flatten assistant markdown to readable plain text for text-to-speech, so the
+ * reader does not pronounce `#`, `*`, link syntax or table pipes. Rendering to
+ * HTML first (reusing the sanitiser) then taking `textContent` keeps code and
+ * list text while dropping the markup.
+ */
+export function markdownToPlainText(md: string): string {
+  if (typeof document === "undefined") return md ?? "";
+  const doc = new DOMParser().parseFromString(renderMarkdown(md ?? ""), "text/html");
+  return (doc.body.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
+}
