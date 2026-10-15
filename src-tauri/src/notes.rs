@@ -1,7 +1,9 @@
 use base64::Engine;
 use serde::Serialize;
 use std::{
+    collections::HashMap,
     fs,
+    io::Write,
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -382,12 +384,16 @@ pub fn delete_folder(app: AppHandle, path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn move_node(app: AppHandle, path: String, new_parent: String) -> Result<NoteNode, String> {
     let root = notes_root(&app)?;
-    let source = resolve(&root, &path)?;
-    if !source.exists() {
+    move_node_under(&root, &path, &new_parent)
+}
+
+fn move_node_under(root: &Path, path: &str, new_parent: &str) -> Result<NoteNode, String> {
+    let source = resolve(root, path)?;
+    if source == root || !source.exists() {
         return Err("要移动的项目不存在。".into());
     }
     let is_dir = source.is_dir();
-    let dest_dir = require_dir(&root, &new_parent)?;
+    let dest_dir = require_dir(root, new_parent)?;
 
     if is_dir && dest_dir.starts_with(&source) {
         return Err("无法把文件夹移动到它自身或子目录中。".into());
@@ -400,18 +406,134 @@ pub fn move_node(app: AppHandle, path: String, new_parent: String) -> Result<Not
     // collide the item with itself and append a spurious "-2".
     if source.parent() == Some(dest_dir.as_path()) {
         return node_for(
-            &root,
-            &join_rel(&new_parent, &file_name),
+            root,
+            &join_rel(new_parent, &file_name),
             if is_dir { "folder" } else { "note" },
         );
     }
     let target = unique_name(&dest_dir, &file_name);
-    fs::rename(&source, dest_dir.join(&target)).map_err(|error| format!("无法移动：{error}"))?;
+    let destination = dest_dir.join(&target);
+    if is_dir {
+        fs::rename(&source, &destination).map_err(|error| format!("无法移动：{error}"))?;
+    } else {
+        move_note_file(&source, &destination)?;
+    }
     node_for(
-        &root,
-        &join_rel(&new_parent, &target),
+        root,
+        &join_rel(new_parent, &target),
         if is_dir { "folder" } else { "note" },
     )
+}
+
+/// Match the inline images supported by the editor's asset bridge. Preserve alt
+/// text, angle brackets, whitespace and titles while replacing only image URLs.
+fn map_image_urls(
+    markdown: &str,
+    mut map: impl FnMut(&str) -> Result<String, String>,
+) -> Result<String, String> {
+    let mut output = String::with_capacity(markdown.len());
+    let mut remaining = markdown;
+    while let Some(start) = remaining.find("![") {
+        output.push_str(&remaining[..start + 2]);
+        remaining = &remaining[start + 2..];
+        let Some(alt_end) = remaining.find(']') else {
+            break;
+        };
+        if !remaining[alt_end..].starts_with("](") {
+            continue;
+        }
+        let inner_start = alt_end + 2;
+        let Some(end) = remaining[inner_start..].find(')') else {
+            break;
+        };
+        let inner = &remaining[inner_start..inner_start + end];
+        let trimmed = inner.trim_start();
+        let leading = inner.len() - trimmed.len();
+        let (url_start, url_end) = if let Some(angled) = trimmed.strip_prefix('<') {
+            let Some(end) = angled.find('>') else {
+                output.push_str(&remaining[..inner_start + end + 1]);
+                remaining = &remaining[inner_start + end + 1..];
+                continue;
+            };
+            (leading + 1, leading + 1 + end)
+        } else {
+            (
+                leading,
+                leading + trimmed.find(char::is_whitespace).unwrap_or(trimmed.len()),
+            )
+        };
+        output.push_str(&remaining[..inner_start + url_start]);
+        output.push_str(&map(&inner[url_start..url_end])?);
+        output.push_str(&remaining[inner_start + url_end..inner_start + end + 1]);
+        remaining = &remaining[inner_start + end + 1..];
+    }
+    output.push_str(remaining);
+    Ok(output)
+}
+
+/// Images are shared by sibling notes. Copy the moved note's images, leaving
+/// originals for the remaining notes, and disambiguate names at the destination.
+/// A failed copy/write leaves the original note intact and removes partial files.
+fn move_note_file(source: &Path, destination: &Path) -> Result<(), String> {
+    let original = fs::read_to_string(source).map_err(|error| format!("无法读取笔记：{error}"))?;
+    let source_dir = source.parent().ok_or("无法解析笔记目录。")?;
+    let assets = destination
+        .parent()
+        .ok_or("无法解析目标目录。")?
+        .join(ASSETS_DIR);
+    let mut copied = Vec::new();
+    let mut mapped = HashMap::<String, String>::new();
+    let mut created_note = false;
+    let result = (|| {
+        let updated = map_image_urls(&original, |url| {
+            if let Some(saved) = mapped.get(url) {
+                return Ok(saved.clone());
+            }
+            if url.is_empty() || url.contains(':') || url.starts_with('/') {
+                return Ok(url.to_string());
+            }
+            let image = match resolve(source_dir, url) {
+                Ok(image) if image.is_file() => image,
+                _ => return Ok(url.to_string()),
+            };
+            fs::create_dir_all(&assets).map_err(|error| format!("无法创建图片目录：{error}"))?;
+            let name = image
+                .file_name()
+                .ok_or("无法解析图片名称。")?
+                .to_string_lossy();
+            let target = unique_name(&assets, &asset_file_name(&name));
+            let target_path = assets.join(&target);
+            copied.push(target_path.clone());
+            fs::copy(image, target_path).map_err(|error| format!("无法复制笔记图片：{error}"))?;
+            let rel = format!("{ASSETS_DIR}/{target}");
+            mapped.insert(url.to_string(), rel.clone());
+            Ok(rel)
+        })?;
+        if updated == original {
+            fs::rename(source, destination).map_err(|error| format!("无法移动：{error}"))?;
+        } else {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(destination)
+                .map_err(|error| format!("无法创建目标笔记：{error}"))?;
+            created_note = true;
+            file.write_all(updated.as_bytes())
+                .and_then(|()| file.sync_all())
+                .map_err(|error| format!("无法保存目标笔记：{error}"))?;
+            fs::remove_file(source).map_err(|error| format!("无法移动原笔记：{error}"))?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        if created_note {
+            let _ = fs::remove_file(destination);
+        }
+        for path in copied {
+            let _ = fs::remove_file(path);
+        }
+    }
+    result
 }
 
 /// Absolute directory that holds a note (its `assets/` sibling lives here).
@@ -566,4 +688,120 @@ pub fn note_reveal_path(app: AppHandle, path: String) -> Result<String, String> 
         return Err("路径不存在。".into());
     }
     Ok(target.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestNotes(PathBuf);
+
+    impl TestNotes {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("nomi-notes-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&root).unwrap();
+            Self(root)
+        }
+
+        fn write(&self, path: &str, content: &str) {
+            let file = self.0.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, content).unwrap();
+        }
+
+        fn read(&self, path: &str) -> String {
+            fs::read_to_string(self.0.join(path)).unwrap()
+        }
+    }
+
+    impl Drop for TestNotes {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn moves_note_to_folder_and_back_to_root_without_renaming_on_noop() {
+        let notes = TestNotes::new();
+        notes.write("工作/周报.md", "最新编辑的内容");
+        let unchanged = move_node_under(&notes.0, "工作/周报.md", "工作").unwrap();
+        assert_eq!(unchanged.path, "工作/周报.md");
+        let moved = move_node_under(&notes.0, &unchanged.path, "").unwrap();
+        assert_eq!(moved.path, "周报.md");
+        assert_eq!(notes.read(&moved.path), "最新编辑的内容");
+        assert!(!notes.0.join("工作/周报.md").exists());
+        let moved_back = move_node_under(&notes.0, &moved.path, "工作").unwrap();
+        assert_eq!(moved_back.path, "工作/周报.md");
+        assert_eq!(notes.read(&moved_back.path), "最新编辑的内容");
+    }
+
+    #[test]
+    fn disambiguates_notes_without_overwriting_existing_content() {
+        let notes = TestNotes::new();
+        notes.write("工作/周报.md", "移动的内容");
+        notes.write("归档/周报.md", "原有内容");
+        let moved = move_node_under(&notes.0, "工作/周报.md", "归档").unwrap();
+        assert_eq!(moved.path, "归档/周报-2.md");
+        assert_eq!(notes.read("归档/周报.md"), "原有内容");
+        assert_eq!(notes.read(&moved.path), "移动的内容");
+    }
+
+    #[test]
+    fn moves_folder_descendants_and_assets_together_and_rejects_cycles() {
+        let notes = TestNotes::new();
+        notes.write("研究/资料/论文.md", "![图](assets/chart.png)");
+        notes.write("研究/资料/assets/chart.png", "图片数据");
+        notes.write("工作/占位.md", "");
+        for parent in ["研究", "研究/资料"] {
+            assert!(move_node_under(&notes.0, "研究", parent).is_err());
+        }
+        assert!(move_node_under(&notes.0, "", "工作").is_err());
+        let moved = move_node_under(&notes.0, "研究", "工作").unwrap();
+        assert_eq!(moved.path, "工作/研究");
+        assert_eq!(
+            notes.read("工作/研究/资料/论文.md"),
+            "![图](assets/chart.png)"
+        );
+        assert_eq!(notes.read("工作/研究/资料/assets/chart.png"), "图片数据");
+        assert!(!notes.0.join("研究").exists());
+    }
+
+    #[test]
+    fn copies_shared_images_and_rewrites_collisions_once_while_preserving_titles() {
+        let notes = TestNotes::new();
+        let original = "正文\n![图](assets/chart.png \"标题\")\n![重复](<assets/chart.png>)\n![空格](<pictures/my photo.png> '照片')\n![远程](https://example.com/a.png)\n![缺失](assets/missing.png)";
+        notes.write("工作/周报.md", original);
+        notes.write("工作/保留.md", "![共用](assets/chart.png)");
+        notes.write("工作/assets/chart.png", "移动的图片");
+        notes.write("工作/pictures/my photo.png", "带空格的图片");
+        notes.write("归档/assets/chart.png", "目标原有图片");
+        let moved = move_node_under(&notes.0, "工作/周报.md", "归档").unwrap();
+        let content = notes.read(&moved.path);
+        assert!(content.contains("![图](assets/chart-2.png \"标题\")"));
+        assert!(content.contains("![重复](<assets/chart-2.png>)"));
+        assert!(content.contains("![空格](<assets/my-photo.png> '照片')"));
+        assert!(content.contains("![远程](https://example.com/a.png)"));
+        assert!(content.contains("![缺失](assets/missing.png)"));
+        assert_eq!(notes.read("归档/assets/chart.png"), "目标原有图片");
+        assert_eq!(notes.read("归档/assets/chart-2.png"), "移动的图片");
+        assert_eq!(notes.read("归档/assets/my-photo.png"), "带空格的图片");
+        assert_eq!(notes.read("工作/assets/chart.png"), "移动的图片");
+        assert_eq!(notes.read("工作/保留.md"), "![共用](assets/chart.png)");
+        assert!(!notes.0.join("归档/assets/chart-3.png").exists());
+    }
+
+    #[test]
+    fn failed_move_preserves_original_and_cleans_up_copied_images() {
+        let notes = TestNotes::new();
+        notes.write("工作/周报.md", "![图](pictures/chart.png)");
+        notes.write("工作/pictures/chart.png", "图片数据");
+        notes.write("归档/周报.md", "不能覆盖");
+        assert!(
+            move_note_file(&notes.0.join("工作/周报.md"), &notes.0.join("归档/周报.md")).is_err()
+        );
+        assert_eq!(notes.read("工作/周报.md"), "![图](pictures/chart.png)");
+        assert_eq!(notes.read("工作/pictures/chart.png"), "图片数据");
+        assert_eq!(notes.read("归档/周报.md"), "不能覆盖");
+        assert!(!notes.0.join("归档/assets/chart.png").exists());
+    }
 }

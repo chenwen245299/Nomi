@@ -74,7 +74,7 @@ use travel::{
     travel_reveal_maps, travel_save_note, travel_save_note_image, travel_save_note_image_bytes,
     travel_save_plan, travel_set_settings, travel_update_map, travel_update_note,
 };
-use tts::{tts_get_settings, tts_set_settings, tts_synthesize};
+use tts::{tts_get_settings, tts_list_minimax_voices, tts_set_settings, tts_synthesize};
 use windowing::{PendingTabs, open_tab_window, take_tab_payload};
 
 /// CLI flag that runs the MCP stdio server instead of the GUI.
@@ -249,6 +249,7 @@ pub fn run() {
             travel_map_read_range,
             travel_reveal_maps,
             tts_get_settings,
+            tts_list_minimax_voices,
             tts_set_settings,
             tts_synthesize,
             open_tab_window,

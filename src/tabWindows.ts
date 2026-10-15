@@ -11,7 +11,7 @@ const DETACHED_LABEL_PREFIX = "tab-";
 const isTauriRuntime = () => "__TAURI_INTERNALS__" in window;
 
 /** The label of the window this webview runs in; "main" outside Tauri. */
-function windowLabel(): string {
+export function windowLabel(): string {
   if (!isTauriRuntime()) return "main";
   try {
     return getCurrentWindow().label;
@@ -35,7 +35,7 @@ export async function takeDetachedTab(): Promise<unknown> {
     const payload = await invoke<string | null>("take_tab_payload", { label });
     return payload ? (JSON.parse(payload) as unknown) : null;
   } catch {
-    // No payload, or the backend is older than this frontend — open on 对话.
+    // No payload, or an older backend — App can still restore the saved session.
     return null;
   }
 }

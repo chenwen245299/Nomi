@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -91,7 +92,8 @@ import { TravelCollection, TravelMainColumn, useTravel, type TravelData } from "
 import { HistoryCollection, HistoryMainColumn, useHistory, type HistoryData } from "./history";
 import { scopeLabel, type TodoLayout, type TodoScope } from "./todo/views";
 import { initVersion, startAutoUpdate, stopAutoUpdate } from "./updater/store";
-import { detachTabToWindow, isMainWindow } from "./tabWindows";
+import { detachTabToWindow, isMainWindow, windowLabel } from "./tabWindows";
+import { makeTab, readTabSession, saveTabSession, type SettingsTab, type Tab } from "./tabSession";
 import {
   accentFor,
   badgeGlow,
@@ -303,66 +305,7 @@ const TAB_TEAR_OFF_MARGIN = 44;
 // passes `hovered` / `focused`. Optional keeps the callback assignable.
 type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
 
-type SettingsTab = "storage" | "chat" | "providers" | "mcp";
 type TabDropPosition = "after" | "before";
-
-// A tab is one open view. Multiple tabs may share a section (several chats,
-// several settings pages, …); each carries its own navigation state so switching
-// tabs restores exactly what that tab was showing.
-type Tab = {
-  id: number;
-  section: SectionId;
-  // chat: switcher filter (null = 全部对话) and the currently open conversation.
-  assistantId: string | null;
-  conversationId: string | null;
-  conversationAssistantId: string | null;
-  // notes: the open note's path relative to the notes root (null = none open).
-  noteId: string | null;
-  // papers: the selected paper (null = none) and which view is showing.
-  paperId: string | null;
-  papersView: PapersView;
-  // travel: the open travel note's id (null = none open).
-  travelNoteId: string | null;
-  // history: selected research event. Map layers are supporting data, not navigation.
-  historyEventId: string | null;
-  // Kept for compatibility with detached tabs created by an earlier build.
-  historyLayerId: string | null;
-  // todo: which todos this tab is showing, and how they are laid out.
-  todoScope: TodoScope;
-  todoLayout: TodoLayout;
-  // settings: which settings page this tab shows.
-  settingsTab: SettingsTab;
-};
-
-function makeTab(id: number, section: SectionId): Tab {
-  return {
-    id,
-    section,
-    assistantId: null,
-    conversationId: null,
-    conversationAssistantId: null,
-    noteId: null,
-    paperId: null,
-    papersView: "graph",
-    travelNoteId: null,
-    historyEventId: null,
-    historyLayerId: null,
-    todoScope: "today",
-    todoLayout: "board",
-    settingsTab: "storage",
-  };
-}
-
-/** The tab a window was born with, when it was torn off from another window.
- *  The payload crossed a process boundary, so keep only what still parses as a
- *  tab; anything else falls back to a fresh 对话 tab. */
-function adoptTab(raw: unknown): Tab {
-  const fresh = makeTab(1, "chat");
-  if (!raw || typeof raw !== "object") return fresh;
-  const candidate = raw as Partial<Tab>;
-  if (!sections.some((section) => section.id === candidate.section)) return fresh;
-  return { ...fresh, ...candidate, id: fresh.id };
-}
 
 const SETTINGS_LABEL: Record<SettingsTab, string> = {
   storage: "通用",
@@ -1168,11 +1111,18 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
   const compact = width < 900;
   const compactHeight = useWindowDimensions().height < 650;
 
-  // Torn-off windows open on the tab that was dragged out; every other window
-  // starts on a fresh 对话 tab. Read once — main.tsx resolves it before mounting.
-  const [tabs, setTabs] = useState<Tab[]>(() => [adoptTab(detachedTab)]);
-  const [activeId, setActiveId] = useState(1);
-  const nextTabId = useRef(2);
+  // Restore before the first paint. Fresh tear-offs start on their payload;
+  // other launches/reloads resume this window's saved titlebar session.
+  const [initialSession] = useState(() => readTabSession(windowLabel(), detachedTab));
+  const [tabs, setTabs] = useState<Tab[]>(initialSession.tabs);
+  const [activeId, setActiveId] = useState(initialSession.activeId);
+  const nextTabId = useRef(Math.max(...initialSession.tabs.map((tab) => tab.id)) + 1);
+
+  // Save every committed change synchronously, so quitting does not depend on
+  // a webview unload callback or leave the last selection unsaved.
+  useLayoutEffect(() => {
+    saveTabSession(windowLabel(), { tabs, activeId });
+  }, [tabs, activeId]);
 
   const [storage, setStorage] = useState<StorageStatus | null | undefined>(undefined);
   const [storageError, setStorageError] = useState<string | null>(null);
@@ -1241,7 +1191,8 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
   const collectionWidth = compact ? 212 : 240;
   const accent = useMemo(() => accentFor(activeSection), [activeSection]);
   const activeMeta = useMemo(() => metaFor(activeSection), [activeSection]);
-  const chat = useChat(activeSection === "chat");
+  // Restored background tabs also need their metadata for titlebar labels.
+  const chat = useChat(tabs.some((tab) => tab.section === "chat"));
   const providers = useProviders(
     Boolean(storage) &&
       (SIDEBAR_SECTIONS.has(activeSection) ||
@@ -1250,8 +1201,8 @@ function App({ detachedTab }: { detachedTab?: unknown }) {
           (activeTab?.settingsTab === "providers" || activeTab?.settingsTab === "chat"))),
   );
   const mcp = useMcp(activeSection === "settings" && activeTab?.settingsTab === "mcp");
-  const notes = useNotes(Boolean(storage) && activeSection === "notes");
-  const papers = usePapers(Boolean(storage) && activeSection === "papers");
+  const notes = useNotes(Boolean(storage) && tabs.some((tab) => tab.section === "notes"));
+  const papers = usePapers(Boolean(storage) && tabs.some((tab) => tab.section === "papers"));
   const todos = useTodos(Boolean(storage) && activeSection === "todo");
   const finance = useFinance(Boolean(storage) && activeSection === "finance");
   const travel = useTravel(Boolean(storage) && activeSection === "travel");
@@ -2698,7 +2649,7 @@ function CollectionColumn({
         <TodoCollection
           accent={accent}
           onSelectScope={onSelectTodoScope}
-          scope={tab?.todoScope ?? "today"}
+          scope={tab?.todoScope ?? "week"}
           todos={todos}
         />
       ) : isFinance ? (
@@ -2863,7 +2814,7 @@ function MainColumn({
           accent={accent}
           layout={tab?.todoLayout ?? "board"}
           onSelectLayout={onSelectTodoLayout}
-          scope={tab?.todoScope ?? "today"}
+          scope={tab?.todoScope ?? "week"}
           todos={todos}
         />
       </View>

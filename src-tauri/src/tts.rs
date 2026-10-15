@@ -66,6 +66,15 @@ pub struct TtsAudio {
     base64: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TtsVoice {
+    id: String,
+    name: String,
+    category: String,
+    description: String,
+}
+
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(storage::current_root(app)?.join(TTS_FILE))
 }
@@ -122,6 +131,43 @@ fn encode_audio(bytes: Vec<u8>, mime: &str) -> TtsAudio {
         mime: mime.to_string(),
         base64: base64::engine::general_purpose::STANDARD.encode(bytes),
     }
+}
+
+fn minimax_voices(value: &Value) -> Vec<TtsVoice> {
+    [
+        ("system_voice", "system"),
+        ("voice_cloning", "cloned"),
+        ("voice_generation", "generated"),
+    ]
+    .into_iter()
+    .flat_map(|(field, category)| {
+        value[field]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(move |voice| {
+                let id = voice["voice_id"].as_str()?.trim();
+                if id.is_empty() {
+                    return None;
+                }
+                Some(TtsVoice {
+                    id: id.to_string(),
+                    name: voice["voice_name"].as_str().unwrap_or(id).to_string(),
+                    category: category.to_string(),
+                    description: voice["description"]
+                        .as_array()
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .unwrap_or_default(),
+                })
+            })
+    })
+    .collect()
 }
 
 async fn minimax_tts(
@@ -244,6 +290,49 @@ async fn openai_tts(
 // ── Commands ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
+pub async fn tts_list_minimax_voices(
+    app: AppHandle,
+    provider_id: String,
+) -> Result<Vec<TtsVoice>, String> {
+    let target = providers::resolve_chat_target(&app, &provider_id, "speech-2.8-hd")?;
+    if target.kind != "minimax" {
+        return Err("所选服务商不是 MiniMax。".into());
+    }
+    let api_key = target
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .ok_or("该语音服务商尚未填写 API 密钥。")?;
+    let url = format!("{}/get_voice", target.base_url.trim().trim_end_matches('/'));
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(api_key)
+        .json(&json!({ "voice_type": "all" }))
+        .send()
+        .await
+        .map_err(|error| format!("获取 MiniMax 音色失败：{error}"))?;
+    let status = response.status();
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|error| format!("MiniMax 音色列表无法解析：{error}"))?;
+    let code = value
+        .pointer("/base_resp/status_code")
+        .and_then(Value::as_i64)
+        .unwrap_or(-1);
+    if !status.is_success() || code != 0 {
+        let message = value
+            .pointer("/base_resp/status_msg")
+            .or_else(|| value.pointer("/error/message"))
+            .and_then(Value::as_str)
+            .unwrap_or("未知错误");
+        return Err(format!("获取 MiniMax 音色失败（{status}）：{message}"));
+    }
+    Ok(minimax_voices(&value))
+}
+
+#[tauri::command]
 pub fn tts_get_settings(app: AppHandle) -> Result<TtsSettings, String> {
     read_settings(&app)
 }
@@ -314,5 +403,20 @@ mod tests {
     fn truncate_keeps_whole_characters() {
         let text: String = "中".repeat(MAX_CHARS + 10);
         assert_eq!(truncate_chars(&text).chars().count(), MAX_CHARS);
+    }
+
+    #[test]
+    fn minimax_voice_list_includes_account_and_system_voices() {
+        let voices = minimax_voices(&json!({
+            "system_voice": [{"voice_id": "male-qn-qingse", "voice_name": "青涩青年", "description": ["男声", "普通话"]}],
+            "voice_cloning": [{"voice_id": "my-clone", "description": []}],
+            "voice_generation": [{"voice_id": "ttv-123"}]
+        }));
+        assert_eq!(voices.len(), 3);
+        assert_eq!(voices[0].name, "青涩青年");
+        assert_eq!(voices[0].description, "男声 普通话");
+        assert_eq!(voices[1].category, "cloned");
+        assert_eq!(voices[1].name, "my-clone");
+        assert_eq!(voices[2].category, "generated");
     }
 }

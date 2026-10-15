@@ -23,6 +23,13 @@ export interface TtsAudio {
   base64: string;
 }
 
+export interface TtsVoice {
+  id: string;
+  name: string;
+  category: "system" | "cloned" | "generated";
+  description: string;
+}
+
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 let previewSettings: TtsSettings = {
@@ -37,6 +44,13 @@ export async function getTtsSettings(): Promise<TtsSettings> {
     return invoke<TtsSettings>("tts_get_settings");
   }
   return { ...previewSettings };
+}
+
+export async function listMinimaxVoices(providerId: string): Promise<TtsVoice[]> {
+  if (isTauri()) {
+    return invoke<TtsVoice[]>("tts_list_minimax_voices", { providerId });
+  }
+  return [];
 }
 
 export async function saveTtsSettings(settings: TtsSettings): Promise<TtsSettings> {

@@ -9,13 +9,20 @@ import {
 } from "@remixicon/react";
 import { accentFor, cardShadow, motion, useTheme, type Accent, type Theme } from "../theme";
 import type { Provider } from "../providers/api";
-import { getTtsSettings, saveTtsSettings, type TtsSettings } from "./api";
+import {
+  getTtsSettings,
+  listMinimaxVoices,
+  saveTtsSettings,
+  type TtsSettings,
+  type TtsVoice,
+} from "./api";
 import { stopSpeech, toggleSpeech, useSpeechState } from "./speech";
 
 type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
 
 const PREVIEW_ID = "__tts_preview__";
 const PREVIEW_TEXT = "你好，这是语音朗读的试听效果。";
+const CUSTOM_OPTION = "__custom__";
 
 interface TtsPreset {
   /** Speech model ids suggested for this provider kind. */
@@ -36,15 +43,23 @@ const OPENAI_VOICES = [
 ];
 
 /**
- * Per-provider-kind suggestions. Any provider still works via free text — these
- * only pre-fill the datalists so common model ids and voices autocomplete, and
- * seed sensible defaults when a provider is first picked. MiniMax uses its own
+ * Per-provider-kind suggestions. Other providers still work via free text, and
+ * MiniMax uses these as defaults until its account voice list is available. MiniMax uses its own
  * `t2a_v2` dialect; every other kind goes through OpenAI-compatible
  * `/audio/speech`, so the OpenAI voice set is the generic fallback.
  */
 const TTS_PRESETS: Record<string, TtsPreset> = {
   minimax: {
-    models: ["speech-2.5-hd-preview", "speech-02-hd", "speech-02-turbo"],
+    models: [
+      "speech-2.8-hd",
+      "speech-2.8-turbo",
+      "speech-2.6-hd",
+      "speech-2.6-turbo",
+      "speech-02-hd",
+      "speech-02-turbo",
+      "speech-01-hd",
+      "speech-01-turbo",
+    ],
     voices: [
       { id: "male-qn-qingse", label: "青涩青年（男）" },
       { id: "male-qn-jingying", label: "精英青年（男）" },
@@ -53,6 +68,7 @@ const TTS_PRESETS: Record<string, TtsPreset> = {
       { id: "presenter_male", label: "男主持" },
       { id: "presenter_female", label: "女主持" },
     ],
+    voiceHint: "音色来自当前 MiniMax 账号，包括系统、复刻和生成音色；也可手动填写音色 ID。",
   },
   stepfun: {
     models: ["step-tts-mini", "step-tts-2", "stepaudio-2.5-tts"],
@@ -180,6 +196,11 @@ export function ReadAloudSettings({ providers }: { providers: Provider[] }) {
   const [providerId, setProviderId] = useState<string | null>(null);
   const [modelId, setModelId] = useState("");
   const [voiceId, setVoiceId] = useState("");
+  const [minimaxVoices, setMinimaxVoices] = useState<TtsVoice[]>([]);
+  const [voicesLoading, setVoicesLoading] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceSearch, setVoiceSearch] = useState("");
+  const [voiceRefresh, setVoiceRefresh] = useState(0);
   const [speed, setSpeed] = useState(1);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -195,6 +216,7 @@ export function ReadAloudSettings({ providers }: { providers: Provider[] }) {
         setModelId(settings.modelId ?? "");
         setVoiceId(settings.voiceId ?? "");
         setSpeed(settings.speed || 1);
+        setVoicesLoading(Boolean(settings.providerId));
       })
       .catch((loadError) => {
         if (active) setError(String(loadError));
@@ -211,21 +233,64 @@ export function ReadAloudSettings({ providers }: { providers: Provider[] }) {
   useEffect(() => () => stopSpeech(), []);
 
   const selectedProvider = enabledProviders.find((provider) => provider.id === providerId) ?? null;
+  const isMinimax = selectedProvider?.kind === "minimax";
   const unavailableSelection = providerId != null && selectedProvider == null;
   const preset = presetFor(selectedProvider?.kind);
   const modelList = preset?.models ?? [];
-  const voiceList = preset?.voices ?? [];
+  const voiceList: TtsVoice[] = isMinimax
+    ? minimaxVoices.length > 0
+      ? minimaxVoices
+      : (preset?.voices ?? []).map((voice) => ({
+          id: voice.id,
+          name: voice.label,
+          category: "system" as const,
+          description: "",
+        }))
+    : [];
+  const matchingVoices = voiceList.filter((voice) => {
+    const query = voiceSearch.trim().toLocaleLowerCase();
+    return (
+      !query ||
+      voice.id === voiceId ||
+      `${voice.name} ${voice.id} ${voice.description}`.toLocaleLowerCase().includes(query)
+    );
+  });
   const canSave = loaded && !busy && providerId != null && modelId.trim().length > 0;
   const previewing = speech.playingId === PREVIEW_ID || speech.pendingId === PREVIEW_ID;
+
+  useEffect(() => {
+    if (!isMinimax || !providerId) return;
+    let active = true;
+    void listMinimaxVoices(providerId)
+      .then((voices) => {
+        if (active) {
+          setMinimaxVoices(voices);
+          setVoiceError(null);
+        }
+      })
+      .catch((loadError) => {
+        if (active) setVoiceError(String(loadError));
+      })
+      .finally(() => {
+        if (active) setVoicesLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isMinimax, providerId, voiceRefresh]);
 
   function onProviderChange(nextValue: string) {
     const next = nextValue || null;
     setProviderId(next);
     setFeedback(null);
-    // Pre-fill sensible defaults when switching to a fresh provider.
+    setMinimaxVoices([]);
+    setVoiceError(null);
+    setVoiceSearch("");
+    setVoicesLoading(enabledProviders.find((provider) => provider.id === next)?.kind === "minimax");
+    // A newly selected provider should start with its own compatible defaults.
     const nextPreset = presetFor(enabledProviders.find((provider) => provider.id === next)?.kind);
-    if (!modelId.trim()) setModelId(nextPreset?.models[0] ?? "");
-    if (!voiceId.trim()) setVoiceId(nextPreset?.voices[0]?.id ?? "");
+    setModelId(nextPreset?.models[0] ?? "");
+    setVoiceId(nextPreset?.voices[0]?.id ?? "");
   }
 
   async function persist(): Promise<boolean> {
@@ -324,45 +389,154 @@ export function ReadAloudSettings({ providers }: { providers: Provider[] }) {
       <View style={styles.row}>
         <View style={[styles.field, { flex: 1 } as ViewStyle]}>
           <Text style={styles.label}>语音模型</Text>
-          <input
-            aria-label="语音模型"
-            disabled={!loaded || busy}
-            list="tts-model-suggestions"
-            onChange={(event) => {
-              setModelId(event.target.value);
-              setFeedback(null);
-            }}
-            placeholder="例如 speech-02-hd"
-            style={inputStyle(theme)}
-            value={modelId}
-          />
-          <datalist id="tts-model-suggestions">
-            {modelList.map((id) => (
-              <option key={id} value={id} />
-            ))}
-          </datalist>
+          {isMinimax ? (
+            <>
+              <select
+                aria-label="语音模型"
+                disabled={!loaded || busy}
+                onChange={(event) => {
+                  setModelId(event.target.value === CUSTOM_OPTION ? "" : event.target.value);
+                  setFeedback(null);
+                }}
+                style={selectStyle(theme)}
+                value={modelList.includes(modelId) ? modelId : CUSTOM_OPTION}
+              >
+                {modelList.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
+                  </option>
+                ))}
+                <option value={CUSTOM_OPTION}>手动填写模型 ID…</option>
+              </select>
+              {!modelList.includes(modelId) ? (
+                <input
+                  aria-label="自定义语音模型 ID"
+                  disabled={!loaded || busy}
+                  onChange={(event) => setModelId(event.target.value)}
+                  placeholder="输入模型 ID"
+                  style={{ ...inputStyle(theme), marginTop: 6 }}
+                  value={modelId}
+                />
+              ) : null}
+            </>
+          ) : (
+            <>
+              <input
+                aria-label="语音模型"
+                disabled={!loaded || busy}
+                list="tts-model-suggestions"
+                onChange={(event) => {
+                  setModelId(event.target.value);
+                  setFeedback(null);
+                }}
+                placeholder="例如 step-tts-mini"
+                style={inputStyle(theme)}
+                value={modelId}
+              />
+              <datalist id="tts-model-suggestions">
+                {modelList.map((id) => (
+                  <option key={id} value={id} />
+                ))}
+              </datalist>
+            </>
+          )}
         </View>
         <View style={[styles.field, { flex: 1 } as ViewStyle]}>
           <Text style={styles.label}>音色</Text>
-          <input
-            aria-label="音色"
-            disabled={!loaded || busy}
-            list="tts-voice-suggestions"
-            onChange={(event) => {
-              setVoiceId(event.target.value);
-              setFeedback(null);
-            }}
-            placeholder="例如 male-qn-qingse"
-            style={inputStyle(theme)}
-            value={voiceId}
-          />
-          <datalist id="tts-voice-suggestions">
-            {voiceList.map((voice) => (
-              <option key={voice.id} value={voice.id}>
-                {voice.label}
-              </option>
-            ))}
-          </datalist>
+          {isMinimax ? (
+            <>
+              <input
+                aria-label="搜索音色"
+                disabled={!loaded || busy}
+                onChange={(event) => setVoiceSearch(event.target.value)}
+                placeholder="搜索名称、ID 或描述"
+                style={inputStyle(theme)}
+                value={voiceSearch}
+              />
+              <select
+                aria-label="音色"
+                disabled={!loaded || busy}
+                onChange={(event) => {
+                  setVoiceId(event.target.value === CUSTOM_OPTION ? "" : event.target.value);
+                  setFeedback(null);
+                }}
+                style={{ ...selectStyle(theme), marginTop: 6 }}
+                value={
+                  matchingVoices.some((voice) => voice.id === voiceId) ? voiceId : CUSTOM_OPTION
+                }
+              >
+                {(["system", "cloned", "generated"] as const).map((category) => {
+                  const items = matchingVoices.filter((voice) => voice.category === category);
+                  return items.length > 0 ? (
+                    <optgroup
+                      key={category}
+                      label={
+                        { system: "系统音色", cloned: "复刻音色", generated: "生成音色" }[category]
+                      }
+                    >
+                      {items.map((voice) => (
+                        <option key={voice.id} value={voice.id} title={voice.description}>
+                          {voice.name === voice.id ? voice.id : `${voice.name} · ${voice.id}`}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null;
+                })}
+                <option value={CUSTOM_OPTION}>手动填写音色 ID…</option>
+              </select>
+              {!voiceList.some((voice) => voice.id === voiceId) ? (
+                <input
+                  aria-label="自定义音色 ID"
+                  disabled={!loaded || busy}
+                  onChange={(event) => {
+                    setVoiceId(event.target.value);
+                    setFeedback(null);
+                  }}
+                  placeholder="输入音色 ID"
+                  style={{ ...inputStyle(theme), marginTop: 6 }}
+                  value={voiceId}
+                />
+              ) : null}
+              {voicesLoading ? <Text style={styles.hint}>正在获取账号音色…</Text> : null}
+              {voiceError ? (
+                <Text style={styles.hint}>
+                  获取账号音色失败：{voiceError}。可使用下拉列表中的预置音色或手动输入 ID。{" "}
+                  <a
+                    href="#"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      setVoicesLoading(true);
+                      setVoiceRefresh((value) => value + 1);
+                    }}
+                  >
+                    重试
+                  </a>
+                </Text>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <input
+                aria-label="音色"
+                disabled={!loaded || busy}
+                list="tts-voice-suggestions"
+                onChange={(event) => {
+                  setVoiceId(event.target.value);
+                  setFeedback(null);
+                }}
+                placeholder="例如 alloy"
+                style={inputStyle(theme)}
+                value={voiceId}
+              />
+              <datalist id="tts-voice-suggestions">
+                {(preset?.voices ?? []).map((voice) => (
+                  <option key={voice.id} value={voice.id}>
+                    {voice.label}
+                  </option>
+                ))}
+              </datalist>
+            </>
+          )}
           {preset?.voiceHint ? <Text style={styles.hint}>{preset.voiceHint}</Text> : null}
         </View>
       </View>

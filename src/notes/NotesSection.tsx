@@ -2,7 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   ActivityIndicator,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -42,6 +41,8 @@ import {
   uploadNoteImages,
 } from "./assetBridge";
 import { flushNotesUnder, registerNoteFlush } from "./flushRegistry";
+import { parentOf, remapExpanded } from "./treeMove";
+import { useNoteTreeDrag } from "./useNoteTreeDrag";
 import type { NotesData } from "./useNotes";
 
 type PressState = { pressed: boolean; hovered?: boolean; focused?: boolean };
@@ -58,8 +59,6 @@ async function confirmDelete(message: string): Promise<boolean> {
   }
   return typeof window !== "undefined" ? window.confirm(message) : true;
 }
-
-const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
 
 // Which folders are open in the tree. Kept per machine rather than in the data
 // folder: it is a view preference, not part of the notes themselves. Without it
@@ -256,7 +255,6 @@ function makeNotesStyles(theme: Theme, accent: Accent) {
     },
     toolbarButtonHover: { backgroundColor: t.controlHover },
     toolbarButtonText: { color: t.textSecondary, fontSize: 12, fontWeight: "600" },
-    tree: { paddingBottom: 16, paddingHorizontal: 6 },
     row: {
       alignItems: "center",
       borderRadius: 8,
@@ -268,6 +266,10 @@ function makeNotesStyles(theme: Theme, accent: Accent) {
     },
     rowHover: { backgroundColor: t.controlHover },
     rowActive: { backgroundColor: accent.selectedFill },
+    rowDropTarget: {
+      backgroundColor: accent.selectedFill,
+      boxShadow: `inset 0 0 0 1px ${accent.accent}`,
+    },
     twisty: { alignItems: "center", justifyContent: "center", width: 18 },
     rowLabel: { color: t.textPrimary, flex: 1, fontSize: 13, minWidth: 0 },
     rowLabelMuted: { color: t.textSecondary },
@@ -425,6 +427,10 @@ export function NotesCollection({
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [query, setQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const movingRef = useRef(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const [searchState, setSearchState] = useState<{ query: string; results: SearchResult[] }>({
     query: "",
     results: [],
@@ -486,6 +492,41 @@ export function NotesCollection({
     setExpanded((prev) => (prev.has(path) ? prev : new Set(prev).add(path)));
   }, []);
 
+  const handleMove = useCallback(
+    async (node: NoteNode, parent: string) => {
+      if (movingRef.current) return;
+      movingRef.current = true;
+      setMoving(true);
+      setMoveError(null);
+      setMenu(null);
+      try {
+        await flushNotesUnder(node.path);
+        const moved = await notes.moveNode(node.path, parent);
+        if (!moved || moved.path === node.path) return;
+        onNotePathChanged(node.path, moved.path);
+        setExpanded((previous) => {
+          const next = remapExpanded(previous, node.path, moved.path);
+          // Reveal every ancestor, including when dropping onto a search result.
+          for (let path = parent; path; path = parentOf(path)) next.add(path);
+          return next;
+        });
+      } catch (error) {
+        setMoveError(String(error));
+      } finally {
+        movingRef.current = false;
+        setMoving(false);
+      }
+    },
+    [notes, onNotePathChanged],
+  );
+  const treeDrag = useNoteTreeDrag({
+    containerRef,
+    disabled: editing !== null || moving || notes.loading,
+    expand,
+    onMove: handleMove,
+  });
+  const { drag } = treeDrag;
+
   const handleCreateNote = useCallback(
     async (parent: string) => {
       const created = await notes.createNote(parent);
@@ -522,27 +563,19 @@ export function NotesCollection({
       }
       // Persist any open editor under this path first, so its edits land in the
       // file before it is renamed on disk.
-      await flushNotesUnder(node.path);
-      const updated = await notes.renameNode(node, trimmed);
-      if (updated && updated.path !== node.path) {
-        onNotePathChanged(node.path, updated.path);
-        if (node.kind === "folder") {
-          // Remap the renamed folder AND every expanded descendant folder, else
-          // nested-open folders visually collapse after the rename.
-          setExpanded((prev) => {
-            const next = new Set<string>();
-            for (const path of prev) {
-              if (path === node.path) {
-                next.add(updated.path);
-              } else if (path.startsWith(`${node.path}/`)) {
-                next.add(`${updated.path}${path.slice(node.path.length)}`);
-              } else {
-                next.add(path);
-              }
-            }
-            return next;
-          });
+      try {
+        await flushNotesUnder(node.path);
+        const updated = await notes.renameNode(node, trimmed);
+        if (updated && updated.path !== node.path) {
+          onNotePathChanged(node.path, updated.path);
+          if (node.kind === "folder") {
+            // Remap the renamed folder AND every expanded descendant folder, else
+            // nested-open folders visually collapse after the rename.
+            setExpanded((prev) => remapExpanded(prev, node.path, updated.path));
+          }
         }
+      } catch (error) {
+        setMoveError(String(error));
       }
     },
     [notes, onNotePathChanged],
@@ -589,13 +622,15 @@ export function NotesCollection({
 
   return (
     <div
+      ref={containerRef}
+      onClickCapture={treeDrag.onClickCapture}
       onContextMenu={(event) => {
         const target = event.target as HTMLElement;
         if (target.closest("[data-note-tree-row], [data-note-search], input, button")) return;
         event.preventDefault();
         setMenu({ node: null, x: event.clientX, y: event.clientY });
       }}
-      style={{ display: "flex", flex: 1, minHeight: 0 }}
+      style={{ display: "flex", flex: 1, minHeight: 0, position: "relative" }}
     >
       <View style={{ flex: 1, minHeight: 0 } as ViewStyle}>
         <div data-note-search>
@@ -645,7 +680,7 @@ export function NotesCollection({
               <Text style={styles.emptyText}>没有找到包含“{query.trim()}”的笔记</Text>
             </View>
           ) : (
-            <ScrollView style={{ flex: 1, minHeight: 0 } as ViewStyle}>
+            <div data-note-tree-scroll style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
               {searchResults.map((result) => (
                 <SearchResultRow
                   key={result.node.path}
@@ -653,20 +688,22 @@ export function NotesCollection({
                   active={result.node.path === selectedPath}
                   result={result}
                   styles={styles}
+                  onPointerDown={(event) => treeDrag.onPointerDown(result.node, event)}
+                  dragging={drag?.node.path === result.node.path}
                   onContextMenu={(x, y) => setMenu({ node: result.node, x, y })}
                   onSelect={() => onSelect(result.node.path)}
                 />
               ))}
-            </ScrollView>
+            </div>
           )
         ) : notes.tree.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyText}>还没有笔记{"\n"}在空白处右键即可新建</Text>
           </View>
         ) : (
-          <ScrollView
-            contentContainerStyle={styles.tree}
-            style={{ flex: 1, minHeight: 0 } as ViewStyle}
+          <div
+            data-note-tree-scroll
+            style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 6px 16px" }}
           >
             <TreeLevel
               accent={accent}
@@ -676,14 +713,56 @@ export function NotesCollection({
               expanded={expanded}
               editing={editing}
               selectedPath={selectedPath}
+              drag={drag}
+              onPointerDown={treeDrag.onPointerDown}
               onToggle={toggle}
               onSelect={onSelect}
               onContextMenu={(node, x, y) => setMenu({ node, x, y })}
               onCommitRename={commitRename}
               onCancelRename={() => setEditing(null)}
             />
-          </ScrollView>
+          </div>
         )}
+
+        {moving || moveError || notes.error ? (
+          <div
+            role={moveError || notes.error ? "alert" : "status"}
+            style={{
+              color: moveError || notes.error ? theme.t.errorText : theme.t.textTertiary,
+              fontSize: 12,
+              padding: "8px 12px",
+            }}
+          >
+            {moveError || notes.error || "正在移动…"}
+          </div>
+        ) : null}
+
+        {drag ? (
+          <div
+            data-note-drop-root
+            data-note-drop-active={drag.parent === "" || undefined}
+            style={{
+              alignItems: "center",
+              background: drag.parent === "" ? accent.selectedFill : theme.t.cardSurface,
+              border: `1px dashed ${drag.parent === "" ? accent.accent : theme.t.separator}`,
+              borderRadius: 8,
+              bottom: 8,
+              color: drag.parent === "" ? accent.accentText : theme.t.textSecondary,
+              display: "flex",
+              fontSize: 12,
+              gap: 6,
+              justifyContent: "center",
+              left: 10,
+              minHeight: 32,
+              position: "absolute",
+              right: 10,
+              zIndex: 4,
+            }}
+          >
+            <RiFolderLine size={15} />
+            移到笔记根目录
+          </div>
+        ) : null}
 
         {menu && (
           <TreeContextMenu
@@ -697,6 +776,37 @@ export function NotesCollection({
           />
         )}
       </View>
+      {drag
+        ? createPortal(
+            <div
+              style={{
+                background: theme.t.cardSurface,
+                border: `1px solid ${theme.t.separator}`,
+                borderRadius: 9,
+                boxShadow: "0 6px 20px rgba(0,0,0,0.14)",
+                color: theme.t.textPrimary,
+                fontSize: 12,
+                left: Math.max(8, Math.min(drag.x + 14, window.innerWidth - 248)),
+                maxWidth: 240,
+                padding: "8px 12px",
+                pointerEvents: "none",
+                position: "fixed",
+                top: Math.max(8, Math.min(drag.y + 14, window.innerHeight - 72)),
+                zIndex: 10000,
+              }}
+            >
+              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {drag.node.name}
+              </div>
+              <div style={{ color: theme.t.textTertiary, fontSize: 11, marginTop: 3 }}>
+                {drag.parent === null
+                  ? "无法移动到这里"
+                  : `移到 ${drag.parent ? drag.parent.replace(/\//g, " / ") : "笔记根目录"}`}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -706,6 +816,8 @@ function SearchResultRow({
   active,
   result,
   styles,
+  dragging,
+  onPointerDown,
   onContextMenu,
   onSelect,
 }: {
@@ -713,6 +825,8 @@ function SearchResultRow({
   active: boolean;
   result: SearchResult;
   styles: NotesStyles;
+  dragging: boolean;
+  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
   onContextMenu: (x: number, y: number) => void;
   onSelect: () => void;
 }) {
@@ -721,13 +835,15 @@ function SearchResultRow({
   const parent = parentOf(result.node.path).replace(/\//g, " / ");
   return (
     <div
-      data-note-tree-row
+      data-note-tree-row={result.node.path}
+      data-note-kind="note"
+      onPointerDown={onPointerDown}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
         onContextMenu(event.clientX, event.clientY);
       }}
-      style={{ padding: "0 6px", width: "100%" }}
+      style={{ opacity: dragging ? 0.45 : 1, padding: "0 6px", width: "100%" }}
     >
       <Pressable
         accessibilityRole="button"
@@ -765,6 +881,8 @@ function SearchResultRow({
 }
 
 type TreeCallbacks = {
+  drag: ReturnType<typeof useNoteTreeDrag>["drag"];
+  onPointerDown: (node: NoteNode, event: React.PointerEvent<HTMLDivElement>) => void;
   onToggle: (path: string) => void;
   onSelect: (path: string | null) => void;
   onContextMenu: (node: NoteNode, x: number, y: number) => void;
@@ -822,6 +940,8 @@ function TreeRow({
   onContextMenu,
   onCommitRename,
   onCancelRename,
+  drag,
+  onPointerDown,
 }: {
   accent: Accent;
   styles: NotesStyles;
@@ -843,13 +963,17 @@ function TreeRow({
     <>
       {/* Plain DOM wrapper so we get a real right-click (contextmenu) event. */}
       <div
-        data-note-tree-row
+        data-note-tree-row={node.path}
+        data-note-kind={node.kind}
+        data-note-expanded={isFolder ? isOpen : undefined}
+        data-note-drop-active={(isFolder && drag?.parent === node.path) || undefined}
+        onPointerDown={(event) => onPointerDown(node, event)}
         onContextMenu={(event) => {
           event.preventDefault();
           event.stopPropagation();
           onContextMenu(node, event.clientX, event.clientY);
         }}
-        style={{ width: "100%" }}
+        style={{ opacity: drag?.node.path === node.path ? 0.45 : 1, width: "100%" }}
       >
         <Pressable
           accessibilityRole="button"
@@ -862,6 +986,7 @@ function TreeRow({
             { paddingLeft: indent } as ViewStyle,
             hovered && !isActive && styles.rowHover,
             isActive && styles.rowActive,
+            isFolder && drag?.parent === node.path && styles.rowDropTarget,
           ]}
         >
           <View style={styles.twisty}>
@@ -910,6 +1035,8 @@ function TreeRow({
           expanded={expanded}
           editing={editing}
           selectedPath={selectedPath}
+          drag={drag}
+          onPointerDown={onPointerDown}
           onToggle={onToggle}
           onSelect={onSelect}
           onContextMenu={onContextMenu}
@@ -1187,7 +1314,11 @@ export function NotesMainColumn({
       if (!node || !notePath) return;
       const nextName = titleValue.trim();
       if (!nextName || nextName === node.name) return;
-      await flushNotesUnder(notePath);
+      try {
+        await flushNotesUnder(notePath);
+      } catch {
+        return;
+      }
       const updated = await notes.renameNode(node, nextName);
       if (updated && updated.path !== notePath) {
         onNotePathChanged(notePath, updated.path);
@@ -1477,6 +1608,7 @@ function NoteEditor({
     kind: "loading",
   });
   const mapRef = useRef(createImageMap());
+  const editorRef = useRef<MarkdownEditorHandle | null>(null);
   const valueRef = useRef("");
   const dirtyRef = useRef(false);
   // Serialized save chain: each flush() waits for any in-flight save then persists
@@ -1512,6 +1644,16 @@ function NoteEditor({
   }, [notePath]);
 
   const flush = useCallback(async () => {
+    // Vditor debounces its input callback. A drop immediately after typing must
+    // read the live editor instead of saving the previous callback's snapshot.
+    const editor = editorRef.current;
+    if (mountedRef.current && editor?.getInstance()) {
+      const latest = editor.getValue();
+      if (latest !== valueRef.current) {
+        valueRef.current = latest;
+        dirtyRef.current = true;
+      }
+    }
     if (!dirtyRef.current) {
       // Still await any in-flight save so callers (e.g. rename) see a settled disk.
       await savingRef.current;
@@ -1565,7 +1707,16 @@ function NoteEditor({
   );
 
   // Expose this note's flush so tree actions can persist it before moving its file.
-  useEffect(() => registerNoteFlush(notePath, flush), [notePath, flush]);
+  useEffect(
+    () =>
+      registerNoteFlush(notePath, async () => {
+        await flush();
+        // Autosave reports errors in the editor. Tree actions must also stop,
+        // otherwise remounting at the new path would discard those unsaved edits.
+        if (dirtyRef.current) throw new Error("笔记尚未保存，请保存成功后再移动或重命名。");
+      }),
+    [notePath, flush],
+  );
 
   const onChange = useCallback(
     (markdown: string) => {
@@ -1604,6 +1755,7 @@ function NoteEditor({
         <MarkdownEditor
           accentRgb={accent.rgb}
           className="nomi-editor--notes"
+          handleRef={editorRef}
           mode="wysiwyg"
           onBlur={() => void flush()}
           onChange={onChange}
