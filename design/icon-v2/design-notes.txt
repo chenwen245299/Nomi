@@ -1,0 +1,24 @@
+Nomi icon v2 — 喜鹊笔记本
+
+设计方向
+参考用户给出的 WordCraft、DeckCraft、GridCraft：鲜明的圆角方形底色、奶油白主体、粗黑轮廓和简洁的文具意象。
+保留 Nomi 原有小喜鹊的侧身轮廓、蓝色翅膀和黑白配色，将它融入笔记本封面，表达记录与整理。
+
+交付文件
+nomi-icon-v2.png：1254 × 1254，圆角之外透明的 PNG 原图。
+desktop/：32、64、128、256、512 像素 PNG，以及 macOS ICNS 和 Windows ICO。
+本目录是独立的新图标设计方案，应用当前的图标引用未作修改。
+
+生成方式
+内置 ImageGen。两张输入图分别作为现有品牌形象参考和视觉风格参考。
+
+最终生成提示词（原文）
+Use case: style-transfer / logo-brand.
+Asset type: a finished macOS desktop application icon redesign for Nomi.
+Input image 1 is the existing Nomi app icon, an adorable black and cream magpie with a cobalt blue wing; use it only to preserve the brand's bird identity and palette.
+Input image 2 is a style reference screenshot. Study ONLY the three office/productivity icons WordCraft, DeckCraft, GridCraft outlined in red: saturated flat rounded-square tile, ivory object, very bold near-black contour, minimal functional stationery illustration, slightly handmade but precise edges. Ignore all animal engravings and the screenshot layout.
+Primary request: transform Nomi's bird into a clever, extremely simple office-app emblem. Draw ONE chunky cream closed pocket notebook tilted slightly counterclockwise, with a near-black outline, a black left spine and two short black horizontal note lines at the bottom. The LARGE central emblem on the notebook cover is a minimal black-and-cream magpie in side profile facing right: rounded black head, tiny solid cream eye (not a glossy eye), short pointed black beak, cream breast, one cobalt blue folded wing, and a short raised black tail to the upper left. Use only a few generous interlocking flat shapes for the bird, very recognizable at small size. The notebook and bird should feel like ONE integrated symbol, not multiple separate objects. No pencil, no extra floating decorations.
+Composition: one icon only, tightly centered on a saturated cobalt blue rounded-square tile, with uniform generous safe margins. The notebook occupies about 65–70% of the tile. Tile fills most of a square canvas with a small transparent margin outside its rounded corners. No scene, no desk, no presentation board, no typography or app label.
+Style: crisp two-dimensional vector-like editorial pictogram; thick black ink contour, cream fill, solid blue tile. Match the playful functional simplicity of the boxed office-app references. Slightly imperfect angles, restrained character, premium and purposeful. Absolutely no 3D, photorealism, engraving, feathers, texture, glow, gradient, drop shadow or glossy highlights.
+Palette: saturated cornflower/cobalt blue around #4361DF, warm ivory #F3EBD9, near black #191A18. Use only these colors.
+Constraints: one single production-ready icon, no text, no watermark, no borders other than the object outline. Transparent canvas outside the blue rounded square.

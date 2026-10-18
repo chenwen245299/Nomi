@@ -1,0 +1,31 @@
+Nomi 工作夹 — AI 辅助细节版
+
+日期：2026-10-17
+
+基础：用户认可的 design/icon-v10/nomi-workspace-refined.png。
+
+修改：将中间关联图的上方圆形节点改为小型四角生成符号，延续下方两个信息节点和连线，以局部细节提示 AI 参与知识整理、关联和生成。整体仍以个人工作夹为主要意象。
+
+保留：工作夹、三张分区卡、记事与勾选符号、彩色标签、青绿底与奶油白、手绘角度和主体布局。
+
+交付：nomi-workspace-ai.png 是带外围背景的独立设计稿；previews/ 为 32/64/128/256 像素预览。应用图标引用未修改。
+
+生成方式：内置 ImageGen 定向编辑。
+
+最终提示词（原文）：
+Use case: precise-object-edit.
+Edit the attached approved Nomi app icon with ONE VERY SMALL LOCAL CHANGE.
+
+The source is a teal rounded-square tile containing an ivory organizer folder and three tabbed cards: notes on the left, a three-node linked diagram in the center, a check on the right. The user approves this exact icon and wants a subtle suggestion that this whole personal workspace is AI-assisted. Preserve the icon literally as closely as possible.
+
+ONLY CHANGE:
+On the CENTER CARD, replace the TOP CIRCULAR NODE of the existing three-node diagram with ONE small solid near-black FOUR-POINT INTELLIGENCE GLINT. Use a narrow, slightly hand-inked four-point diamond / glint with softly concave sides, a gently longer vertical axis, and controlled tapering. It should be an understated intelligent-generation cue integrated into the existing connected-knowledge motif.
+Keep the new glint centered exactly where the current upper round node is. Its bounding box is about the same size as that round node, at most 15% larger. On the 1254px source canvas the upper node is approximately centered at x630 y425, within x595–665 and y388–465.
+Keep BOTH diagonal connector strokes and BOTH lower circular nodes exactly as they are. The stem connections meet the glint cleanly at its lower sides. The resulting small motif reads as information connected through an intelligent generation point. This is a tiny detail on one card, not a new overall emblem.
+
+STRICT INVARIANTS:
+Keep the entire folder silhouette, front pocket height, card positions, card angles, three colored tabs, note strokes, check mark, teal tile, ivory fills, near-black contour, line weights, canvas background, margins and overall composition unchanged.
+The new glint must use the same solid warm-black ink as the other symbols. Do not color it, add glow, make it shiny, or add any detached sparkles. No new badges or floating objects.
+No letters or AI text, no electrical imagery, no robot, brain or microchip, no new central logo, no radial sunburst. Keep the original clean flat hand-inked editorial style.
+One single finished icon on the same canvas, not a comparison sheet.
+

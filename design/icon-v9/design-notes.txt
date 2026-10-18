@@ -1,0 +1,50 @@
+Nomi 图标方案：分区工作夹
+
+日期：2026-10-17
+
+产品调研依据：src/App.tsx 的 sections 定义，以及 chat、papers、notes、todo、travel、history、finance 的实际模块与数据接口。
+
+已确认的主要功能：
+1. AI 对话、助手与模型管理。
+2. 论文规划、正文和论文关系图。
+3. 分层文件夹与笔记编辑。
+4. 待办、日程、重复任务与重要/紧急四象限。
+5. 旅行笔记、地图、地点与行程安排。
+6. 历史事件、人物关系、地图区域与时间。
+7. 个人记账、收支记录与票据识别。
+
+设计判断：这些功能共同支持知识、计划和生活资料的整理，因此图标采用多分区工作夹这一熟悉物件。笔记线条、关联节点、勾选卡片分别概括记录、关联、安排三个动作。此为根据现有功能作出的设计判断，并非新增或已确认的产品定位。
+
+视觉参考：用户提供的 WordCraft、DeckCraft、GridCraft 图标。采用可辨认的功能物件、奶油白主体、粗黑轮廓、鲜明底色与轻微手绘角度。没有复用旧喜鹊、字母、放射星芒或抽象环结方案。
+
+交付：nomi-workspace.png 是带背景的设计预览；previews/ 为 32/64/128 像素预览。应用当前图标没有替换。最终源图的实际像素与颜色以 PNG 为准。
+
+生成方式：内置 ImageGen。
+
+最终提示词（原文）：
+Use case: logo-brand / functional desktop app icon.
+Asset: original Nomi app icon.
+
+PRODUCT CONTEXT:
+Nomi is a rich personal workspace with SEVEN real modules: AI conversations; paper/research planning and relationship graphs; hierarchical notes; scheduled and recurring tasks; travel journals, maps and itineraries; historical events, people and geographic research; personal expense tracking and receipt extraction. The core job is to collect, organize and connect personal knowledge, plans and everyday life in one place. The icon must communicate an organized personal workspace, rather than just chat or just writing.
+
+STYLE REFERENCE:
+Use the attached screenshot only as a style reference. Study WordCraft's paper-and-pen, DeckCraft's presentation screen, and GridCraft's spreadsheet. Each uses a clearly recognizable functional object, warm ivory fills, substantial black contours, slightly hand-inked geometry and a flat vivid background. Transfer that logic to Nomi. Ignore the animal engravings. Do not use any previous Nomi concepts.
+
+ONE COHERENT PICTORIAL EMBLEM:
+An OPEN PERSONAL ORGANIZER FOLIO / work folder holding THREE tabbed content cards. It must look like a single useful everyday organizer, not a collage of unrelated symbols.
+The folio has a broad ivory front pocket, a visible slightly raised back, a simple diagonal pocket opening, and a sturdy near-black outline. It is viewed almost straight on with just enough slight three-quarter angle to reveal layered cards. A small offset angle gives it approachable handmade character.
+Three ivory cards rise clearly out of the pocket in a neat stagger:
+- left card: two short broad black horizontal note strokes;
+- tallest middle card: a simple three-dot linked-node motif, with only two connecting strokes, evoking connected knowledge;
+- right card: one bold hand-inked check mark, evoking plans and getting things done.
+Their three top tab shapes identify organized sections. Keep each motif very simple and readable. The card heights should be modest, and the front folder pocket anchors everything. The pocket itself has no emblem, no text and no extra markings.
+The whole object must instantly suggest "all my knowledge and plans, organized together". Use the same economical object illustration logic as the office-app reference, with a distinct folio silhouette.
+
+COMPOSITION / PALETTE:
+Exactly one app icon. A saturated muted teal #239C8A rounded-square tile on a plain light warm-gray #F2F0EB canvas. Tile occupies 90% of the square canvas. The ivory #F4EBD9 organizer and cards, with near-black #1D1D1A contours and marks, occupy about 71% of the tile width and height. Balanced margins, slightly hand-drawn proportions, smooth solid fills. Outline thickness roughly 11–13px at a 512px tile size. Only these three main colors.
+The card motifs are subordinate details; the single folio organizer silhouette dominates.
+
+FINISH:
+Flat crisp two-dimensional editorial icon, quietly warm, functional and distinctive. No gradients, shine, glow, texture, noise, bevel, 3D or cast shadows. No mascot, bird, robot, isolated letter, starburst, sparkle, abstract knot, pinwheel or decorative doodles. No oversized chat bubble. No wordmark, lettering, app label, badge or watermark. Do not put a separate icon for every feature into the design. One single carefully balanced finished app icon.
+

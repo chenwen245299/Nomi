@@ -1,0 +1,42 @@
+Nomi 分区工作夹 — 优化稿
+
+日期：2026-10-17
+
+基础：用户认可的 design/icon-v9/nomi-workspace.png。沿用七个功能模块共用的个人工作台意象，保留工作夹、三张内容卡、奶油白与青绿色。
+
+本次调整：
+- 降低正面口袋的高度，减少空白占比，收紧整体轮廓。
+- 减轻黑色描边和重叠边缘的重量。
+- 整理三张卡片的高低节奏、笔记线条、关联节点和勾选的比例。
+- 保留黄、珊瑚、蓝三个小标签，延续原稿的分区辨识度和手绘角度。
+
+交付：nomi-workspace-refined.png 为带外部背景的设计稿，previews/ 提供 32/64/128/256 像素预览。原版仍在 design/icon-v9/。应用图标引用没有修改。
+
+生成方式：内置 ImageGen，对用户认可的图进行定向编辑。下面提示词中的百分比和色值是设计目标，实际效果以输出 PNG 为准。
+
+最终编辑提示词（原文）：
+Use case: precise-object-edit / app icon refinement.
+Edit target: the attached APPROVED Nomi organizer-folder icon. This is a careful refinement of the same design, not a new concept. Preserve its recognizable teal tile, ivory open folio, THREE tabbed cards, note / connected-knowledge / check motifs, warm hand-inked character and overall reading.
+
+MAKE THESE SPECIFIC REFINEMENTS:
+
+1. REBALANCE THE FOLIO.
+The current front pocket is too tall and mostly empty. Reduce its visible height by about ONE THIRD. Its bottom edge moves upward a little and its opening edge moves downward a little, so the front pocket occupies about 38–42% of the entire organizer's height instead of dominating half the image. This gives the visible cards more breathing room and makes the whole object lighter. Keep the pocket front blank. Do not add text, badges or decoration.
+
+2. CLEARER THREE-CARD RHYTHM.
+Keep three cards, with the middle card clearly but modestly taller and the outer two lower. Their widths and spacing should feel optically balanced. Preserve the yellow left tab, coral middle tab and periwinkle-blue right tab, but harmonize them into restrained mustard, muted coral and soft periwinkle. Keep slight natural tilts and the diagonal pocket opening, with a less steep opening slope. Avoid a mechanical grid.
+Left card: two clean short note strokes, with the lower stroke a little shorter.
+Middle card: the same simple three-node linked motif. Make the circles a little smaller than the original and give the two connecting strokes more open space.
+Right card: the same confident check mark, optically centered with comfortable margins.
+The motifs should be the same optical weight, clearly readable and subordinate to the folio silhouette.
+
+3. CONTROL THE INK.
+Make all near-black outside contours about 20% slimmer than the original and keep the internal marks a little lighter to match. Use warm near-black #20211E. Maintain subtly imperfect ink-drawn curves and angles; do not make it glossy, childish or perfectly geometric. Remove thick black clumps at overlaps. Preserve clear separators and crisp solid fills.
+
+4. ICON-SIZE COMPOSITION.
+The entire organizer should fill approximately 72% of the teal tile's width and 71% of its height, optically centered with even comfortable breathing room on all sides. The original is a little crowded; make the symbol slightly more compact. Keep the rounded-square teal tile and pale warm-gray surrounding canvas at the same scale as the reference.
+Teal around #299B8B, ivory around #F4ECDD. Yellow / coral / blue tabs remain small accent areas, not large new fields of color.
+
+FINISH / INVARIANTS:
+Exactly one app icon, same approved concept, same three card meanings. Flat crisp two-dimensional editorial pictogram with warm hand-inked character and clean solid fills. No 3D, gradients, shine, glow, texture, grain, noise, cast shadows or extra outlines around the tile. No wordmark, N letter, mascot, bird, AI badge, sparkle, face, extra objects or watermark. Do not replace the organizer with chat bubbles or abstract symbols. Do not make a comparison sheet.
+

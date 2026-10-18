@@ -1,0 +1,41 @@
+Nomi icon v3 — AI 对话品牌符号探索
+
+2026-10-16
+
+生成方式：内置 ImageGen；每个方向分别生成。三个 PNG 均为带背景的概念预览，尚未作为应用图标接入。
+
+方向 A：N 字母与对话尾角结合；方向 B：两枚相向的对话引号；方向 C：回声环形对话符号。推荐进一步发展 B。
+
+参考：
+ChatGPT 官方图标：https://help.openai.com/en/articles/7905742-what-does-the-official-chatgpt-ios-app-icon-look-like
+Claude 官方下载页：https://claude.com/download
+Perplexity 官方下载页：https://www.perplexity.ai/platforms
+AI 应用图标对照：https://www.windowscentral.com/software-apps/chatgpt-and-gemini-would-rather-marry-you-off-to-casper-the-friendly-ghost-than-admit-they-dont-the-answer
+
+最终生成提示词 A（原文）
+Use case: logo-brand.
+Asset type: Nomi AI conversation desktop app icon, concept A "N / conversation".
+Primary request: create a completely NEW original abstract brand icon for an AI chat application called Nomi. A bold uppercase N monogram is the entire central mark, with tiny speech-tail cuts integrated into its two terminals so that the letter subtly suggests a conversation. The N must read instantly as an N at 32px. Use a single unified broad ivory N silhouette, dark ink outline, smooth restrained corner rounding, very clean negative spaces, no separate surrounding speech bubble. Make it confident, intelligent, friendly and distinctive.
+Art direction: contemporary AI assistant brand symbol, with the restraint and memorability of ChatGPT, Claude, Perplexity and Gemini, but entirely original geometry. Combine that simplicity with the supplied office-app reference's visual language: saturated solid rounded-square background, warm ivory foreground, thick near-black contour. No animal or mascot, no notebook or stationery.
+Composition: one icon only. Perfectly front-facing, geometrically balanced. A saturated cobalt/periwinkle #4B59DE rounded-square tile occupies 88% of a square canvas, centered on a completely uniform pale warm-gray #F3F1EB background. Main N occupies 58% of the tile width and 58% of its height. The N has an ivory #F5EEDC fill and bold near-black #171918 outline. Rounded-square corner radius about 22% of tile width. Both the icon and mark must be crisp, optical centered and generously spaced. Do not add any other marks.
+Style: strictly flat vector-like graphic, smooth perfectly uniform solid color fills, precisely controlled bold contour. No simulated materials, no 3D, no gradient, no cast shadow, no glow, no paper grain, no texture, no glossy highlights.
+Text: none apart from the N mark. No caption, no label, no watermark. No mockup, no presentation board.
+
+最终生成提示词 B（原文）
+Use case: logo-brand.
+Asset type: original Nomi AI conversation app icon, concept B "two-way dialogue".
+Primary request: invent a striking minimal symbol for an AI conversation app using TWO opposite rounded quotation marks that fit together into one compact balanced emblem. One chunky ivory mark at upper left faces down/right; the other at lower right is rotated 180 degrees and faces up/left. Each mark is a fat rounded near-square comma with a short angular taper, like a quotation mark / little speech bubble. The two shapes curl toward each other with a generous consistent dark negative-space S-shaped channel between them, suggesting a question and an answer. Two shapes total, absolutely no circles inside, no eyes, no three dots, no face. The silhouette must be distinctive and read clearly at 32px.
+Style direction: the minimal abstract brand-sign discipline found in AI chat apps, and the warm playful boldness of simple flat office-app icons. Original geometry, not a reproduction of any existing brand. No animal or mascot, no notebook, stationery or document.
+Palette: dark ink #202320 rounded-square tile, warm ivory #F4EDDC mark. One small cobalt #555FE5 accent may be placed on the short terminal of the lower quotation mark only. Very restrained two-color main symbol.
+Composition: one perfectly front-facing app icon only, centered. The rounded-square tile fills 88% of a square canvas on a completely uniform pale warm-gray #F3F1EB background. Tile radius about 22% of its width. Compact paired-quote emblem occupies 58–62% of the tile. Equal optical margins and balanced negative space. No perspective, no scene.
+Rendering: extremely crisp flat 2D vector-like artwork. Perfect smooth edges, bold clean silhouette, no outlines around the cream shapes (the dark background provides the separation), no fine detail. No 3D, no gradients, no texture, no cast shadow, no glow, no grain.
+No text, no caption, no wordmark, no watermark, no presentation board.
+
+最终生成提示词 C（原文）
+Use case: logo-brand.
+Asset type: original app icon for Nomi, an AI conversation assistant. Concept C "thought echo".
+Primary request: design an original iconic abstract speech/echo mark. ONE broad warm-ivory ribbon makes an open rounded-square spiral, with just one and a quarter turns, surrounding a large simple dark central void. Its outer end exits down-right as one short diagonal speech tail. Think of a thought being returned as a reply: compact, flowing, memorable, gently asymmetric. The main symbol's outline should clearly suggest an open dialogue loop, rather than an @ sign, number, letter, maze, snail, brain, or fingerprint. Very few bold shapes, wide consistent gaps, no tiny details. The mark must work as a recognizable single silhouette at 32px.
+Visual direction: contemporary minimal AI app brand symbol, with the strong silhouettes and restraint of leading AI chat app icons. Entirely original geometry. Add the bold ivory-and-black graphic character of flat office app icons, but avoid object illustrations. No animal, mascot, notebook, pen or stationery. No star or sparkle, no floral rosette, no interwoven knot.
+Composition: one perfectly front-facing app icon, a flat warm vermilion/orange #EC704B rounded-square tile occupying 88% of a square canvas on a completely uniform pale warm-gray #F3F1EB background. Tile radius about 22% of width. The central abstract ivory #F5EEDC echo-loop occupies 60% of the tile. It has a bold clean near-black #1C201D contour around both outside and central opening. The short speech tail is integrated into the same ribbon. Balanced optical spacing, generous margins.
+Rendering: extremely crisp flat vector-like logo. Uniform solid fills, smooth clean edges. Absolutely no 3D, gradients, lighting, gloss, shadows, texture or grain. No text, no caption, no watermark, no app name, no wordmark, no presentation board.
+

@@ -1,0 +1,22 @@
+Nomi 图标启用记录
+
+日期：2026-10-17
+
+用户选定方案：nomi-workspace-ai-badge.png。
+
+处理：使用内置 ImageGen 提取外围透明区域；使用 Tauri 的 SVG/PNG 导出器规范圆角边界并生成透明 1024 像素母版。圆角模板只裁去外围边缘，工作夹与卡片主体位于模板内部。
+
+正式资源：
+- src-tauri/app-icon.png
+- src-tauri/icons/：macOS ICNS、Windows ICO、桌面 PNG 以及仓库已有移动平台图标。
+- public/favicon.png 与 index.html 的页签图标引用。
+
+重新生成：pnpm tauri icon src-tauri/app-icon.png --output src-tauri/icons
+
+本机启用：已将 icon.icns 同步至 /Applications/Nomi.app/Contents/Resources/icon.icns，并刷新应用注册。程序可执行文件的 SHA-256 在修改前后保持一致，没有改动程序或用户数据。已安装图标与项目 ICNS 的 SHA-256 一致。
+
+验证：pnpm build 通过；Tauri 图标引用、PNG 尺寸与透明通道、ICNS/ICO 容器及构建后的 favicon 均已检查。应用若正在运行，下次打开会重新读取资源。
+
+透明背景处理提示词（原文）：
+Technical app-icon preparation only. Remove ONLY the pale gray-white presentation background OUTSIDE the teal rounded-square tile of the attached approved Nomi icon. The entire exterior area must become genuinely transparent. Preserve the same square canvas dimensions and the current tile position and margins. Preserve the teal tile, folder, all three cards, colored tabs, node diagram, notes, check and yellow AI badge literally unchanged. Preserve the exact AI lettering and all strokes. Do not redraw, redesign, recolor, crop, enlarge, smooth away internal details or add anything. This is alpha/background extraction for an installed macOS/Windows app icon, not a design variation. The rounded-square outside silhouette must have clean smooth antialiased edges with no pale fringe, stray opaque pixels, shadow or halo. Keep every pixel within the teal tile opaque. Exactly one transparent-background icon.
+

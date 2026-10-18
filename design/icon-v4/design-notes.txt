@@ -1,0 +1,42 @@
+Nomi icon v4 — 灵感旋流
+
+日期：2026-10-16
+
+设计方向：参考 Codex 与 Claude 的简洁符号、柔和轮廓和留白，采用浅色圆角底板与蓝紫色五瓣旋转符号。
+
+交付：nomi-icon-v4.png 为独立的新设计稿；desktop/ 提供 32/64/128/256/512 PNG 与 ICNS、ICO。当前应用图标引用未修改。
+
+方式：内置 ImageGen，先生成新标志，再进行一次保留主体的外缘清理。PNG 保留透明通道。此文件记录生成意图；实际像素以 PNG 为准。
+
+参考资料：
+Codex 官方页面：https://openai.com/codex/
+Codex 图标视觉参考：https://uhd-inc.jp/blog/codex-app
+Claude 官方页面：https://claude.com/product/overview
+Claude 图标参考：本机 /Applications/Claude.app/Contents/Resources/electron.icns
+
+初次生成提示词（原文）：
+Use case: logo-brand, original identity design.
+Asset type: finished desktop application icon for Nomi, a thoughtful AI conversation and personal workspace app.
+
+STYLE REFERENCE IMAGES ONLY:
+The two most recent reference images are (1) a Codex app icon reference screenshot: off-white rounded-square tile, a soft blue-violet organic emblem, restrained gentle depth; (2) the Claude app icon: warm terracotta tile with one simple ivory irregular radiating mark. Borrow their visual economy, generous whitespace, friendly organic silhouette and mature AI-product character. The references are NOT edit targets. Create Nomi's own original emblem.
+
+PRIMARY DESIGN:
+One beautifully balanced abstract "thought in motion" emblem. It is a compact five-armed organic whorl: FIVE broad, short, gently curved lobes emerge from one solid center and turn subtly in the same direction. Rounded blunt lobe ends, scooped open valleys, quietly asymmetric, sculptural and very simple. One lobe is slightly longer so the mark feels alive rather than a regular flower. A single uninterrupted positive silhouette, no holes or interior symbols, no tiny detail. The five lobes must be broad and soft, almost like flowing pieces of a brush stroke, with generous valleys separating their ends. Avoid thin rays. The sign should feel as recognizable and restrained as a mature AI brand. A strong distinctive silhouette that works as a monochrome stamp at 24px.
+
+COLOR AND FINISH:
+Off-white porcelain #FAF9F6 rounded-square app tile. Emblem in luminous muted indigo, transitioning very subtly from periwinkle blue #7778E8 at upper left to deep iris #4B50BC at lower right. Mostly flat graphic appearance; a barely perceptible soft surface contour is acceptable for the app tile, but the emblem remains a clean simple filled shape. No contour lines, no black outline, no sharp border. Calm, sophisticated, tactile but not glossy.
+
+COMPOSITION:
+Exactly ONE standalone app icon. Square canvas, the off-white rounded-square tile almost fills the canvas with a small 5% exterior transparent margin. Precisely centered organic whorl occupies about 55% of tile width and height. Large quiet margins around the emblem. Modern macOS app icon proportions and continuous rounded corners. Straight-on flat view. Genuine transparent area outside the tile. No app label, no background scene, no contact sheet.
+
+AVOID:
+No literal alphabet letters, no N monogram, no speech bubbles, no quotation marks, no coding prompt, no cloud shape, no notebook, no paper, no mascot, no bird, no animal, no eyes. Do not copy Claude's many thin sunburst rays, Codex's cloud/terminal, ChatGPT's interwoven knot, or Gemini's four-point sparkle. Do not draw a generic five-point star: these are five thick softly CURVED blunt lobes of an organic whorl, not straight pointed rays. No thick ink outline, no sticker aesthetic, no illustration, no cartoon, no extra badge, no text or watermark. No glass, chrome, glow, lens effect or prominent shadows.
+
+最终编辑提示词（原文）：
+Use case: precise-object-edit, production cleanup of an app icon.
+Edit target: the attached Nomi icon image, a five-lobed flowing blue-violet emblem on an off-white rounded-square tile.
+CHANGE ONLY THE OUTER TILE EDGE AND CANVAS CLEANLINESS. Preserve the existing emblem's exact shape, five-lobe count, position, scale, proportions, color transition and smooth interior edges. Preserve the off-white tile and its current overall size.
+Repair the transparent silhouette of the tile into a perfectly smooth, geometrically regular rounded square: four absolutely straight sides and four matching continuous smooth corner curves. Remove all ragged white fringe, all detached pixels, all speckles, all dirty noise and every stray pixel outside the rounded square. The output is a clean app icon master, not a textured sticker. Add one extremely subtle very pale lavender-gray hairline just inside the tile edge to define its boundary precisely, never a dark outline. No shadow at all outside the tile. Everything outside the clean rounded-square edge must be genuinely 100% transparent. The tile's entire white surface must be perfectly smooth and clean, free of grain, texture and speckles. The tile is a simple pale solid surface.
+No new symbols, no text, no labels, no watermark, no extra ornaments. Do not redesign the central emblem. Keep its soft muted blue-violet gradient. One single icon only.
+

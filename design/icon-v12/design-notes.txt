@@ -1,0 +1,51 @@
+Nomi 工作夹 — AI 文字角标版
+
+日期：2026-10-17
+
+设计基础：用户认可的 design/icon-v10/nomi-workspace-refined.png，以及用户提供的 TexCraft 黄色角标参考。
+
+本次调整：
+- 在工作夹右下角增加黄色 AI 小角标，采用黑色外框与细内框。
+- 明确使用大写 AI 字样表示人工智能辅助。
+- 中间卡片保留普通三节点关联图，移除上一稿的星形生成符号。
+- 主体继续表达记录、关联与计划等个人工作台用途。
+
+用户约束：不使用星形、星芒或闪光符号；不画供电、电池、插头等；以现有工作夹为基础小改。
+
+查阅依据：
+IBM Carbon — AI label： https://www.carbondesignsystem.com/building-blocks/core/components/ai-label/guidelines
+IBM 图标库 AI 分类： https://www.ibm.com/design/language/iconography/ui-icons/library/
+Microsoft Fluent — icon modifiers： https://fluent2.microsoft.design/iconography/
+这些资料用于判断 AI 的标识方式和角标层次，没有复刻它们的组件或产品标志。
+
+交付：nomi-workspace-ai-badge.png 保留带外围背景的设计稿；previews/ 为 32/64/128/256 像素预览。用户确认后，正式图标已启用：src-tauri/app-icon.png 为 1024 像素透明母版，src-tauri/icons/ 为平台图标，public/favicon.png 为网页页签图标。正式母版移除了外围展示底，并规范了圆角外缘，主体沿用本方案。
+
+制作方式：内置 ImageGen 定向编辑。实际图形以 PNG 输出为准。
+
+最终提示词（原文）：
+Use case: precise-object-edit / app-icon refinement.
+
+INPUT 1 is the APPROVED Nomi icon and is the edit target: teal rounded-square tile, ivory personal organizer folder, three content cards with yellow/coral/blue tabs, note strokes, a plain three-round-node linked diagram, and a check.
+INPUT 2 is the TexCraft screenshot and is a STYLE REFERENCE ONLY for the small yellow lower-right modifier badge, its controlled black double border and its clear visual hierarchy. Do not copy the TexCraft document, lettering, red tile, page background or layout.
+
+MAKE A SMALL, SPECIFIC UPDATE TO INPUT 1:
+Add ONE small warm-yellow rounded-square badge overlapping the LOWER-RIGHT corner of the folder's front pocket. This badge says exactly "AI", in two UPPERCASE letters. It signals an AI-assisted personal workspace while the organizer remains clearly the dominant pictorial subject.
+
+BADGE DETAILS:
+- Width and height about 21–22% of the teal tile width; never more than one quarter of the tile. On the 1254px source, a sensible approximate location is x900–1130, y825–1055, all inside the teal tile with a comfortable margin.
+- The badge overlaps the front pocket corner, as the yellow badge overlaps the document in the TexCraft reference. It is a small attached modifier, not floating far away.
+- Warm mustard/golden yellow related to the existing yellow tab, around #F3BF4D. Bold warm-black outer contour matching the folder. One thin inset black line, with sufficient spacing, inspired by the reference. Flat color.
+- EXACT TEXT: "AI". Capital A followed by capital I, side by side, no punctuation, no other text. Use bold, legible, slightly hand-inked upright lettering. Give the I short top and bottom bars so it reads clearly as a capital I. Open A counter, balanced letter spacing, generous inside margins. The letters should fill around 60% of the badge width and be easy to recognize at small size.
+- A restrained handmade edge fits the folder style. No glossy button, no 3D bevel, no gradient, no glow, no cast shadow.
+
+PRESERVE THE MAIN ICON:
+Keep the teal tile, pale outer canvas, ivory organizer silhouette, reduced front-pocket height, three card positions, colored tabs, natural angles, contour weights, note/check meanings and overall proportions as in input 1.
+The middle card uses the ORIGINAL SIMPLE THREE ROUND NODES with two connecting lines. All card symbols stay simple and clean. The badge carries the AI meaning; do not duplicate AI cues on the cards.
+Keep the contents subordinate to the main folder silhouette. Do not add new features or clutter.
+
+ABSOLUTE CONSTRAINT:
+NO STAR, NO SPARKLE, NO GLINT, NO STARBURST, NO ASTERISK ANYWHERE.
+No electrical symbol, lightning bolt, plug, battery, chip, robot, brain, mascot or extra object.
+No text except "AI" in the badge. No wordmark, app name, watermark or comparison board.
+One single finished icon, same canvas as input 1.
+
