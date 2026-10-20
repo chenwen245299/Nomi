@@ -2806,7 +2806,7 @@ function MainColumn({
     );
   }
 
-  // Todo: a full-height board / list host with its own header controls.
+  // Todo: a full-height board / list / calendar host with its own header controls.
   if (activeSection === "todo") {
     return (
       <View style={[styles.mainColumn, glass(12, 120)]}>

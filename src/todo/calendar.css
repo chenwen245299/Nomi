@@ -1,0 +1,594 @@
+.todo-calendar {
+  container-type: inline-size;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  padding: 0 16px;
+  color: var(--cal-text);
+  font-size: 12px;
+}
+
+.todo-calendar button {
+  color: inherit;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  font: inherit;
+}
+
+.todo-calendar button:focus-visible,
+.todo-calendar summary:focus-visible {
+  outline: 2px solid var(--cal-accent);
+  outline-offset: -2px;
+}
+
+.todo-cal-toolbar,
+.todo-cal-navigation,
+.todo-cal-modes,
+.todo-cal-composer,
+.todo-cal-footer,
+.todo-cal-legend,
+.todo-cal-legend > span {
+  display: flex;
+  align-items: center;
+}
+
+.todo-cal-toolbar {
+  flex-shrink: 0;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 58px;
+  padding: 10px 0;
+}
+
+.todo-cal-navigation {
+  gap: 4px;
+}
+.todo-cal-navigation h2 {
+  margin: 0 10px 0 6px;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.2px;
+}
+.todo-calendar .todo-cal-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 28px;
+  border-radius: 7px;
+  color: var(--cal-secondary);
+}
+.todo-calendar .todo-cal-today {
+  padding: 4px 9px;
+  border: 1px solid var(--cal-line);
+  border-radius: 7px;
+  font-size: 11px;
+}
+.todo-cal-icon:hover,
+.todo-cal-today:hover {
+  background: var(--cal-hover);
+}
+.todo-cal-modes {
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--cal-line);
+  border-radius: 9px;
+  background: var(--cal-alt);
+}
+.todo-cal-modes button {
+  min-width: 35px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  color: var(--cal-muted);
+}
+.todo-cal-modes button[aria-pressed="true"] {
+  background: var(--cal-surface);
+  color: var(--cal-accent-text);
+  box-shadow: 0 1px 3px rgba(20, 28, 40, 0.1);
+  font-weight: 600;
+}
+
+.todo-cal-composer {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 3px 9px;
+  border: 1px solid var(--cal-line);
+  border-radius: 9px;
+  background: var(--cal-surface);
+}
+.todo-cal-composer-date {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--cal-secondary);
+  font-size: 11px;
+}
+.todo-calendar .todo-cal-slot {
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: var(--cal-selected);
+  color: var(--cal-accent-text);
+  font-size: 11px;
+}
+.todo-cal-composer-input {
+  flex: 1;
+  min-width: 100px;
+}
+.todo-cal-undated {
+  flex-shrink: 0;
+  margin-bottom: 10px;
+  border: 1px solid var(--cal-line);
+  border-radius: 9px;
+  background: var(--cal-surface);
+}
+.todo-cal-undated summary {
+  padding: 9px 12px;
+  color: var(--cal-secondary);
+  cursor: pointer;
+  font-size: 11px;
+}
+.todo-cal-undated summary > span {
+  margin-left: 5px;
+  color: var(--cal-accent-text);
+}
+.todo-cal-undated summary > small {
+  margin-left: 10px;
+  color: var(--cal-muted);
+  font-size: 10.5px;
+}
+.todo-cal-undated-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 5px;
+  max-height: 140px;
+  overflow: auto;
+  padding: 0 9px 9px;
+}
+.todo-cal-loading {
+  padding: 8px;
+  color: var(--cal-muted);
+}
+
+.todo-cal-month {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--cal-line);
+  border-radius: 12px;
+  background: var(--cal-surface);
+}
+.todo-cal-weekdays {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  flex-shrink: 0;
+  background: var(--cal-alt);
+  border-bottom: 1px solid var(--cal-line);
+}
+.todo-cal-weekdays span {
+  padding: 9px;
+  color: var(--cal-muted);
+  text-align: center;
+  font-size: 10.5px;
+}
+.todo-cal-weekdays span:nth-last-child(-n + 2) {
+  color: var(--cal-accent-text);
+}
+.todo-cal-month-grid {
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-rows: repeat(6, minmax(104px, 1fr));
+  min-height: 624px;
+}
+.todo-cal-cell {
+  min-width: 0;
+  padding: 5px;
+  border-right: 1px solid var(--cal-line);
+  border-bottom: 1px solid var(--cal-line);
+}
+.todo-cal-cell:nth-child(7n) {
+  border-right: 0;
+}
+.todo-cal-cell:nth-last-child(-n + 7) {
+  border-bottom: 0;
+}
+.todo-cal-cell[data-outside="true"] {
+  background: var(--cal-alt);
+}
+.todo-cal-cell[data-outside="true"] .todo-cal-date {
+  color: var(--cal-muted);
+}
+.todo-cal-cell-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.todo-calendar .todo-cal-date {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 11px;
+}
+.todo-cal-date:hover {
+  background: var(--cal-selected);
+}
+.todo-calendar [aria-current="date"] {
+  background: var(--cal-accent);
+  color: white;
+}
+.todo-calendar .todo-cal-cell-add {
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 5px;
+  color: var(--cal-muted);
+  opacity: 0;
+}
+.todo-cal-cell:hover .todo-cal-cell-add,
+.todo-cal-cell:focus-within .todo-cal-cell-add {
+  opacity: 1;
+}
+.todo-cal-cell-add:hover {
+  background: var(--cal-hover);
+}
+.todo-cal-cell-events {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.todo-calendar .todo-cal-more {
+  padding: 1px 3px;
+  color: var(--cal-muted);
+  text-align: left;
+  font-size: 10px;
+}
+.todo-cal-more:hover {
+  color: var(--cal-accent-text);
+}
+
+.todo-cal-event {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 30px;
+  overflow: hidden;
+  padding: 5px 6px;
+  border-left: 3px solid var(--event-color);
+  border-radius: 5px;
+  background: var(--event-fill);
+  color: var(--cal-text);
+}
+.todo-cal-event:hover {
+  box-shadow: inset 0 0 0 1px var(--event-color);
+}
+.todo-cal-event[data-done="true"] {
+  opacity: 0.55;
+}
+.todo-cal-event[data-done="true"] .todo-cal-event-title {
+  text-decoration: line-through;
+}
+.todo-calendar .todo-cal-check {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+  padding: 0;
+  border: 1px solid var(--event-color);
+  border-radius: 50%;
+  color: var(--event-color);
+}
+.todo-calendar .todo-cal-event-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-self: stretch;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  text-align: left;
+}
+.todo-cal-event-title {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  font-size: 11.5px;
+  font-weight: 550;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-cal-event-meta {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--cal-secondary);
+  font-size: 10px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-calendar .todo-cal-event-menu {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  padding: 0;
+  border-radius: 4px;
+  color: var(--cal-secondary);
+  opacity: 0;
+}
+.todo-cal-event:hover .todo-cal-event-menu,
+.todo-cal-event:focus-within .todo-cal-event-menu {
+  opacity: 1;
+}
+.todo-cal-event-menu:hover {
+  background: var(--cal-hover);
+}
+.todo-cal-event.is-compact {
+  align-items: center;
+  gap: 2px;
+  min-height: 21px;
+  padding: 2px 3px;
+  border-left-width: 2px;
+}
+.todo-cal-event.is-compact .todo-cal-event-main {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+.todo-cal-event.is-compact .todo-cal-event-title {
+  font-size: 10.5px;
+  line-height: 16px;
+}
+.todo-cal-event.is-compact .todo-cal-event-menu {
+  position: absolute;
+  right: 2px;
+  background: var(--cal-surface);
+}
+.todo-cal-compact-time {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cal-secondary);
+}
+
+.todo-cal-time-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--cal-line);
+  border-radius: 12px;
+  background: var(--cal-surface);
+  overscroll-behavior: contain;
+}
+.todo-cal-time-inner {
+  min-width: 720px;
+}
+.todo-cal-time-scroll.is-day .todo-cal-time-inner {
+  min-width: 280px;
+}
+.todo-cal-columns {
+  display: grid;
+  grid-template-columns: 56px repeat(var(--day-count), minmax(0, 1fr));
+}
+.todo-cal-day-heads {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  border-bottom: 1px solid var(--cal-line);
+  background: var(--cal-surface);
+}
+.todo-cal-time-zone {
+  align-self: center;
+  color: var(--cal-muted);
+  text-align: center;
+  font-size: 9px;
+}
+.todo-calendar .todo-cal-day-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-height: 48px;
+  padding: 8px 4px;
+  border-left: 1px solid var(--cal-line);
+  color: var(--cal-secondary);
+}
+.todo-cal-day-head[data-selected="true"] {
+  background: var(--cal-selected);
+}
+.todo-cal-day-head > span {
+  font-size: 10px;
+}
+.todo-cal-day-head > strong {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 600;
+}
+.todo-cal-day-head > small {
+  color: var(--cal-muted);
+  font-size: 9px;
+}
+.todo-cal-all-day {
+  position: sticky;
+  top: 49px;
+  z-index: 4;
+  border-bottom: 1px solid var(--cal-line);
+  background: var(--cal-alt);
+}
+.todo-cal-all-day-label {
+  align-self: center;
+  padding: 10px 3px;
+  color: var(--cal-muted);
+  text-align: center;
+  font-size: 9px;
+}
+.todo-cal-all-day-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 38px;
+  max-height: 138px;
+  overflow: auto;
+  padding: 5px 4px;
+  border-left: 1px solid var(--cal-line);
+}
+.todo-cal-time-body {
+  position: relative;
+}
+.todo-cal-hours {
+  position: relative;
+  color: var(--cal-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.todo-cal-hours > span {
+  position: absolute;
+  right: 9px;
+  padding: 1px 0;
+  transform: translateY(-50%);
+}
+.todo-cal-hours > span:first-child {
+  transform: none;
+}
+.todo-cal-time-day {
+  position: relative;
+  min-width: 0;
+  border-left: 1px solid var(--cal-line);
+}
+.todo-calendar .todo-cal-time-slot {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border-top: 1px solid var(--cal-line);
+  border-radius: 0;
+}
+.todo-cal-time-slot:nth-child(even) {
+  border-top-style: dashed;
+  border-top-color: var(--cal-alt);
+}
+.todo-cal-time-slot:hover:not(:disabled),
+.todo-cal-time-slot:focus-visible {
+  background: var(--cal-selected);
+}
+.todo-cal-time-slot:disabled {
+  cursor: default;
+}
+.todo-cal-time-empty {
+  position: absolute;
+  top: 620px;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(300px, 80%);
+  transform: translateX(-50%);
+  color: var(--cal-muted);
+  text-align: center;
+  pointer-events: none;
+}
+.todo-cal-time-empty strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.todo-cal-time-empty span {
+  font-size: 11px;
+  line-height: 18px;
+}
+.todo-cal-now {
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  border-top: 1.5px solid #d2504f;
+  pointer-events: none;
+}
+.todo-cal-now > i {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #d2504f;
+}
+.todo-cal-now > span {
+  position: absolute;
+  top: -16px;
+  right: 4px;
+  border-radius: 3px;
+  padding: 1px 3px;
+  background: var(--cal-surface);
+  color: #b73f3e;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.todo-cal-footer {
+  flex-shrink: 0;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-height: 40px;
+  padding: 9px 0;
+}
+.todo-cal-legend {
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--cal-muted);
+  font-size: 9px;
+}
+.todo-cal-legend > span {
+  gap: 4px;
+}
+.todo-cal-legend i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+}
+.todo-cal-hint {
+  color: var(--cal-muted);
+  font-size: 10px;
+}
+
+@container (max-width: 650px) {
+  .todo-cal-navigation h2 {
+    max-width: 240px;
+    font-size: 12px;
+  }
+  .todo-cal-compact-time {
+    display: none;
+  }
+  .todo-cal-cell {
+    padding: 3px;
+  }
+  .todo-cal-legend {
+    gap: 8px;
+  }
+}

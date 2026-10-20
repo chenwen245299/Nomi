@@ -62,6 +62,13 @@ test("detached windows have separate sessions and a new payload takes precedence
   assert.deepEqual(readTabSession("main"), main);
 });
 
+test("calendar layout survives restart and detaching a todo tab", () => {
+  const tab = { ...makeTab(3, "todo"), todoScope: "q2", todoLayout: "calendar" };
+  saveTabSession("main", { tabs: [tab], activeId: tab.id });
+  assert.equal(readTabSession("main").tabs[0].todoLayout, "calendar");
+  assert.equal(readTabSession("detached-calendar", tab).tabs[0].todoLayout, "calendar");
+});
+
 test("corrupt, empty and unsupported sessions fall back to a usable tab", () => {
   for (const raw of [
     "{broken",

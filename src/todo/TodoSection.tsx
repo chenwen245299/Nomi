@@ -67,6 +67,7 @@ import {
   type QuadrantStyle,
 } from "./palette";
 import type { TodosData } from "./useTodos";
+import { TodoCalendar } from "./TodoCalendar";
 import {
   groupForList,
   scopeCounts,
@@ -821,13 +822,17 @@ export function TodoMainColumn({
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const boardable = scopeSupportsBoard(scope);
-  const effectiveLayout: TodoLayout = boardable ? layout : "list";
+  const effectiveLayout: TodoLayout = layout === "board" && !boardable ? "list" : layout;
   const dueDefault = scopeDueDate(scope, today);
   const quadrantDefault = scopeQuadrant(scope) ?? 2;
 
   const visible = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
-    return todosInScope(todos.todos, scope, today).filter((todo) => {
+    // Calendar navigation owns the date window. Today/week choose its initial
+    // range, while quadrant, completion and search filters still apply.
+    const filterScope =
+      effectiveLayout === "calendar" && (scope === "today" || scope === "week") ? "all" : scope;
+    return todosInScope(todos.todos, filterScope, today).filter((todo) => {
       if (!showDone && todo.done && scope !== "done") {
         return false;
       }
@@ -839,7 +844,7 @@ export function TodoMainColumn({
         todo.notes.toLocaleLowerCase().includes(normalized)
       );
     });
-  }, [query, scope, showDone, today, todos.todos]);
+  }, [effectiveLayout, query, scope, showDone, today, todos.todos]);
 
   const openMenu = useCallback((todo: Todo, x: number, y: number) => setMenu({ todo, x, y }), []);
   const openDetail = useCallback((id: string) => {
@@ -876,10 +881,12 @@ export function TodoMainColumn({
       <View style={styles.header}>
         <View style={styles.headerTitleBlock}>
           <Text numberOfLines={1} style={styles.title}>
-            {scopeLabel(scope)}
+            {effectiveLayout === "calendar" ? "日历" : scopeLabel(scope)}
           </Text>
           <Text numberOfLines={1} style={styles.subtitle}>
-            {scopeSubtitle(scope, today)}
+            {effectiveLayout === "calendar"
+              ? `${scopeQuadrant(scope) || scope === "done" ? scopeLabel(scope) : "全部日程"} · 按日期浏览安排`
+              : scopeSubtitle(scope, today)}
           </Text>
         </View>
 
@@ -946,8 +953,8 @@ export function TodoMainColumn({
             ) : null}
           </View>
 
-          {boardable ? (
-            <View style={styles.segment}>
+          <View style={styles.segment}>
+            {boardable ? (
               <SegmentButton
                 accent={accent}
                 active={effectiveLayout === "board"}
@@ -956,16 +963,24 @@ export function TodoMainColumn({
                 onPress={() => onSelectLayout("board")}
                 styles={styles}
               />
-              <SegmentButton
-                accent={accent}
-                active={effectiveLayout === "list"}
-                icon={RiListCheck2}
-                label="清单视图"
-                onPress={() => onSelectLayout("list")}
-                styles={styles}
-              />
-            </View>
-          ) : null}
+            ) : null}
+            <SegmentButton
+              accent={accent}
+              active={effectiveLayout === "list"}
+              icon={RiListCheck2}
+              label="清单视图"
+              onPress={() => onSelectLayout("list")}
+              styles={styles}
+            />
+            <SegmentButton
+              accent={accent}
+              active={effectiveLayout === "calendar"}
+              icon={RiCalendarLine}
+              label="日历视图"
+              onPress={() => onSelectLayout("calendar")}
+              styles={styles}
+            />
+          </View>
         </View>
       </View>
 
@@ -996,6 +1011,32 @@ export function TodoMainColumn({
           todos={todos}
           visible={visible}
         />
+      ) : effectiveLayout === "calendar" ? (
+        <TodoCalendar
+          accent={accent}
+          key={scope}
+          loading={todos.loading}
+          onMenu={openMenu}
+          onOpenDetail={openDetail}
+          onToggle={(todo) => void todos.patchTodo(todo.id, { done: !todo.done })}
+          renderComposer={(slot) => (
+            <InlineAdd
+              accent={accent}
+              autoFocus={slot.start !== null}
+              dueDate={slot.day}
+              key={`${slot.day}:${slot.start}:${slot.end}`}
+              placeholder="添加日程…"
+              quadrant={quadrantDefault}
+              styles={styles}
+              timeDefault={{ start: slot.start ?? "", end: slot.end ?? "" }}
+              today={today}
+              todos={todos}
+            />
+          )}
+          scope={scope}
+          today={today}
+          visible={visible}
+        />
       ) : (
         <TodoListView
           accent={accent}
@@ -1017,7 +1058,7 @@ export function TodoMainColumn({
         <TodoContextMenu
           accent={accent}
           onClose={() => setMenu(null)}
-          onEdit={setEditingId}
+          onEdit={effectiveLayout === "calendar" ? openDetail : setEditingId}
           theme={theme}
           today={today}
           todo={menu.todo}
@@ -2013,18 +2054,22 @@ function TimeChip({ styles, todo }: { styles: TodoStyles; todo: Todo }) {
 
 function InlineAdd({
   accent,
+  autoFocus = false,
   dueDate,
   placeholder,
   quadrant,
   styles,
+  timeDefault,
   today,
   todos,
 }: {
   accent: Accent;
+  autoFocus?: boolean;
   dueDate: string | null;
   placeholder: string;
   quadrant: Quadrant;
   styles: TodoStyles;
+  timeDefault?: { start: string; end: string };
   today: string;
   todos: TodosData;
 }) {
@@ -2039,7 +2084,9 @@ function InlineAdd({
   // The composer starts on the scope's default day but lets you pick another (and
   // a time) as you type, so a todo can be scheduled the moment it is created.
   const [span, setSpan] = useState<DateSpan>({ start: dueDate, end: null });
-  const [time, setTime] = useState<{ start: string; end: string }>({ start: "", end: "" });
+  const [time, setTime] = useState<{ start: string; end: string }>(
+    timeDefault ?? { start: "", end: "" },
+  );
   const [recurrence, setRecurrence] = useState<Recurrence>("none");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
@@ -2162,7 +2209,7 @@ function InlineAdd({
     setSaving(false);
     if (created) {
       setValue("");
-      setTime({ start: "", end: "" });
+      setTime(timeDefault ?? { start: "", end: "" });
       setRecurrence("none");
       setNotes("");
       touched.current = false;
@@ -2209,6 +2256,7 @@ function InlineAdd({
         <RiAddLine color={open ? accent.accentText : t.textTertiary} size={14} />
         <TextInput
           accessibilityLabel={placeholder}
+          autoFocus={autoFocus}
           blurOnSubmit={false}
           onChangeText={setValue}
           onFocus={() => setOpen(true)}

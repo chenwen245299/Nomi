@@ -8,13 +8,13 @@ import { quadrantStyle } from "./palette";
 //
 //   scope  — which todos (今天 / 本周 / 全部 / 已完成 / one quadrant), picked in
 //            the collection column;
-//   layout — how to draw them (四象限看板 / 清单), picked in the main header.
+//   layout — how to draw them (四象限看板 / 清单 / 日历), picked in the main header.
 //
 // Everything below is a pure function of the one flat todo list, so switching a
 // view never touches disk.
 
 export type TodoScope = "today" | "week" | "all" | "done" | "q1" | "q2" | "q3" | "q4";
-export type TodoLayout = "board" | "list";
+export type TodoLayout = "board" | "list" | "calendar";
 
 /** The quadrant a `q…` scope pins to, or null for the multi-quadrant scopes. */
 export function scopeQuadrant(scope: TodoScope): Quadrant | null {

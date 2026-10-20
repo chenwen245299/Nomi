@@ -85,7 +85,7 @@ function parseTab(raw: unknown, id: number): Tab | null {
       ["today", "week", "all", "done", "q1", "q2", "q3", "q4"],
       "week",
     ),
-    todoLayout: oneOf<TodoLayout>(raw.todoLayout, ["board", "list"], "board"),
+    todoLayout: oneOf<TodoLayout>(raw.todoLayout, ["board", "list", "calendar"], "board"),
     settingsTab: oneOf<SettingsTab>(
       raw.settingsTab,
       ["storage", "chat", "providers", "mcp"],
